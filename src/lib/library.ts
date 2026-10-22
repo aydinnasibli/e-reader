@@ -41,6 +41,10 @@ export interface BookEntry {
   percent?: number;
   /** Cover image file name inside the book's img folder. */
   coverFile?: string;
+  /** Collection ids this book belongs to. */
+  collections?: string[];
+  /** Marked as finished by the reader (or by reaching the end). */
+  finished?: boolean;
 }
 
 /** What the reader needs about a book that is still being converted. */

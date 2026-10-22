@@ -139,36 +139,54 @@ export function PageReader({ book, settings, theme, start, startKey, version, on
   };
 
   // ---- gestures and the slide animation ----
+  //
+  // Pages sit on an endless strip: the current page is at `slot`, its
+  // neighbours at slot ± 1, and each page view is keyed by which page it
+  // shows. Turning a page only moves the strip; the page that slides in is
+  // the same view that becomes current, so nothing is swapped or re-laid out
+  // mid-animation (which is what caused visible jumps).
 
-  const x = useRef(new Animated.Value(0)).current;
+  const [slot, setSlot] = useState(0);
+  const base = useRef(new Animated.Value(0)).current; // -slot * width
+  const drag = useRef(new Animated.Value(0)).current; // finger offset
+  const shift = useMemo(() => Animated.add(base, drag), [base, drag]);
   const animating = useRef(false);
+  const springBack = () => Animated.spring(drag, { toValue: 0, useNativeDriver: true, bounciness: 0 }).start();
   const go = (dir: 1 | -1) => {
     if (animating.current) return;
     const n = neighbour(dir);
     if (!n || n === 'end' || n === 'processing') {
-      Animated.spring(x, { toValue: 0, useNativeDriver: true }).start();
+      springBack();
       return;
     }
     animating.current = true;
-    Animated.timing(x, { toValue: -dir * win.width, duration: 200, useNativeDriver: true }).start(() => {
+    const nextSlot = slot + dir;
+    Animated.parallel([
+      Animated.timing(base, { toValue: -nextSlot * win.width, duration: 220, useNativeDriver: true }),
+      Animated.timing(drag, { toValue: 0, duration: 220, useNativeDriver: true }),
+    ]).start(() => {
       if (n.cur.page === null) target.current = { pos: { b: book.chunkStart(n.cur.chunk), o: 0 }, last: dir < 0 };
+      setSlot(nextSlot);
       setCur(n.cur);
       animating.current = false;
     });
   };
+  // Keep the strip aligned if the window size changes.
   useEffect(() => {
-    x.setValue(0);
-  }, [cur, x]);
+    base.setValue(-slot * win.width);
+  }, [win.width]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const handlers = useRef<{ go(d: 1 | -1): void; onTap(): void; width: number; canGo(d: 1 | -1): boolean }>({
+  const handlers = useRef<{ go(d: 1 | -1): void; onTap(): void; springBack(): void; width: number; canGo(d: 1 | -1): boolean }>({
     go,
     onTap,
+    springBack,
     width: win.width,
     canGo: () => true,
   });
   handlers.current = {
     go,
     onTap,
+    springBack,
     width: win.width,
     canGo: (d) => {
       const n = neighbour(d);
@@ -181,7 +199,7 @@ export function PageReader({ book, settings, theme, start, startKey, version, on
       onMoveShouldSetPanResponder: (_e, g) => Math.abs(g.dx) > 8 && Math.abs(g.dx) > Math.abs(g.dy),
       onPanResponderMove: (_e, g) => {
         const dir = g.dx < 0 ? 1 : -1;
-        x.setValue(handlers.current.canGo(dir) ? g.dx : g.dx * 0.25);
+        drag.setValue(handlers.current.canGo(dir) ? g.dx : g.dx * 0.25);
       },
       onPanResponderRelease: (e, g) => {
         const w = handlers.current.width;
@@ -194,9 +212,9 @@ export function PageReader({ book, settings, theme, start, startKey, version, on
         }
         if (g.dx < -w * 0.15 || g.vx < -0.4) handlers.current.go(1);
         else if (g.dx > w * 0.15 || g.vx > 0.4) handlers.current.go(-1);
-        else Animated.spring(x, { toValue: 0, useNativeDriver: true }).start();
+        else handlers.current.springBack();
       },
-      onPanResponderTerminate: () => Animated.spring(x, { toValue: 0, useNativeDriver: true }).start(),
+      onPanResponderTerminate: () => handlers.current.springBack(),
     }),
   ).current;
 
@@ -237,8 +255,18 @@ export function PageReader({ book, settings, theme, start, startKey, version, on
   const prev = neighbour(-1);
   const next = neighbour(1);
   const processingMsg = `Still preparing the rest of this book… ${Math.round(book.progress * 100)}%`;
-  const side = (n: ReturnType<typeof neighbour>) =>
-    n === 'processing' ? renderPage(undefined, processingMsg) : n && n !== 'end' ? renderPage(n.pageData) : null;
+  /** A stable identity for what a strip position shows. */
+  const pageKey = (n: ReturnType<typeof neighbour>): string | null => {
+    if (n === 'processing') return 'processing';
+    if (!n || n === 'end') return null;
+    return n.cur.page === null ? `pending:${n.cur.chunk}` : `p:${n.cur.chunk}:${n.cur.page}`;
+  };
+  const strip: { key: string; at: number; content: ReturnType<typeof renderPage> }[] = [];
+  const prevKey = pageKey(prev);
+  const nextKey = pageKey(next);
+  if (prevKey && prev !== 'end' && prev) strip.push({ key: prevKey, at: slot - 1, content: prev === 'processing' ? renderPage(undefined, processingMsg) : renderPage(prev.pageData) });
+  strip.push({ key: cur.page === null ? `pending:${cur.chunk}` : `p:${cur.chunk}:${cur.page}`, at: slot, content: renderPage(current) });
+  if (nextKey && next !== 'end' && next) strip.push({ key: nextKey, at: slot + 1, content: next === 'processing' ? renderPage(undefined, processingMsg) : renderPage(next.pageData) });
 
   const firstItem = current?.page.items[0];
   const chapter = firstItem ? book.chapterAt(firstItem.b)?.t : undefined;
@@ -252,13 +280,17 @@ export function PageReader({ book, settings, theme, start, startKey, version, on
         </Text>
       </View>
       <View style={styles.viewport} {...pan.panHandlers}>
-        <Animated.View style={[styles.strip, { width: win.width * 3, left: -win.width, transform: [{ translateX: x }] }]}>
-          {[side(prev), renderPage(current), side(next)].map((content, i) => (
-            <View key={i} style={{ width: win.width, height: pageHeight, paddingHorizontal: settings.margin, overflow: 'hidden' }}>
-              {content}
-            </View>
-          ))}
-        </Animated.View>
+        {strip.map(({ key, at, content }) => (
+          <Animated.View
+            key={key}
+            style={[
+              styles.page,
+              { width: win.width, height: pageHeight, paddingHorizontal: settings.margin, backgroundColor: theme.bg },
+              { transform: [{ translateX: Animated.add(shift, at * win.width) }] },
+            ]}>
+            {content}
+          </Animated.View>
+        ))}
         {measuring && (
           <View style={{ position: 'absolute', left: settings.margin, top: 0 }}>
             <Measurer
@@ -289,6 +321,6 @@ const styles = StyleSheet.create({
   footer: { height: FOOTER, alignItems: 'center', justifyContent: 'center' },
   meta: { fontSize: 12 },
   viewport: { flex: 1, overflow: 'hidden' },
-  strip: { position: 'absolute', top: 0, bottom: 0, flexDirection: 'row' },
+  page: { position: 'absolute', left: 0, top: 0, overflow: 'hidden' },
   center: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 24 },
 });
