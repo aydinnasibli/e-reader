@@ -6,7 +6,7 @@ import { StatusBar } from 'expo-status-bar';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, AppState, Pressable, StyleSheet, Text, View } from 'react-native';
 import { type Block, type Position, blockText } from '@/engine/types';
-import { addBookmark, highlightsByBlock, removeBookmark, useAnnotations } from '@/lib/annotations';
+import { addBookmark, addHighlight, highlightsByBlock, removeBookmark, useAnnotations } from '@/lib/annotations';
 import { getBook, loadManifest, reprocessBook, updateBook, useBookStatus, useLiveBook } from '@/lib/library';
 import { useFontReady } from '@/lib/fonts';
 import { type ReaderSettings, setSettings, useReaderTheme, useSettings } from '@/lib/settings';
@@ -17,7 +17,9 @@ import type { Mark } from '@/reader/marks';
 import { PageReader } from '@/reader/PageReader';
 import { ScrollReader } from '@/reader/ScrollReader';
 import { SelectionSheet, highlightColor } from '@/reader/SelectionSheet';
+import { type TextPoint, dragRanges } from '@/reader/selection';
 import { DisplayPanel } from '@/reader/DisplayPanel';
+import { HighlightBar } from '@/reader/HighlightBar';
 import { LivePreview } from '@/reader/LivePreview';
 import { NoteSheet } from '@/reader/NoteSheet';
 import { NavigatorSheet, SearchSheet } from '@/reader/Sheets';
@@ -191,14 +193,44 @@ export default function ReaderScreen() {
     if (draftTimer.current) clearTimeout(draftTimer.current);
   }, []);
 
-  // Highlights and the current search hit, as drawable marks per block.
+  // Highlight tool (bottom menu): while on, dragging over text highlights it.
+  const [highlighting, setHighlighting] = useState(false);
+  const [stroke, setStroke] = useState<{ from: TextPoint; to: TextPoint } | null>(null);
+  const textOf = useCallback(
+    (b: number) => {
+      const blk = book?.block(b);
+      return blk?.r ? blockText(blk) : null;
+    },
+    [book],
+  );
+  const saveHighlights = (ranges: { b: number; s: number; e: number }[]) => {
+    if (!ranges.length) return;
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {});
+    for (const r of ranges) {
+      const text = textOf(r.b) ?? '';
+      addHighlight(id, { ...r, color: settings.highlightColor, text: text.slice(r.s, r.e), chapter: book?.chapterAt(r.b)?.t });
+    }
+  };
+  const onHighlightDrag = useCallback(
+    (from: TextPoint | null, to: TextPoint | null, done: boolean) => {
+      if (!from || !to) return setStroke(null);
+      if (!done) return setStroke({ from, to });
+      setStroke(null);
+      saveHighlights(dragRanges(from, to, textOf));
+    },
+    [textOf, settings.highlightColor, id, book], // eslint-disable-line react-hooks/exhaustive-deps
+  );
+
+  // Highlights, the current search hit and a highlight being dragged, as drawable marks per block.
   const marks = useMemo(() => {
     const m = new Map<number, Mark[]>();
+    const add = (b: number, mark: Mark) => m.set(b, [...(m.get(b) ?? []), mark]);
     for (const [b, list] of highlightsByBlock(id)) m.set(b, list.map((h) => ({ s: h.s, e: h.e, color: highlightColor(h.color, theme.dark) })));
-    if (searchMark) m.set(searchMark.b, [...(m.get(searchMark.b) ?? []), { s: searchMark.s, e: searchMark.e, color: theme.accent + '55' }]);
+    if (searchMark) add(searchMark.b, { s: searchMark.s, e: searchMark.e, color: theme.accent + '55' });
+    if (stroke) for (const r of dragRanges(stroke.from, stroke.to, textOf)) add(r.b, { s: r.s, e: r.e, color: highlightColor(settings.highlightColor, theme.dark) });
     return m;
     // `ann` changes whenever highlights do.
-  }, [id, ann, searchMark, theme.dark, theme.accent]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [id, ann, searchMark, stroke, settings.highlightColor, theme.dark, theme.accent]); // eslint-disable-line react-hooks/exhaustive-deps
   const marksFor = useCallback((b: number) => marks.get(b), [marks]);
 
   const onLongPressBlock = useCallback(
@@ -211,6 +243,13 @@ export default function ReaderScreen() {
     },
     [book],
   );
+
+  // A tap while highlighting: on a highlight it opens it (colour, note,
+  // remove); on plain text it highlights that word.
+  const onHighlightTap = (p: TextPoint) => {
+    if (ann.highlights.some((h) => h.b === p.b && h.s <= p.o && p.o < h.e)) return onLongPressBlock(p.b, p.o);
+    saveHighlights(dragRanges(p, p, textOf));
+  };
 
   // Bookmarks on the visible page.
   // `end` is where the next page starts, so it isn't part of this page.
@@ -292,6 +331,9 @@ export default function ReaderScreen() {
         bookmarked={pageBookmarks.length > 0}
         footerRight={footerRight}
         onLayoutReady={onLayoutReady}
+        highlighting={highlighting}
+        onHighlightDrag={onHighlightDrag}
+        onHighlightTap={onHighlightTap}
       />
       {draft ? <LivePreview book={book} settings={{ ...settings, ...draft }} theme={theme} pos={pos} /> : null}
       <Chrome
@@ -307,8 +349,20 @@ export default function ReaderScreen() {
         onBookmark={toggleBookmark}
         onContents={() => setSheet('nav')}
         onDisplay={() => setSheet('display')}
+        onHighlight={() => {
+          setChrome(false);
+          setHighlighting(true);
+        }}
         onSeek={async (f) => goTo(await book.positionAt(f))}
       />
+      {highlighting ? (
+        <HighlightBar
+          theme={theme}
+          color={settings.highlightColor}
+          onColor={(highlightColor) => setSettings({ highlightColor })}
+          onDone={() => setHighlighting(false)}
+        />
+      ) : null}
       <NavigatorSheet visible={sheet === 'nav'} onClose={() => setSheet(null)} theme={theme} book={book} currentBlock={pos.b} onGo={goTo} />
       <SearchSheet visible={sheet === 'search'} onClose={() => setSheet(null)} theme={theme} book={book} onGo={goTo} />
       <DisplayPanel

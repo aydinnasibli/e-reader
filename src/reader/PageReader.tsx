@@ -15,6 +15,7 @@ import { hitText } from './hitTest';
 import { type Look, drawn, layoutKeyOf, toBlock, toDrawn } from './look';
 import type { Mark } from './marks';
 import { type Measure, type Page, type PageItem, pageOf, paginate } from './paginate';
+import type { TextPoint } from './selection';
 
 export const HEADER = 30;
 export const FOOTER = 30;
@@ -57,6 +58,12 @@ interface Props {
   footerRight?: string;
   /** Called with the layout key once a page of that layout is on screen. */
   onLayoutReady?(key: string): void;
+  /** Highlight tool on: dragging over text reports the range instead of turning pages. */
+  highlighting?: boolean;
+  /** From where the drag started to the text under the finger now; null, null = cancelled. */
+  onHighlightDrag?(from: TextPoint | null, to: TextPoint | null, done: boolean): void;
+  /** A tap on text while highlighting. */
+  onHighlightTap?(at: TextPoint): void;
 }
 
 interface Laid {
@@ -67,13 +74,21 @@ interface Laid {
   first: number;
 }
 
+/** Where a page item sits on screen (for long-press and highlight hit testing). */
+interface ItemBox {
+  y: number;
+  h: number;
+  it: PageItem;
+  laid: Laid;
+}
+
 interface Cur {
   chunk: number;
   /** null while the chunk is being laid out. */
   page: number | null;
 }
 
-export function PageReader({ book, settings, theme, start, startKey, version, onPosition, onTap, marksFor, onLongPressBlock, onLink, bookmarked, footerRight, onLayoutReady }: Props) {
+export function PageReader({ book, settings, theme, start, startKey, version, onPosition, onTap, marksFor, onLongPressBlock, onLink, bookmarked, footerRight, onLayoutReady, highlighting, onHighlightDrag, onHighlightTap }: Props) {
   const win = useWindowDimensions();
   const liveInsets = useSafeAreaInsets();
   // Showing/hiding the status bar can change the top inset on some iPhones;
@@ -267,26 +282,44 @@ export function PageReader({ book, settings, theme, start, startKey, version, on
   }, [win.width]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Where each item of each visible page sits, for long-press hit testing.
-  const itemBoxes = useRef(new Map<string, { y: number; h: number; it: PageItem; laid: Laid }>());
+  const itemBoxes = useRef(new Map<string, ItemBox>());
   const viewportTop = useRef(0);
   const viewportRef = useRef<View>(null);
   /** The block and character under a point within one page column (`column` is that column's key). */
-  const longPress = (pageX: number, pageY: number, column: string) => {
+  /**
+   * The block and character under a point within one page column. With
+   * `nearest` (dragging), a point between or beyond paragraphs uses the
+   * closest text; otherwise it must be on an item (`o` is missing for images).
+   */
+  const pointAt = (pageX: number, pageY: number, column: string, nearest: boolean): { b: number; o?: number } | null => {
     const y = pageY - viewportTop.current;
+    let best: ItemBox | null = null;
+    let bestDist = Infinity;
     for (const [k, box] of itemBoxes.current) {
-      if (!k.startsWith(column + '|') || y < box.y || y >= box.y + box.h) continue;
-      const { it, laid: l } = box;
-      const i = it.b - l.first;
-      const blk = l.blocks[i];
-      const m = l.measures[i];
-      const look = l.looks[i];
-      if (!blk || m?.kind !== 'text') return onLongPressBlock?.(it.b);
-      const top = it.top || it.s > 0 ? 0 : look.marginTop;
-      const left = textLeft + (column.endsWith(':R') ? width + settings.margin : 0) + look.paddingLeft;
-      const d = drawn(blk, look);
-      const at = hitText(d.text, m.lines, it.s, it.e, pageX - left, y - box.y - top, width - look.paddingLeft, look.textAlign === 'justify');
-      return onLongPressBlock?.(it.b, toBlock(d, at));
+      if (!k.startsWith(column + '|')) continue;
+      const dist = y < box.y ? box.y - y : y >= box.y + box.h ? y - (box.y + box.h) + 1 : 0;
+      if (nearest && box.laid.measures[box.it.b - box.laid.first]?.kind !== 'text') continue;
+      if (dist < bestDist) {
+        best = box;
+        bestDist = dist;
+      }
     }
+    if (!best || (!nearest && bestDist > 0)) return null;
+    const { it, laid: l } = best;
+    const i = it.b - l.first;
+    const blk = l.blocks[i];
+    const m = l.measures[i];
+    const look = l.looks[i];
+    if (!blk || m?.kind !== 'text') return { b: it.b };
+    const top = it.top || it.s > 0 ? 0 : look.marginTop;
+    const left = textLeft + (column.endsWith(':R') ? width + settings.margin : 0) + look.paddingLeft;
+    const d = drawn(blk, look);
+    const at = hitText(d.text, m.lines, it.s, it.e, pageX - left, y - best.y - top, width - look.paddingLeft, look.textAlign === 'justify');
+    return { b: it.b, o: toBlock(d, at) };
+  };
+  const longPress = (pageX: number, pageY: number, column: string) => {
+    const p = pointAt(pageX, pageY, column, false);
+    if (p) onLongPressBlock?.(p.b, p.o);
   };
 
   // The pan responder is created once; it reads the latest values from here.
@@ -428,6 +461,50 @@ export function PageReader({ book, settings, theme, start, startKey, version, on
   if (prevKey && prev !== 'end' && prev)
     strip.push({ key: prevKey, at: slot - 1, content: prev === 'processing' ? renderPage(undefined, processingMsg) : renderPage(prev.pageData, undefined, prevKey) });
   const waitMsg = `Preparing the book up to where you left off… ${Math.round(book.progress * 100)}%`;
+
+  // ---- highlight tool: drag over text instead of turning pages ----
+  const column = (pageX: number) => (spread ? (pageX >= textLeft + width + settings.margin / 2 ? `${curKey}:R` : `${curKey}:L`) : curKey);
+  const textPoint = (pageX: number, pageY: number): TextPoint | null => {
+    const p = pointAt(pageX, pageY, column(pageX), true);
+    return p && p.o !== undefined ? { b: p.b, o: p.o } : null;
+  };
+  const stroke = useRef<{ x: number; y: number; from: TextPoint | null; moved: boolean }>({ x: 0, y: 0, from: null, moved: false });
+  const highlightLayer = highlighting && cur.page !== null && (
+    <View
+      testID="highlight-layer"
+      style={StyleSheet.absoluteFill}
+      onStartShouldSetResponder={() => true}
+      onMoveShouldSetResponder={() => true}
+      onResponderTerminationRequest={() => false}
+      onResponderGrant={(e) => {
+        const { pageX, pageY } = e.nativeEvent;
+        stroke.current = { x: pageX, y: pageY, from: textPoint(pageX, pageY), moved: false };
+      }}
+      onResponderMove={(e) => {
+        const { pageX, pageY } = e.nativeEvent;
+        const d = stroke.current;
+        if (!d.moved && Math.hypot(pageX - d.x, pageY - d.y) < 8) return;
+        d.moved = true;
+        const to = textPoint(pageX, pageY);
+        if (d.from && to) onHighlightDrag?.(d.from, to, false);
+      }}
+      onResponderRelease={(e) => {
+        const { pageX, pageY } = e.nativeEvent;
+        const d = stroke.current;
+        if (d.moved) {
+          const to = textPoint(pageX, pageY);
+          onHighlightDrag?.(d.from, d.from && to ? to : null, true);
+          return;
+        }
+        // A tap: the outer edges still turn pages; on text it's for that word.
+        if (pageX < win.width * 0.12) return go(settings.tapForward ? 1 : -1);
+        if (pageX > win.width * 0.88) return go(1);
+        const p = pointAt(pageX, pageY, column(pageX), false);
+        if (p && p.o !== undefined) onHighlightTap?.({ b: p.b, o: p.o });
+      }}
+      onResponderTerminate={() => onHighlightDrag?.(null, null, true)}
+    />
+  );
   strip.push({ key: curKey, at: slot, content: waitingForPlace ? renderPage(undefined, waitMsg) : renderPage(shown, undefined, curKey) });
   if (nextKey && next !== 'end' && next)
     strip.push({ key: nextKey, at: slot + 1, content: next === 'processing' ? renderPage(undefined, processingMsg) : renderPage(next.pageData, undefined, nextKey) });
@@ -462,6 +539,7 @@ export function PageReader({ book, settings, theme, start, startKey, version, on
             {content}
           </Animated.View>
         ))}
+        {highlightLayer}
         {measuring && (
           <View style={{ position: 'absolute', left: textLeft, top: 0 }}>
             <Measurer

@@ -55,3 +55,35 @@ export function tokensFor(tokens: Token[], s: number, e: number): Sel | null {
   });
   return a < 0 ? null : { a, z };
 }
+
+/** A point in the book: block and character offset in its text. */
+export interface TextPoint {
+  b: number;
+  o: number;
+}
+
+/**
+ * The highlight ranges for a finger dragged from `a` to `z` (either order,
+ * possibly across paragraphs), widened to whole words at both ends. `textOf`
+ * gives a block's text, or null for blocks that aren't text (images).
+ */
+export function dragRanges(a: TextPoint, z: TextPoint, textOf: (b: number) => string | null): { b: number; s: number; e: number }[] {
+  const [from, to] = a.b < z.b || (a.b === z.b && a.o <= z.o) ? [a, z] : [z, a];
+  const isSpace = (c: string | undefined) => c === undefined || /\s/.test(c);
+  const out: { b: number; s: number; e: number }[] = [];
+  for (let b = from.b; b <= to.b; b++) {
+    const text = textOf(b);
+    if (!text) continue;
+    let s = b === from.b ? Math.min(from.o, text.length) : 0;
+    // `to.o` is the character under the finger, so the range ends after it.
+    let e = b === to.b ? Math.min(to.o + 1, text.length) : text.length;
+    // Ends inside a word take the whole word; ends on a space don't reach out.
+    if (b === from.b && !isSpace(text[s])) while (s > 0 && !isSpace(text[s - 1])) s--;
+    if (b === to.b && !isSpace(text[e - 1])) while (e < text.length && !isSpace(text[e])) e++;
+    // Don't start or end on spaces.
+    while (s < e && isSpace(text[s])) s++;
+    while (e > s && isSpace(text[e - 1])) e--;
+    if (e > s) out.push({ b, s, e });
+  }
+  return out;
+}

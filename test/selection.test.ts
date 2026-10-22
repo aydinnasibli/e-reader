@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { cutRange } from '../src/lib/highlightRanges';
 import { charAtFraction, hitText } from '../src/reader/hitTest';
 import type { Line } from '../src/reader/paginate';
-import { tapWord, tokenize, tokensFor, wordAt } from '../src/reader/selection';
+import { dragRanges, tapWord, tokenize, tokensFor, wordAt } from '../src/reader/selection';
 
 const TEXT = 'The quick brown fox jumps over the lazy dog';
 
@@ -99,5 +99,32 @@ describe('hit testing', () => {
     const mid = charAtFraction(t, 0, t.length, 0.5);
     expect(t[mid]).toBe('M');
     expect(mid).toBeLessThanOrEqual(5);
+  });
+});
+
+describe('drag to highlight', () => {
+  const texts: Record<number, string | null> = { 0: 'The quick brown fox', 1: null, 2: 'jumps over the lazy dog' };
+  const textOf = (b: number) => texts[b] ?? null;
+
+  it('widens to whole words, in either direction', () => {
+    // From inside "quick" to inside "brown".
+    expect(dragRanges({ b: 0, o: 6 }, { b: 0, o: 11 }, textOf)).toEqual([{ b: 0, s: 4, e: 15 }]);
+    expect(dragRanges({ b: 0, o: 11 }, { b: 0, o: 6 }, textOf)).toEqual([{ b: 0, s: 4, e: 15 }]);
+  });
+
+  it('a tap-sized drag on one word highlights that word', () => {
+    expect(dragRanges({ b: 0, o: 17 }, { b: 0, o: 17 }, textOf)).toEqual([{ b: 0, s: 16, e: 19 }]);
+  });
+
+  it('spans paragraphs and skips images', () => {
+    expect(dragRanges({ b: 0, o: 17 }, { b: 2, o: 2 }, textOf)).toEqual([
+      { b: 0, s: 16, e: 19 },
+      { b: 2, s: 0, e: 5 },
+    ]);
+  });
+
+  it('never starts or ends on a space', () => {
+    expect(dragRanges({ b: 0, o: 3 }, { b: 0, o: 3 }, textOf)).toEqual([]);
+    expect(dragRanges({ b: 0, o: 3 }, { b: 0, o: 5 }, textOf)).toEqual([{ b: 0, s: 4, e: 9 }]);
   });
 });

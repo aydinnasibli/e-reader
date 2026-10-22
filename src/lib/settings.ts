@@ -4,6 +4,7 @@
 import { File, Paths } from 'expo-file-system';
 import { useSyncExternalStore } from 'react';
 import { Appearance, useColorScheme } from 'react-native';
+import type { HighlightColor } from '@/ui/theme';
 import type { Weight } from './fonts';
 import { readJson, saveJson } from './storage';
 
@@ -37,6 +38,8 @@ export interface ReaderSettings {
   tapForward: boolean;
   /** Screen rotation while reading. Landscape shows two pages side by side. */
   rotation: 'auto' | 'portrait' | 'landscape';
+  /** Colour the highlight tool uses (the last one picked). */
+  highlightColor: HighlightColor;
 }
 
 export interface Theme {
@@ -89,6 +92,7 @@ const DEFAULTS: ReaderSettings = {
   pageTurn: 'slide',
   tapForward: false,
   rotation: 'auto',
+  highlightColor: 'yellow',
 };
 
 const file = () => new File(Paths.document, 'settings.json');

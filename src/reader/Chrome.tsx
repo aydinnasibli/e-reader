@@ -21,6 +21,7 @@ interface Props {
   onBookmark(): void;
   onContents(): void;
   onDisplay(): void;
+  onHighlight(): void;
   onSeek(fraction: number): void;
 }
 
@@ -87,6 +88,7 @@ export function Chrome(p: Props) {
           {tool('list', p.onContents, 'Contents')}
           {tool('search', p.onSearch, 'Search')}
           {tool(p.bookmarked ? 'bookmark' : 'bookmark-outline', p.onBookmark, 'Bookmark', p.bookmarked ? theme.accent : theme.text)}
+          {tool('brush-outline', p.onHighlight, 'Highlight')}
           {tool('text', p.onDisplay, 'Display')}
         </View>
       </Animated.View>
@@ -119,7 +121,7 @@ const styles = StyleSheet.create({
   back: { padding: 8, width: 40 },
   title: { flex: 1, fontSize: 15, fontWeight: '600', textAlign: 'center' },
   tools: { flexDirection: 'row', justifyContent: 'space-around', marginTop: 10, paddingTop: 10, borderTopWidth: StyleSheet.hairlineWidth },
-  tool: { alignItems: 'center', minWidth: 64, paddingVertical: 2 },
+  tool: { alignItems: 'center', minWidth: 58, paddingVertical: 2 },
   toolLabel: { fontSize: 11, marginTop: 3 },
   chapter: { fontSize: 14, fontWeight: '600', textAlign: 'center' },
   slider: { alignSelf: 'stretch', height: 40 },

@@ -13,6 +13,7 @@ import { hitText } from './hitTest';
 import { drawn, lookOf, toBlock } from './look';
 import type { Mark } from './marks';
 import { type Line, lineRanges } from './paginate';
+import type { TextPoint } from './selection';
 
 const MAX_WINDOW_CHUNKS = 8;
 
@@ -29,6 +30,10 @@ interface Props {
   onLongPressBlock?(b: number, at?: number): void;
   onLink?(target: string): void;
   footerRight?: string;
+  /** Highlight tool on: scrolling pauses and dragging over text reports the range. */
+  highlighting?: boolean;
+  onHighlightDrag?(from: TextPoint | null, to: TextPoint | null, done: boolean): void;
+  onHighlightTap?(at: TextPoint): void;
 }
 
 interface Win {
@@ -37,7 +42,7 @@ interface Win {
   start: number; // first block shown
 }
 
-export function ScrollReader({ book, settings, theme, start, startKey, version, onPosition, onTap, marksFor, onLongPressBlock, onLink, footerRight }: Props) {
+export function ScrollReader({ book, settings, theme, start, startKey, version, onPosition, onTap, marksFor, onLongPressBlock, onLink, footerRight, highlighting, onHighlightDrag, onHighlightTap }: Props) {
   const win = useWindowDimensions();
   const insets = useSafeAreaInsets();
   // Clear of a landscape notch on either side.
@@ -186,6 +191,75 @@ export function ScrollReader({ book, settings, theme, start, startKey, version, 
     });
   };
 
+  // ---- highlight tool ----
+  // Scrolling is paused while it's on, so where each paragraph sits on screen
+  // is measured once (and again if the list changes) and hit testing is instant.
+  const rects = useRef(new Map<number, { x: number; y: number; h: number }>()).current;
+  useEffect(() => {
+    rects.clear();
+    if (!highlighting) return;
+    for (const [b, v] of views) v.measureInWindow((x, y, _w, h) => rects.set(b, { x, y, h }));
+  }, [highlighting, data, settings, rects, views]);
+  const blockAt = (b: number) => {
+    const c = book.chunkOf(b);
+    return blocks.get(c)?.[b - book.chunkStart(c)];
+  };
+  /** The text under a point; `nearest` uses the closest paragraph when between them. */
+  const textPoint = (pageX: number, pageY: number, nearest: boolean): TextPoint | null => {
+    let best = -1;
+    let bestDist = Infinity;
+    for (const [b, r] of rects) {
+      if (!lines.has(b)) continue;
+      const dist = pageY < r.y ? r.y - pageY : pageY >= r.y + r.h ? pageY - (r.y + r.h) + 1 : 0;
+      if (dist < bestDist) {
+        best = b;
+        bestDist = dist;
+      }
+    }
+    const blk = best >= 0 ? blockAt(best) : undefined;
+    const r = rects.get(best);
+    const ls = lines.get(best);
+    if (!blk || !r || !ls || (!nearest && bestDist > 0)) return null;
+    const look = lookOf(blk, settings, book.manifest?.lang);
+    const d = drawn(blk, look);
+    const at = hitText(d.text, ls, 0, d.text.length, pageX - r.x - padLeft - look.paddingLeft, pageY - r.y - look.marginTop, width - look.paddingLeft, look.textAlign === 'justify');
+    return { b: best, o: toBlock(d, at) };
+  };
+  const stroke = useRef<{ x: number; y: number; from: TextPoint | null; moved: boolean }>({ x: 0, y: 0, from: null, moved: false });
+  const highlightLayer = highlighting && (
+    <View
+      testID="highlight-layer"
+      style={StyleSheet.absoluteFill}
+      onStartShouldSetResponder={() => true}
+      onMoveShouldSetResponder={() => true}
+      onResponderTerminationRequest={() => false}
+      onResponderGrant={(e) => {
+        const { pageX, pageY } = e.nativeEvent;
+        stroke.current = { x: pageX, y: pageY, from: textPoint(pageX, pageY, true), moved: false };
+      }}
+      onResponderMove={(e) => {
+        const { pageX, pageY } = e.nativeEvent;
+        const st = stroke.current;
+        if (!st.moved && Math.hypot(pageX - st.x, pageY - st.y) < 8) return;
+        st.moved = true;
+        const to = textPoint(pageX, pageY, true);
+        if (st.from && to) onHighlightDrag?.(st.from, to, false);
+      }}
+      onResponderRelease={(e) => {
+        const { pageX, pageY } = e.nativeEvent;
+        const st = stroke.current;
+        if (st.moved) {
+          const to = textPoint(pageX, pageY, true);
+          onHighlightDrag?.(st.from, st.from && to ? to : null, true);
+          return;
+        }
+        const p = textPoint(pageX, pageY, false);
+        if (p) onHighlightTap?.(p);
+      }}
+      onResponderTerminate={() => onHighlightDrag?.(null, null, true)}
+    />
+  );
+
   const renderItem = ({ item: b }: { item: number }) => {
     const c = book.chunkOf(b);
     const blk = blocks.get(c)?.[b - book.chunkStart(c)];
@@ -225,6 +299,7 @@ export function ScrollReader({ book, settings, theme, start, startKey, version, 
       onTouchStart={(e) => (touch.current = { x: e.nativeEvent.pageX, y: e.nativeEvent.pageY, t: Date.now() })}
       onTouchEnd={(e) => {
         const t = touch.current;
+        if (highlighting) return;
         if (Math.abs(e.nativeEvent.pageX - t.x) < 10 && Math.abs(e.nativeEvent.pageY - t.y) < 10 && Date.now() - t.t < 300) {
           // Link presses are delivered around the same time; check after they had their turn.
           setTimeout(() => Date.now() - lastLink.current > 400 && onTap(), 0);
@@ -238,6 +313,7 @@ export function ScrollReader({ book, settings, theme, start, startKey, version, 
       {w && (
         <FlatList
           key={startKey}
+          scrollEnabled={!highlighting}
           data={data}
           keyExtractor={(b) => String(b)}
           renderItem={renderItem}
@@ -261,6 +337,7 @@ export function ScrollReader({ book, settings, theme, start, startKey, version, 
           }
         />
       )}
+      {highlightLayer}
       <View pointerEvents="none" style={[styles.badge, { bottom: insets.bottom + 6, backgroundColor: theme.bg }]}>
         <Text style={{ color: theme.muted, fontSize: 12 }}>
           {pct.toFixed(1)}%{footerRight ? ` · ${footerRight}` : ''}
