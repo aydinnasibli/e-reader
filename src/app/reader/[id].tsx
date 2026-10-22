@@ -20,6 +20,7 @@ import { SelectionSheet, highlightColor } from '@/reader/SelectionSheet';
 import { type TextPoint, dragRanges } from '@/reader/selection';
 import { DisplayPanel } from '@/reader/DisplayPanel';
 import { HighlightBar } from '@/reader/HighlightBar';
+import { TapZones } from '@/reader/TapZones';
 import { LivePreview } from '@/reader/LivePreview';
 import { NoteSheet } from '@/reader/NoteSheet';
 import { NavigatorSheet, SearchSheet } from '@/reader/Sheets';
@@ -355,6 +356,9 @@ export default function ReaderScreen() {
         }}
         onSeek={async (f) => goTo(await book.positionAt(f))}
       />
+      {settings.mode === 'page' && !settings.seenTapZones && !highlighting && !sheet ? (
+        <TapZones theme={theme} tapForward={settings.tapForward} onDismiss={() => setSettings({ seenTapZones: true })} />
+      ) : null}
       {highlighting ? (
         <HighlightBar
           theme={theme}

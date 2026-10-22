@@ -59,7 +59,7 @@ const sizeOf = (el: { props: { [k: string]: unknown } }) =>
 beforeAll(() => {
   require('@/lib/storage').testChunks.set('moby/0', JSON.stringify({ b: blocks }));
 });
-beforeEach(() => setSettings({ mode: 'page', fontSize: 19, indent: false, hyphenate: false, align: 'left', pageTurn: 'none' }));
+beforeEach(() => setSettings({ mode: 'page', fontSize: 19, indent: false, hyphenate: false, align: 'left', pageTurn: 'none', seenTapZones: true }));
 
 /** Wait for the first page; text layout falls back to estimates after a few seconds here. */
 async function openBook() {
@@ -163,5 +163,26 @@ describe('highlight tool', () => {
 
     fireEvent.press(screen.getByLabelText('Done highlighting'));
     expect(screen.queryByTestId('highlight-layer')).toBeNull();
+  }, 30000);
+});
+
+describe('tap zones', () => {
+  it('the first time, a guide shows the zones; a tap dismisses it for good', async () => {
+    setSettings({ seenTapZones: false });
+    await openBook();
+    expect(screen.getByText('Menu')).toBeTruthy();
+    expect(screen.getAllByText('Next page').length).toBe(1);
+    fireEvent.press(screen.getByLabelText('Got it'));
+    expect(screen.queryByText('Menu')).toBeNull();
+  }, 30000);
+
+  it('a tap a bit right of the middle opens the menu; one near the right edge does not', async () => {
+    await openBook();
+    // Right zone: next page (this short book has none), never the menu.
+    fireEvent.press(shown(P1)[0], { nativeEvent: { pageX: W * 0.8, pageY: 300 } });
+    expect(screen.queryByLabelText('Display')).toBeNull();
+    // A bit right of the middle: the menu.
+    fireEvent.press(shown(P1)[0], { nativeEvent: { pageX: W * 0.6, pageY: 300 } });
+    expect(screen.getByLabelText('Display')).toBeTruthy();
   }, 30000);
 });

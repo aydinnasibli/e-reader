@@ -40,6 +40,8 @@ export interface ReaderSettings {
   rotation: 'auto' | 'portrait' | 'landscape';
   /** Colour the highlight tool uses (the last one picked). */
   highlightColor: HighlightColor;
+  /** The tap-zone guide has been shown. */
+  seenTapZones: boolean;
 }
 
 export interface Theme {
@@ -93,6 +95,7 @@ const DEFAULTS: ReaderSettings = {
   tapForward: false,
   rotation: 'auto',
   highlightColor: 'yellow',
+  seenTapZones: false,
 };
 
 const file = () => new File(Paths.document, 'settings.json');

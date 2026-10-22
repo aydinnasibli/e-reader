@@ -11,6 +11,7 @@ import type { ReaderSettings, Theme } from '@/lib/settings';
 import type { BookData } from './book';
 import { BlockImage, BlockText, Spacer } from './BlockText';
 import { Measurer } from './Measurer';
+import { swipeOutcome, tapZone } from './gestures';
 import { hitText } from './hitTest';
 import { type Look, drawn, layoutKeyOf, toBlock, toDrawn } from './look';
 import type { Mark } from './marks';
@@ -323,9 +324,10 @@ export function PageReader({ book, settings, theme, start, startKey, version, on
   };
 
   // The pan responder is created once; it reads the latest values from here.
-  const handlers = useRef<{ go(d: 1 | -1): void; springBack(): void; width: number; follow: boolean; canGo(d: 1 | -1): boolean }>({
+  const handlers = useRef<{ go(d: 1 | -1): void; springBack(): void; tap(x: number): void; width: number; follow: boolean; canGo(d: 1 | -1): boolean }>({
     go,
     springBack,
+    tap: () => {},
     width: win.width,
     follow: true,
     canGo: () => true,
@@ -333,6 +335,7 @@ export function PageReader({ book, settings, theme, start, startKey, version, on
   handlers.current = {
     go,
     springBack,
+    tap: (x) => tapPage(x),
     width: win.width,
     follow: settings.pageTurn === 'slide',
     canGo: (d) => {
@@ -345,7 +348,7 @@ export function PageReader({ book, settings, theme, start, startKey, version, on
   const pan = useRef(
     PanResponder.create({
       onStartShouldSetPanResponder: () => false,
-      onMoveShouldSetPanResponderCapture: (_e, g) => Math.abs(g.dx) > 8 && Math.abs(g.dx) > Math.abs(g.dy) * 1.2,
+      onMoveShouldSetPanResponderCapture: (_e, g) => Math.abs(g.dx) > 10 && Math.abs(g.dx) > Math.abs(g.dy) * 1.5,
       onPanResponderTerminationRequest: () => false,
       onPanResponderMove: (_e, g) => {
         if (!handlers.current.follow) return;
@@ -353,18 +356,22 @@ export function PageReader({ book, settings, theme, start, startKey, version, on
         drag.setValue(handlers.current.canGo(dir) ? g.dx : g.dx * 0.25);
       },
       onPanResponderRelease: (_e, g) => {
-        const w = handlers.current.width;
-        if (g.dx < -w * 0.15 || g.vx < -0.4) handlers.current.go(1);
-        else if (g.dx > w * 0.15 || g.vx > 0.4) handlers.current.go(-1);
-        else handlers.current.springBack();
+        const outcome = swipeOutcome(g.dx, g.vx, handlers.current.width);
+        if (outcome === 'next') handlers.current.go(1);
+        else if (outcome === 'prev') handlers.current.go(-1);
+        else {
+          handlers.current.springBack();
+          // The finger barely moved: it was a tap, where it started.
+          if (outcome === 'tap') handlers.current.tap(g.x0);
+        }
       },
       onPanResponderTerminate: () => handlers.current.springBack(),
     }),
   ).current;
   const tapPage = (pageX: number) => {
-    const w = win.width;
-    if (pageX < w * 0.3) go(settings.tapForward ? 1 : -1);
-    else if (pageX > w * 0.7) go(1);
+    const zone = tapZone(pageX, win.width);
+    if (zone === 'prev') go(settings.tapForward ? 1 : -1);
+    else if (zone === 'next') go(1);
     else onTap();
   };
 
