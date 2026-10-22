@@ -25,7 +25,7 @@ interface Props {
 export function LivePreview({ book, settings, theme, pos }: Props) {
   const win = useWindowDimensions();
   const insets = useSafeAreaInsets();
-  const { width, pageHeight } = pageFrame(win, insets, settings.margin);
+  const { width, pageHeight, left } = pageFrame(win, insets, settings.margin);
   const lang = book.manifest?.lang;
 
   // Enough text to fill the screen at any size, and no more.
@@ -60,12 +60,15 @@ export function LivePreview({ book, settings, theme, pos }: Props) {
     b++;
   }
 
+  // Nothing in memory to draw: leave the page visible rather than cover it.
+  if (!items.length) return null;
+
   const frame =
     settings.mode === 'page'
       ? { top: insets.top + HEADER, height: pageHeight }
       : { top: 0, bottom: 0, paddingTop: insets.top + 12 };
   return (
-    <View pointerEvents="none" style={[styles.root, frame, { paddingHorizontal: settings.margin, backgroundColor: theme.bg }]}>
+    <View pointerEvents="none" style={[styles.root, frame, { paddingLeft: left, paddingRight: settings.margin + insets.right, backgroundColor: theme.bg }]}>
       <View style={{ width }}>{items}</View>
     </View>
   );

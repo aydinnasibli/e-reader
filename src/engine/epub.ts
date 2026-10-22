@@ -51,9 +51,15 @@ export function resolvePath(baseFile: string, href: string): string {
   return parts.join('/');
 }
 
+/** The #fragment of a link, percent-decoded (ids are matched as written in the HTML). */
 function fragmentOf(href: string): string {
   const i = href.indexOf('#');
-  return i >= 0 ? href.slice(i + 1) : '';
+  if (i < 0) return '';
+  try {
+    return decodeURIComponent(href.slice(i + 1));
+  } catch {
+    return href.slice(i + 1);
+  }
 }
 
 function parseXml(bytes: Uint8Array, handler: MarkupHandler) {
@@ -341,7 +347,8 @@ export async function ingestEpub(ctx: IngestContext, zip: ZipArchive): Promise<M
   let toc: TocEntry[] = [];
   for (const t of rawToc) {
     const hash = t.href.indexOf('#');
-    const b = hash >= 0 ? anchorBlock.get(t.href) ?? fileStart.get(t.href.slice(0, hash)) : fileStart.get(t.href);
+    const path = hash >= 0 ? t.href.slice(0, hash) : t.href;
+    const b = hash >= 0 ? anchorBlock.get(`${path}#${fragmentOf(t.href)}`) ?? fileStart.get(path) : fileStart.get(path);
     if (b !== undefined && b < w.totalBlocks) toc.push({ t: t.t, l: t.l, b });
   }
   if (!toc.length) toc = w.headings;

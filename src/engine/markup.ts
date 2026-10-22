@@ -52,7 +52,8 @@ export function decodeEntities(s: string): string {
 const ATTR_RE = /([^\s=/"']+)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'>]+)))?/g;
 // Elements whose content is raw text that must not be tokenized.
 const RAW_TEXT = new Set(['script', 'style']);
-// Give up waiting for a tag to close after this much buffered text and treat '<' as text.
+// Tags longer than this (an image embedded as a data: URI, a huge SVG path)
+// aren't buffered: the tag is skipped up to its closing '>'.
 const MAX_TAG = 64 * 1024;
 
 function localName(qname: string): string {
@@ -63,7 +64,10 @@ function localName(qname: string): string {
 export class MarkupTokenizer {
   private buf = '';
   private pos = 0;
-  private raw: string | null = null;
+  /** Inside <script>/<style>: matches its closing tag (any case, optional namespace prefix). */
+  private raw: RegExp | null = null;
+  /** Skipping an oversized tag: the quote character we're inside, or 0. */
+  private skipping: number | null = null;
 
   constructor(private h: MarkupHandler) {}
 
@@ -89,13 +93,35 @@ export class MarkupTokenizer {
     let pos = this.pos;
     while (pos < len) {
       if (this.raw) {
-        const close = buf.toLowerCase().indexOf('</' + this.raw, pos);
-        if (close === -1) {
-          pos = final ? len : Math.max(pos, len - this.raw.length - 2);
+        // Searched in place: lowercasing the buffer can change its length (Turkish İ).
+        this.raw.lastIndex = pos;
+        const close = this.raw.exec(buf);
+        if (!close) {
+          // Keep enough to see a closing tag cut in half by the next chunk.
+          pos = final ? len : Math.max(pos, len - 64);
           break;
         }
-        pos = close;
+        pos = close.index;
         this.raw = null;
+        continue;
+      }
+      if (this.skipping !== null) {
+        let quote = this.skipping;
+        let i = pos;
+        for (; i < len; i++) {
+          const c = buf.charCodeAt(i);
+          if (quote) {
+            if (c === quote) quote = 0;
+          } else if (c === 34 || c === 39) quote = c;
+          else if (c === 62 /* > */) break;
+        }
+        if (i === len) {
+          this.skipping = quote;
+          pos = len;
+          break;
+        }
+        this.skipping = null;
+        pos = i + 1;
         continue;
       }
       const lt = buf.indexOf('<', pos);
@@ -171,8 +197,13 @@ export class MarkupTokenizer {
         continue;
       }
       if (end === -1) {
-        if (final || len - pos > MAX_TAG) {
+        if (final) {
           this.h.text('<');
+          pos++;
+          continue;
+        }
+        if (len - pos > MAX_TAG) {
+          this.skipping = 0;
           pos++;
           continue;
         }
@@ -209,7 +240,7 @@ export class MarkupTokenizer {
     }
     this.h.open(name, attrs, selfClosing);
     if (selfClosing) this.h.close(name);
-    else if (RAW_TEXT.has(name)) this.raw = name;
+    else if (RAW_TEXT.has(name)) this.raw = new RegExp(`</(?:[^\\s>/:]+:)?${name}(?=[\\s>/])`, 'gi');
   }
 }
 

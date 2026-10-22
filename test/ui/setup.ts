@@ -15,6 +15,7 @@ jest.mock('@/lib/storage', () => {
   return {
     readJson: () => null,
     writeJson: () => {},
+    saveJson: () => true,
     chunkFile: (id: string, i: number) => ({
       text: () => {
         const t = chunks.get(`${id}/${i}`);

@@ -63,6 +63,9 @@ export class HtmlToBlocks implements MarkupHandler {
       return;
     }
     const id = attrs.id ?? attrs.name;
+    // A block element starts a new block: close any loose text first, so an
+    // anchor on it points at this block, not the text before it.
+    if (id && BLOCK.has(name)) this.w.endBlock();
     if (id && this.opts.anchors?.has(id)) this.opts.onAnchor?.(id, this.w.blockIndex);
     const tracked = id && this.opts.onIdStart?.(id, this.w.blockIndex) ? id : undefined;
 

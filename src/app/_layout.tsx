@@ -1,12 +1,23 @@
 import { DarkTheme, DefaultTheme, type ErrorBoundaryProps, Stack, ThemeProvider } from 'expo-router';
 import { ErrorScreen } from '@/ui/ErrorScreen';
-import { Platform } from 'react-native';
-import { loadLibrary } from '@/lib/library';
+import { AppState, Platform } from 'react-native';
+import { flushLibrary, loadLibrary } from '@/lib/library';
+import { flushStats } from '@/lib/stats';
 import { DialogHost } from '@/ui/dialogs';
 import { useAppColors } from '@/ui/theme';
 
 // Phones only: the library lives in the app's files (web builds just render the shell).
-if (Platform.OS !== 'web') loadLibrary();
+if (Platform.OS !== 'web') {
+  loadLibrary();
+  // The app may be killed any time it's in the background: save what's pending.
+  // Deferred a tick so other screens (the reader saving its position) go first.
+  AppState.addEventListener('change', (s) => {
+    if (s !== 'active') Promise.resolve().then(() => {
+      flushLibrary();
+      flushStats();
+    });
+  });
+}
 
 export default function RootLayout() {
   const c = useAppColors();

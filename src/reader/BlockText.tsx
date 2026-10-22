@@ -1,7 +1,7 @@
 import { Image } from 'expo-image';
 import { memo, useEffect, useState } from 'react';
 import { Text, type TextLayoutEvent, View } from 'react-native';
-import { type Block, type Run, sliceRuns } from '@/engine/types';
+import { type Block, type Run, makeRun, runLink, runStyle, runText, sliceRuns } from '@/engine/types';
 import type { ReaderSettings, Theme } from '@/lib/settings';
 import type { BookData, ImageInfo } from './book';
 import { type Look, baseTextStyle, drawn, lineHeightOf, lookOf, runTextStyle, toDrawn } from './look';
@@ -26,7 +26,15 @@ interface TextProps {
 export const BlockText = memo(function BlockText({ block, look, theme, range, noTopMargin, noBottomMargin, marks, onLink, onTextLayout }: TextProps) {
   const d = drawn(block, look);
   let runs: Run[] = d.runs;
-  if (range) runs = sliceRuns(runs, range[0], range[1]);
+  if (range) {
+    runs = sliceRuns(runs, range[0], range[1]);
+    // The page ends at a hyphenation point: draw the hyphen (a soft hyphen at
+    // the very end of the text would stay invisible). Same width, same layout.
+    if (range[1] < d.text.length && d.text[range[1] - 1] === '\u00ad' && runs.length) {
+      const last = runs[runs.length - 1];
+      runs = [...runs.slice(0, -1), makeRun(runText(last).slice(0, -1) + '\u2010', runStyle(last), runLink(last))];
+    }
+  }
   const from = range?.[0] ?? 0;
   const segments = applyMarks(runs, marks, (o) => toDrawn(d, o) - from);
   return (
@@ -63,7 +71,17 @@ export const BlockText = memo(function BlockText({ block, look, theme, range, no
       })}
     </Text>
   );
-});
+}, sameProps);
+
+/** Like memo's default, but ranges are compared by value (pages build new arrays each render). */
+function sameProps(a: TextProps, b: TextProps) {
+  for (const k of Object.keys(a) as (keyof TextProps)[]) {
+    if (k === 'range') {
+      if (a.range?.[0] !== b.range?.[0] || a.range?.[1] !== b.range?.[1]) return false;
+    } else if (a[k] !== b[k]) return false;
+  }
+  return Object.keys(a).length === Object.keys(b).length;
+}
 
 /** Separator and empty-line blocks. */
 export function Spacer({ block, settings, theme }: { block: Block; settings: ReaderSettings; theme: Theme }) {

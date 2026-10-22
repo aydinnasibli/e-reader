@@ -7,6 +7,7 @@ import { Directory, File, Paths } from 'expo-file-system';
 import { useSyncExternalStore } from 'react';
 import { ingestBook, isSupportedName, titleFromFileName } from '@/engine/ingest';
 import type { BookFormat, Manifest, Position } from '@/engine/types';
+import { forgetAnnotations } from './annotations';
 import {
   FileSink,
   FileSource,
@@ -16,6 +17,7 @@ import {
   imageFile,
   manifestFile,
   readJson,
+  saveJson,
   writeJson,
 } from './storage';
 
@@ -45,6 +47,8 @@ export interface BookEntry {
   collections?: string[];
   /** Marked as finished by the reader (or by reaching the end). */
   finished?: boolean;
+  /** Conversions started and not finished; a book that keeps killing the app stops being retried. */
+  attempts?: number;
 }
 
 /** What the reader needs about a book that is still being converted. */
@@ -73,23 +77,82 @@ function emitLive() {
   liveListeners.forEach((l) => l());
 }
 
+/** Save soon: at most every 400 ms, however often things change. */
 function scheduleSave() {
-  if (saveTimer) clearTimeout(saveTimer);
-  saveTimer = setTimeout(() => {
-    saveTimer = null;
-    writeJson(libraryFile(), books);
-  }, 400);
+  if (!saveTimer) saveTimer = setTimeout(flushLibrary, 400);
 }
+
+/** Save pending changes now (the app is going to the background, or before risky work). */
+export function flushLibrary() {
+  if (saveTimer) clearTimeout(saveTimer);
+  saveTimer = null;
+  if (loaded) saveJson(libraryFile(), books);
+}
+
+const MAX_ATTEMPTS = 2;
 
 export function loadLibrary() {
   if (loaded) return;
   loaded = true;
   ensureDir(booksDir());
   books = readJson<BookEntry[]>(libraryFile()) ?? [];
-  // Anything interrupted mid-conversion (app closed) starts over.
-  for (const b of books) if (b.status === 'processing') b.progress = 0;
+  for (const b of books) {
+    if (b.status !== 'processing') continue;
+    // Interrupted mid-conversion (app closed) starts over, unless converting
+    // it is what keeps closing the app.
+    b.progress = 0;
+    if ((b.attempts ?? 0) >= MAX_ATTEMPTS) {
+      b.status = 'error';
+      b.error = 'Preparing this book stopped the app. The file may be damaged or unusual.';
+    }
+  }
+  recoverOrphans();
   emit();
   void runQueue();
+}
+
+/**
+ * Book folders the library doesn't list (the list was lost, or the app died
+ * right after an import): put books back on the shelf, drop empty leftovers.
+ */
+function recoverOrphans() {
+  let dirs: Directory[];
+  try {
+    dirs = booksDir().list().filter((d): d is Directory => d instanceof Directory);
+  } catch {
+    return;
+  }
+  const known = new Set(books.map((b) => b.id));
+  let changed = false;
+  for (const d of dirs) {
+    if (known.has(d.name)) continue;
+    try {
+      const source = d.list().find((f): f is File => f instanceof File && f.name.startsWith('source.'));
+      if (!source) {
+        d.delete();
+        continue;
+      }
+      const m = readJson<Manifest>(manifestFile(d.name));
+      const now = Date.now();
+      books.push({
+        id: d.name,
+        title: m?.title || 'Recovered book',
+        author: m?.author ?? '',
+        format: m?.format,
+        fileName: source.name,
+        sourceName: source.name,
+        size: source.size,
+        addedAt: now,
+        openedAt: 0,
+        status: m ? 'ready' : 'processing',
+        progress: m ? 1 : 0,
+      });
+      changed = true;
+    } catch {
+      // leave it for next time
+    }
+  }
+  if (changed) scheduleSave();
 }
 
 export function useLibrary(): BookEntry[] {
@@ -158,65 +221,85 @@ function newId() {
 
 export interface ImportResult {
   added: number;
+  /** Not a supported format. */
   skipped: string[];
+  /** Couldn't be copied (usually storage full). */
+  failed: string[];
 }
 
 /** Let the user pick files and add them to the shelf. */
 export async function importBooks(): Promise<ImportResult> {
   const res = await DocumentPicker.getDocumentAsync({ type: '*/*', multiple: true, copyToCacheDirectory: true });
-  if (res.canceled) return { added: 0, skipped: [] };
+  if (res.canceled) return { added: 0, skipped: [], failed: [] };
   const skipped: string[] = [];
+  const failed: string[] = [];
   let added = 0;
-  for (const asset of res.assets) {
-    if (!isSupportedName(asset.name)) {
-      skipped.push(asset.name);
-      continue;
+  try {
+    for (const asset of res.assets) {
+      if (!isSupportedName(asset.name)) {
+        skipped.push(asset.name);
+        continue;
+      }
+      const id = newId();
+      const dir = bookDir(id);
+      try {
+        ensureDir(dir);
+        const lower = asset.name.toLowerCase();
+        const ext = lower.endsWith('.fb2.zip') ? 'fb2.zip' : (lower.split('.').pop() ?? 'bin');
+        const dest = new File(dir, `source.${ext}`);
+        const picked = new File(asset.uri);
+        // The picker already made a private copy; moving it is instant even for huge files.
+        try {
+          picked.moveSync(dest);
+        } catch {
+          picked.copySync(dest);
+        }
+        const now = Date.now();
+        books.unshift({
+          id,
+          title: titleFromFileName(asset.name),
+          author: '',
+          fileName: asset.name,
+          sourceName: dest.name,
+          size: dest.size,
+          addedAt: now,
+          openedAt: now,
+          status: 'processing',
+          progress: 0,
+        });
+        added++;
+      } catch {
+        // Usually storage full. Don't leave a half-copied book behind.
+        failed.push(asset.name);
+        try {
+          if (dir.exists) dir.delete();
+        } catch {
+          // recoverOrphans() tidies it next launch
+        }
+      }
     }
-    const id = newId();
-    const dir = bookDir(id);
-    ensureDir(dir);
-    const lower = asset.name.toLowerCase();
-    const ext = lower.endsWith('.fb2.zip') ? 'fb2.zip' : (lower.split('.').pop() ?? 'bin');
-    const dest = new File(dir, `source.${ext}`);
-    const picked = new File(asset.uri);
-    // The picker already made a private copy; moving it is instant even for huge files.
-    try {
-      picked.moveSync(dest);
-    } catch {
-      picked.copySync(dest);
+  } finally {
+    if (added) {
+      emit();
+      flushLibrary();
+      void runQueue();
     }
-    const now = Date.now();
-    books.unshift({
-      id,
-      title: titleFromFileName(asset.name),
-      author: '',
-      fileName: asset.name,
-      sourceName: dest.name,
-      size: dest.size,
-      addedAt: now,
-      openedAt: now,
-      status: 'processing',
-      progress: 0,
-    });
-    added++;
   }
-  emit();
-  scheduleSave();
-  void runQueue();
-  return { added, skipped };
+  return { added, skipped, failed };
 }
 
 /** Convert a book again from its original file (after damage or an engine upgrade). */
 export function reprocessBook(id: string) {
-  updateBook(id, { status: 'processing', progress: 0, error: undefined });
+  updateBook(id, { status: 'processing', progress: 0, error: undefined, attempts: 0 });
   void runQueue();
 }
 
 export function deleteBook(id: string) {
   books = books.filter((b) => b.id !== id);
   live.delete(id);
+  forgetAnnotations(id);
   emit();
-  scheduleSave();
+  flushLibrary();
   try {
     const d = bookDir(id);
     if (d.exists) d.delete();
@@ -272,16 +355,22 @@ async function convert(book: BookEntry) {
     // ignore
   }
 
+  // Count the attempt on disk before starting, so a book whose conversion
+  // kills the app isn't retried forever (see loadLibrary).
+  updateBook(id, { attempts: (book.attempts ?? 0) + 1 });
+  flushLibrary();
+
   const state: LiveBook = { chunks: [], totalBlocks: 0, totalChars: 0, progress: 0 };
   live.set(id, state);
   let lastEmit = 0;
+  // Progress goes to the live store only: it changes many times a second and
+  // isn't worth saving (an interrupted conversion starts over anyway).
   const publish = (force = false) => {
     const now = Date.now();
     if (!force && now - lastEmit < 250) return;
     lastEmit = now;
     live.set(id, { ...state, chunks: state.chunks.slice() });
     emitLive();
-    updateBook(id, { progress: state.progress });
   };
 
   let src: FileSource | null = null;
@@ -319,13 +408,14 @@ async function convert(book: BookEntry) {
     updateBook(id, {
       status: 'ready',
       progress: 1,
+      attempts: undefined,
       title: manifest.title,
       author: manifest.author,
       format: manifest.format,
       coverFile: coverRef && 'file' in coverRef ? coverRef.file : getBook(id)?.coverFile,
     });
   } catch (e) {
-    updateBook(id, { status: 'error', error: e instanceof Error ? e.message : String(e) });
+    updateBook(id, { status: 'error', error: e instanceof Error ? e.message : String(e), attempts: undefined });
   } finally {
     src?.close();
     live.delete(id);

@@ -39,8 +39,22 @@ export function detectParaMode(sample: string): ParaMode {
   return 'line';
 }
 
+const NUMBERED_RE = /^[\s.:—–-]*(\d+|[IVXLCDM]+)(?=$|[\s.:,—–-])/i;
+
+/**
+ * A chapter heading: "Prologue", "Chapter 12", "Part II: The Return",
+ * "Глава первая". Not a sentence that happens to start with such a word
+ * ("Part of me wanted to stay.").
+ */
 export function isHeadingLine(t: string): boolean {
-  return t.length <= 80 && (HEADING_RE.test(t) || ROMAN_RE.test(t));
+  if (t.length > 80) return false;
+  if (ROMAN_RE.test(t)) return true;
+  const m = HEADING_RE.exec(t);
+  if (!m) return false;
+  const rest = t.slice(m[0].length);
+  if (/^[\s.:—–-]*$/.test(rest)) return true;
+  if (NUMBERED_RE.test(rest)) return true;
+  return t.split(/\s+/).length <= 5 && !/[.!?,;:]$/.test(t);
 }
 
 export async function ingestTxt(ctx: IngestContext): Promise<Manifest> {

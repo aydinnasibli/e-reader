@@ -19,13 +19,19 @@ import { type Measure, type Page, type PageItem, pageOf, paginate } from './pagi
 export const HEADER = 30;
 export const FOOTER = 30;
 
-/** Size of a page (one column of a spread) for a window, safe-area insets and margin. */
-export function pageFrame(win: { width: number; height: number }, insets: { top: number; bottom: number }, margin: number) {
+type Insets = { top: number; bottom: number; left: number; right: number };
+
+/**
+ * Size of a page (one column of a spread) for a window, safe-area insets and
+ * margin. `left` is where text starts (clear of a landscape notch).
+ */
+export function pageFrame(win: { width: number; height: number }, insets: Insets, margin: number) {
   // Landscape on a wide screen: two pages side by side, turned together.
   const spread = win.width > win.height && win.width >= 640;
-  const width = spread ? Math.floor((win.width - margin * 3) / 2) : win.width - margin * 2;
+  const usable = win.width - insets.left - insets.right;
+  const width = spread ? Math.floor((usable - margin * 3) / 2) : usable - margin * 2;
   const pageHeight = Math.floor(win.height - insets.top - insets.bottom - HEADER - FOOTER);
-  return { spread, width, pageHeight };
+  return { spread, width, pageHeight, left: insets.left + margin };
 }
 
 interface Props {
@@ -70,10 +76,11 @@ interface Cur {
 export function PageReader({ book, settings, theme, start, startKey, version, onPosition, onTap, marksFor, onLongPressBlock, onLink, bookmarked, footerRight, onLayoutReady }: Props) {
   const win = useWindowDimensions();
   const liveInsets = useSafeAreaInsets();
-  // Showing/hiding the status bar can change the insets on some iPhones; that
-  // must not re-paginate the book, so they are only re-read when the window changes.
-  const insets = useMemo(() => liveInsets, [win.width, win.height]); // eslint-disable-line react-hooks/exhaustive-deps
-  const { spread, width, pageHeight } = pageFrame(win, insets, settings.margin);
+  // Showing/hiding the status bar can change the top inset on some iPhones;
+  // that must not re-paginate the book, so insets are re-read only when the
+  // window or the side insets change (rotation).
+  const insets = useMemo(() => liveInsets, [win.width, win.height, liveInsets.left, liveInsets.right]); // eslint-disable-line react-hooks/exhaustive-deps
+  const { spread, width, pageHeight, left: textLeft } = pageFrame(win, insets, settings.margin);
   const step = spread ? 2 : 1;
   const spreadStart = (p: number) => (spread ? p - (p % 2) : p);
   const layoutKey = `${width}|${pageHeight}|${layoutKeyOf(settings)}`;
@@ -86,13 +93,17 @@ export function PageReader({ book, settings, theme, start, startKey, version, on
   const lastPos = useRef<Position>(start);
   const [measuring, setMeasuring] = useState<{ chunk: number; blocks: Block[]; key: string } | null>(null);
 
+  // Whether the last page may stay on screen while the current one is laid out.
+  const staleOk = useRef(false);
   // Jump requests (TOC, slider) and layout changes both re-target the reader.
   useEffect(() => {
     target.current = { pos: start };
+    staleOk.current = false;
     setCur({ chunk: book.chunkOf(start.b), page: null });
   }, [startKey]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => {
     target.current = { pos: lastPos.current };
+    staleOk.current = true;
     setCur({ chunk: book.chunkOf(lastPos.current.b), page: null });
     setMeasuring(null);
   }, [layoutKey]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -123,11 +134,23 @@ export function PageReader({ book, settings, theme, start, startKey, version, on
     [book, laid, layoutKey, pageHeight],
   );
 
+  // Reopening a book that is being converted again (after a crash, or
+  // "Prepare it again"): the saved place may not be converted yet. Wait for it
+  // instead of showing (and saving) the last page that exists so far.
+  const waitingForPlace = cur.page === null && !target.current.last && !book.complete && target.current.pos.b >= book.totalBlocks;
+  useEffect(() => {
+    if (cur.page !== null) return;
+    const c = book.chunkOf(target.current.pos.b);
+    if (c !== cur.chunk && !target.current.last) setCur({ chunk: c, page: null });
+  }, [version]); // eslint-disable-line react-hooks/exhaustive-deps
+
   // Resolve a pending target once its chunk is laid out.
   const curLaid = laid.get(cur.chunk);
   useEffect(() => {
-    if (cur.page !== null || !curLaid) return;
+    if (cur.page !== null || !curLaid || waitingForPlace) return;
     const t = target.current;
+    // Only resolve inside the chunk that holds the target (it may just have moved on).
+    if (!t.last && book.chunkOf(t.pos.b) !== cur.chunk) return;
     let page: number;
     if (t.last) page = curLaid.pages.length - 1;
     else {
@@ -137,7 +160,14 @@ export function PageReader({ book, settings, theme, start, startKey, version, on
       page = pageOf(curLaid.pages, t.pos.b, at);
     }
     setCur({ chunk: cur.chunk, page: spreadStart(page) });
-  }, [cur, curLaid]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [cur, curLaid, waitingForPlace]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Keep the chunks around the current one in the book's memory (search hits
+  // and the slider can visit many), and forget layouts far away.
+  useEffect(() => {
+    for (const c of [cur.chunk, cur.chunk + 1, cur.chunk - 1]) if (c >= 0 && c < book.chunkCount) void book.loadChunk(c);
+    for (const c of laid.keys()) if (Math.abs(c - cur.chunk) > 2) laid.delete(c);
+  }, [cur.chunk, laid, book]);
 
   // Report the reading position.
   useEffect(() => {
@@ -153,7 +183,9 @@ export function PageReader({ book, settings, theme, start, startKey, version, on
     const items = (curLaid.pages[cur.page + step - 1] ?? curLaid.pages[cur.page]).items;
     const last = items[items.length - 1];
     lastPos.current = pos;
-    onPosition(pos, { b: last.b, o: bookOffset(last.b, last.e) });
+    // The end is exclusive: where the next page starts.
+    const lastText = curLaid.measures[last.b - curLaid.first]?.kind === 'text';
+    onPosition(pos, lastText ? { b: last.b, o: bookOffset(last.b, last.e) } : { b: last.b + 1, o: 0 });
   }, [cur, curLaid, onPosition, step]);
 
   /** The page one step away, or why there isn't one. */
@@ -194,11 +226,17 @@ export function PageReader({ book, settings, theme, start, startKey, version, on
     }
     animating.current = true;
     const nextSlot = slot + dir;
+    const keyAtStart = layoutKey;
     const land = () => {
-      if (n.cur.page === null) target.current = { pos: { b: book.chunkStart(n.cur.chunk), o: 0 }, last: dir < 0 };
-      setSlot(nextSlot);
-      setCur(n.cur);
       animating.current = false;
+      setSlot(nextSlot);
+      base.setValue(-nextSlot * widthRef.current);
+      // Rotated or resized mid-turn: the page indices belong to the old layout,
+      // which the layout change has already re-targeted.
+      if (layoutKeyRef.current !== keyAtStart) return;
+      staleOk.current = false;
+      if (n.cur.page === null) target.current = { pos: { b: book.chunkStart(n.cur.chunk), o: 0 }, last: dir < 0 };
+      setCur(n.cur);
     };
     if (settings.pageTurn === 'slide') {
       Animated.parallel([
@@ -219,6 +257,10 @@ export function PageReader({ book, settings, theme, start, startKey, version, on
       land();
     }
   };
+  const layoutKeyRef = useRef(layoutKey);
+  layoutKeyRef.current = layoutKey;
+  const widthRef = useRef(win.width);
+  widthRef.current = win.width;
   // Keep the strip aligned if the window size changes.
   useEffect(() => {
     base.setValue(-slot * win.width);
@@ -240,7 +282,7 @@ export function PageReader({ book, settings, theme, start, startKey, version, on
       const look = l.looks[i];
       if (!blk || m?.kind !== 'text') return onLongPressBlock?.(it.b);
       const top = it.top || it.s > 0 ? 0 : look.marginTop;
-      const left = settings.margin + (column.endsWith(':R') ? width + settings.margin : 0) + look.paddingLeft;
+      const left = textLeft + (column.endsWith(':R') ? width + settings.margin : 0) + look.paddingLeft;
       const d = drawn(blk, look);
       const at = hitText(d.text, m.lines, it.s, it.e, pageX - left, y - box.y - top, width - look.paddingLeft, look.textAlign === 'justify');
       return onLongPressBlock?.(it.b, toBlock(d, at));
@@ -367,7 +409,9 @@ export function PageReader({ book, settings, theme, start, startKey, version, on
   // showing the last page instead of a blank one.
   const lastShown = useRef<typeof current>(undefined);
   if (current) lastShown.current = current;
-  const shown = current ?? lastShown.current;
+  // Only while re-laying out for new settings; after a turn into a chunk that
+  // isn't measured yet, the old page would look like the turn didn't happen.
+  const shown = current ?? (staleOk.current ? lastShown.current : undefined);
   const prev = neighbour(-1);
   const next = neighbour(1);
   const processingMsg = `Still preparing the rest of this book… ${Math.round(book.progress * 100)}%`;
@@ -383,7 +427,8 @@ export function PageReader({ book, settings, theme, start, startKey, version, on
   const curKey = cur.page === null ? `pending:${cur.chunk}` : `p:${cur.chunk}:${cur.page}`;
   if (prevKey && prev !== 'end' && prev)
     strip.push({ key: prevKey, at: slot - 1, content: prev === 'processing' ? renderPage(undefined, processingMsg) : renderPage(prev.pageData, undefined, prevKey) });
-  strip.push({ key: curKey, at: slot, content: renderPage(shown, undefined, curKey) });
+  const waitMsg = `Preparing the book up to where you left off… ${Math.round(book.progress * 100)}%`;
+  strip.push({ key: curKey, at: slot, content: waitingForPlace ? renderPage(undefined, waitMsg) : renderPage(shown, undefined, curKey) });
   if (nextKey && next !== 'end' && next)
     strip.push({ key: nextKey, at: slot + 1, content: next === 'processing' ? renderPage(undefined, processingMsg) : renderPage(next.pageData, undefined, nextKey) });
   // Forget boxes of pages that are no longer on the strip.
@@ -395,7 +440,7 @@ export function PageReader({ book, settings, theme, start, startKey, version, on
 
   return (
     <View style={[styles.root, { backgroundColor: theme.bg, paddingTop: insets.top, paddingBottom: insets.bottom }]}>
-      <View style={[styles.header, { paddingHorizontal: settings.margin + 22 }]}>
+      <View style={[styles.header, { paddingLeft: textLeft + 22, paddingRight: settings.margin + insets.right + 22 }]}>
         <Text numberOfLines={1} style={[styles.meta, { color: theme.muted }]}>
           {chapter ?? book.entry.title}
         </Text>
@@ -411,14 +456,14 @@ export function PageReader({ book, settings, theme, start, startKey, version, on
             key={key}
             style={[
               styles.page,
-              { width: win.width, height: pageHeight, paddingHorizontal: settings.margin, backgroundColor: theme.bg },
+              { width: win.width, height: pageHeight, paddingLeft: textLeft, paddingRight: settings.margin + insets.right, backgroundColor: theme.bg },
               { opacity: fade, transform: [{ translateX: Animated.add(shift, at * win.width) }] },
             ]}>
             {content}
           </Animated.View>
         ))}
         {measuring && (
-          <View style={{ position: 'absolute', left: settings.margin, top: 0 }}>
+          <View style={{ position: 'absolute', left: textLeft, top: 0 }}>
             <Measurer
               key={`${measuring.chunk}|${measuring.key}`}
               book={book}
@@ -432,7 +477,7 @@ export function PageReader({ book, settings, theme, start, startKey, version, on
           </View>
         )}
       </View>
-      <View style={[styles.footer, { paddingHorizontal: settings.margin }]}>
+      <View style={[styles.footer, { paddingLeft: textLeft, paddingRight: settings.margin + insets.right }]}>
         <Text style={[styles.meta, { color: theme.muted }]}>
           {book.complete ? `${pct.toFixed(1)}%` : `${pct.toFixed(1)}% · preparing ${Math.round(book.progress * 100)}%`}
         </Text>

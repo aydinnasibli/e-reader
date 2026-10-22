@@ -118,3 +118,17 @@ export function writeJson(file: File, value: unknown) {
   }
   tmp.moveSync(file, { overwrite: true });
 }
+
+/**
+ * writeJson for app state saved from timers and taps: a failed save (storage
+ * full, file locked) must not crash the app. Returns whether it was saved.
+ */
+export function saveJson(file: File, value: unknown): boolean {
+  try {
+    writeJson(file, value);
+    return true;
+  } catch (e) {
+    console.warn(`Could not save ${file.name}:`, e);
+    return false;
+  }
+}

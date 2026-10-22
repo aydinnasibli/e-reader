@@ -25,6 +25,7 @@ import { ErrorScreen } from '@/ui/ErrorScreen';
 import { formatMinutes } from '@/ui/format';
 
 const before = (a: Position, b: Position) => a.b < b.b || (a.b === b.b && a.o <= b.o);
+const strictlyBefore = (a: Position, b: Position) => a.b < b.b || (a.b === b.b && a.o < b.o);
 
 export default function ReaderScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
@@ -67,15 +68,16 @@ export default function ReaderScreen() {
       setVersion((v) => v + 1);
     }
   }, [book, live]);
+  // The moment conversion finishes, take the manifest during this render (not
+  // in an effect), so the damaged-book check below never sees a finished book
+  // without it and the reader isn't torn down and rebuilt.
+  if (book && status === 'ready' && !book.complete) {
+    const m = loadManifest(id);
+    if (m) book.setManifest(m);
+  }
   useEffect(() => {
-    if (book && status === 'ready' && !book.complete) {
-      const m = loadManifest(id);
-      if (m) {
-        book.setManifest(m);
-        setVersion((v) => v + 1);
-      }
-    }
-  }, [book, status, id]);
+    if (status === 'ready') setVersion((v) => v + 1);
+  }, [status]);
 
   const startPos = useMemo<Position>(() => getBook(id)?.position ?? { b: 0, o: 0 }, [id]);
   // Readers open at `latest`; bumping `jump.key` makes them jump there.
@@ -105,6 +107,8 @@ export default function ReaderScreen() {
   const latest = useRef(startPos);
   const save = useCallback(() => {
     if (!book) return;
+    // Still converting up to the saved place: its percent can't be worked out yet.
+    if (!book.complete && latest.current.b >= book.totalBlocks) return updateBook(id, { openedAt: Date.now() });
     updateBook(id, { position: latest.current, percent: book.fraction(latest.current), openedAt: Date.now() });
   }, [book, id]);
   const onPosition = useCallback(
@@ -152,26 +156,24 @@ export default function ReaderScreen() {
   // LivePreview. On release the values are saved and the preview stays until
   // the reader has laid out pages with them (or a few seconds at most).
   const [draft, setDraft] = useState<Partial<ReaderSettings> | null>(null);
-  const readyKey = useRef('');
-  const waitingFrom = useRef<string | null>(null);
+  // Layouts the reader has finished, counted; on release we wait for the next one.
+  const readyCount = useRef(0);
+  const waitingAfter = useRef<number | null>(null);
   const draftTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const endDraft = useCallback(() => {
-    waitingFrom.current = null;
+    waitingAfter.current = null;
     if (draftTimer.current) clearTimeout(draftTimer.current);
     setDraft(null);
   }, []);
-  const onLayoutReady = useCallback(
-    (key: string) => {
-      readyKey.current = key;
-      if (waitingFrom.current !== null && key !== waitingFrom.current) endDraft();
-    },
-    [endDraft],
-  );
+  const onLayoutReady = useCallback(() => {
+    readyCount.current++;
+    if (waitingAfter.current !== null && readyCount.current > waitingAfter.current) endDraft();
+  }, [endDraft]);
   const onSlide = useCallback(
     (patch: Partial<ReaderSettings>, done: boolean) => {
       if (!done) {
         if (draftTimer.current) clearTimeout(draftTimer.current);
-        waitingFrom.current = null;
+        waitingAfter.current = null;
         setDraft((d) => ({ ...d, ...patch }));
         return;
       }
@@ -179,7 +181,7 @@ export default function ReaderScreen() {
       setSettings(patch);
       // Scroll mode redraws at once; page mode needs its new pages first.
       if (!changed || settings.mode !== 'page') return endDraft();
-      waitingFrom.current = readyKey.current;
+      waitingAfter.current = readyCount.current;
       if (draftTimer.current) clearTimeout(draftTimer.current);
       draftTimer.current = setTimeout(endDraft, 4000);
     },
@@ -211,7 +213,8 @@ export default function ReaderScreen() {
   );
 
   // Bookmarks on the visible page.
-  const pageBookmarks = ann.bookmarks.filter((bm) => before(pos, bm) && (end ? before(bm, end) : bm.b === pos.b));
+  // `end` is where the next page starts, so it isn't part of this page.
+  const pageBookmarks = ann.bookmarks.filter((bm) => before(pos, bm) && (end ? strictlyBefore(bm, end) : bm.b === pos.b));
   const toggleBookmark = () => {
     if (!book) return;
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {});

@@ -164,8 +164,12 @@ export class BookWriter {
     let pos = 0;
     while (text.length - pos > MAX_BLOCK + MAX_BLOCK / 2) {
       let cut = text.lastIndexOf(' ', pos + MAX_BLOCK);
-      if (cut <= pos + MAX_BLOCK / 2) cut = pos + MAX_BLOCK;
-      else cut += 1;
+      if (cut <= pos + MAX_BLOCK / 2) {
+        cut = pos + MAX_BLOCK;
+        // Don't split a surrogate pair (emoji and rare CJK).
+        const c = text.charCodeAt(cut - 1);
+        if (c >= 0xd800 && c <= 0xdbff) cut--;
+      } else cut += 1;
       const piece = sliceRuns(runs, pos, cut);
       this.commit(this.makeBlock(piece), cut - pos);
       this.continuation = true;

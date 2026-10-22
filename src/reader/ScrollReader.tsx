@@ -40,27 +40,38 @@ interface Win {
 export function ScrollReader({ book, settings, theme, start, startKey, version, onPosition, onTap, marksFor, onLongPressBlock, onLink, footerRight }: Props) {
   const win = useWindowDimensions();
   const insets = useSafeAreaInsets();
-  const width = win.width - settings.margin * 2;
+  // Clear of a landscape notch on either side.
+  const padLeft = settings.margin + insets.left;
+  const padRight = settings.margin + insets.right;
+  const width = win.width - padLeft - padRight;
   const blocks = useRef(new Map<number, Block[]>()).current;
   const [w, setW] = useState<Win | null>(null);
   const busy = useRef(false);
   const [pos, setPos] = useState<Position>(start);
 
+  // Loads started before a jump must not land in the new window.
+  const generation = useRef(0);
+  // Reopening a book being converted again: wait until the saved place exists.
+  const waiting = !book.complete && start.b >= book.totalBlocks;
+
   // Open at `start` (and again on every jump).
   useEffect(() => {
     let alive = true;
+    const gen = ++generation.current;
     blocks.clear();
     setW(null);
+    busy.current = false;
+    if (waiting) return;
     const c = book.chunkOf(start.b);
     book.loadChunk(c).then((bl) => {
-      if (!alive) return;
+      if (!alive || gen !== generation.current) return;
       blocks.set(c, bl);
       setW({ first: c, last: c, start: start.b });
     });
     return () => {
       alive = false;
     };
-  }, [startKey]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [startKey, waiting]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const data = useMemo(() => {
     if (!w) return [];
@@ -74,7 +85,9 @@ export function ScrollReader({ book, settings, theme, start, startKey, version, 
     if (!w || busy.current || w.last + 1 >= book.chunkCount) return;
     busy.current = true;
     const c = w.last + 1;
+    const gen = generation.current;
     book.loadChunk(c).then((bl) => {
+      if (gen !== generation.current) return;
       blocks.set(c, bl);
       busy.current = false;
       setW((cur) => {
@@ -100,7 +113,9 @@ export function ScrollReader({ book, settings, theme, start, startKey, version, 
     if (w.first === 0) return;
     busy.current = true;
     const c = w.first - 1;
+    const gen = generation.current;
     book.loadChunk(c).then((bl) => {
+      if (gen !== generation.current) return;
       blocks.set(c, bl);
       busy.current = false;
       setW((cur) => {
@@ -166,7 +181,7 @@ export function ScrollReader({ book, settings, theme, start, startKey, version, 
     if (!blk.r || !ls || !view) return onLongPressBlock?.(b);
     view.measureInWindow((x, y) => {
       const d = drawn(blk, look);
-      const at = hitText(d.text, ls, 0, d.text.length, pageX - x - settings.margin - look.paddingLeft, pageY - y - look.marginTop, width - look.paddingLeft, look.textAlign === 'justify');
+      const at = hitText(d.text, ls, 0, d.text.length, pageX - x - padLeft - look.paddingLeft, pageY - y - look.marginTop, width - look.paddingLeft, look.textAlign === 'justify');
       onLongPressBlock?.(b, toBlock(d, at));
     });
   };
@@ -195,7 +210,7 @@ export function ScrollReader({ book, settings, theme, start, startKey, version, 
         }}
         onLongPress={(e) => longPress(b, blk, e.nativeEvent.pageX, e.nativeEvent.pageY)}
         delayLongPress={450}
-        style={{ paddingHorizontal: settings.margin }}>
+        style={{ paddingLeft: padLeft, paddingRight: padRight }}>
         {content}
       </Pressable>
     );
@@ -215,6 +230,11 @@ export function ScrollReader({ book, settings, theme, start, startKey, version, 
           setTimeout(() => Date.now() - lastLink.current > 400 && onTap(), 0);
         }
       }}>
+      {waiting && (
+        <Text style={[styles.end, { color: theme.muted, paddingTop: insets.top + 80 }]}>
+          {`Preparing the book up to where you left off… ${Math.round(book.progress * 100)}%`}
+        </Text>
+      )}
       {w && (
         <FlatList
           key={startKey}

@@ -3,7 +3,7 @@
 import { File, Paths } from 'expo-file-system';
 import { useSyncExternalStore } from 'react';
 import { type BookEntry, getBook, updateBook } from './library';
-import { readJson, writeJson } from './storage';
+import { readJson, saveJson } from './storage';
 
 export interface Collection {
   id: string;
@@ -30,7 +30,7 @@ function get(): State {
 
 function set(patch: Partial<State>) {
   state = { ...get(), ...patch };
-  writeJson(file(), state);
+  saveJson(file(), state);
   listeners.forEach((l) => l());
 }
 

@@ -21,7 +21,17 @@ const CONTEXT = 40;
 
 /** Case-folding that keeps string length, so offsets stay valid. */
 export function fold(s: string): string {
-  return s.toLowerCase().replace(/ё/g, 'е');
+  const low = s.toLowerCase();
+  if (low.length === s.length) return low.replace(/ё/g, 'е');
+  // Some capitals lowercase to two characters (Turkish İ -> i + dot); fold
+  // those one by one so every offset still lines up with the original text.
+  let out = '';
+  for (const ch of s) {
+    let l = ch.toLowerCase();
+    if (l.length !== ch.length) l = ch === 'İ' ? 'i' : ch;
+    out += l === 'ё' ? 'е' : l;
+  }
+  return out;
 }
 
 /** All matches of an already-folded query in one block. */
@@ -58,13 +68,6 @@ export function searchBook(book: BookData, query: string, onUpdate: (p: SearchPr
     onUpdate({ hits: [], done: 1, finished: true });
     return () => {};
   }
-  // A chunk is only parsed if its raw JSON contains the longest word of the
-  // query, which skips most chunks of a big book cheaply.
-  const probe = q
-    .split(/\s+/)
-    .filter((w) => !/["\\]/.test(w))
-    .sort((a, b) => b.length - a.length)[0];
-
   (async () => {
     const hits: Hit[] = [];
     let lastPublish = 0;
@@ -77,11 +80,11 @@ export function searchBook(book: BookData, query: string, onUpdate: (p: SearchPr
         continue;
       }
       if (cancelled) return;
-      if (!probe || fold(raw).includes(probe)) {
-        const blocks = (JSON.parse(raw) as ChunkFile).b;
-        const first = book.chunkStart(i);
-        for (let k = 0; k < blocks.length && hits.length < MAX_HITS; k++) findInBlock(blocks[k], first + k, q, hits, MAX_HITS);
-      }
+      // Every chunk is parsed (well under a millisecond each): matching the raw
+      // JSON would miss words split across style runs, like a bold first letter.
+      const blocks = (JSON.parse(raw) as ChunkFile).b;
+      const first = book.chunkStart(i);
+      for (let k = 0; k < blocks.length && hits.length < MAX_HITS; k++) findInBlock(blocks[k], first + k, q, hits, MAX_HITS);
       const now = Date.now();
       if (now - lastPublish > 150) {
         lastPublish = now;

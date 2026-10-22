@@ -4,7 +4,7 @@
 
 import { Inflate, inflateSync } from 'fflate';
 import { type ByteSource, READ_SLICE } from './io';
-import { decodeUtf8 } from './decode';
+import { decodeUtf8, looksLikeUtf8 } from './decode';
 
 export interface ZipEntry {
   name: string;
@@ -79,7 +79,9 @@ export class ZipArchive {
       const commentLen = u16(cd, p + 32);
       let offset = u32(cd, p + 42);
       const nameBytes = cd.subarray(p + 46, p + 46 + nameLen);
-      const name = flags & 0x800 ? decodeUtf8(nameBytes) : latin1(nameBytes);
+      // Bit 11 says UTF-8, but many tools write UTF-8 names without it; legacy
+      // code-page names almost never form valid UTF-8.
+      const name = flags & 0x800 || looksLikeUtf8(nameBytes) ? decodeUtf8(nameBytes) : latin1(nameBytes);
       // ZIP64 extra field carries the real sizes/offset when the 32-bit ones are maxed out.
       let e = p + 46 + nameLen;
       const eEnd = e + extraLen;

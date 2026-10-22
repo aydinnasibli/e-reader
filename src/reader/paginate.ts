@@ -59,7 +59,8 @@ export function lineRanges(full: string, lines: { text: string; height: number; 
 
 /** Rough line breaking for when the text engine didn't report (should be rare). */
 export function estimateLines(text: string, look: Look, width: number): Line[] {
-  const perLine = Math.max(8, Math.floor((width - look.paddingLeft) / (look.fontSize * 0.5)));
+  // Errs on the side of more lines: a short page is fine, text cut off by an overfull one is lost.
+  const perLine = Math.max(8, Math.floor((width - look.paddingLeft) / (look.fontSize * 0.62)));
   const out: Line[] = [];
   for (let s = 0; s < text.length; s += perLine) out.push({ start: s, end: Math.min(text.length, s + perLine), height: look.lineHeight });
   if (!out.length) out.push({ start: 0, end: 0, height: look.lineHeight });

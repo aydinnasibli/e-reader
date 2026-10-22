@@ -1,7 +1,7 @@
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { useEffect } from 'react';
 import { AppState, Pressable, StyleSheet, Text, View } from 'react-native';
-import { canSelfUpdate, checkForUpdate, dismissUpdateError, installUpdate, useUpdateState } from '@/lib/appUpdate';
+import { canSelfUpdate, checkForUpdate, cleanOldDownloads, dismissUpdateError, installUpdate, useUpdateState } from '@/lib/appUpdate';
 import { formatBytes } from './format';
 import { useAppColors } from './theme';
 
@@ -13,6 +13,7 @@ export function UpdateBanner() {
   // Check on launch and whenever the app comes back to the foreground.
   useEffect(() => {
     if (!canSelfUpdate()) return;
+    cleanOldDownloads();
     void checkForUpdate();
     const sub = AppState.addEventListener('change', (st) => st === 'active' && void checkForUpdate());
     return () => sub.remove();

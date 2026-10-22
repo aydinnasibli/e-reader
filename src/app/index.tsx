@@ -19,7 +19,7 @@ import {
   toggleInCollection,
   useShelves,
 } from '@/lib/collections';
-import { type BookEntry, deleteBook, importBooks, updateBook, useLibrary } from '@/lib/library';
+import { type BookEntry, deleteBook, importBooks, updateBook, useLibrary, useLiveBook } from '@/lib/library';
 import { Cover } from '@/ui/Cover';
 import { showActions, showPrompt } from '@/ui/dialogs';
 import { formatBytes } from '@/ui/format';
@@ -57,9 +57,11 @@ export default function Library() {
   );
 
   const add = async () => {
+    if (importing) return;
     setImporting(true);
     try {
       const res = await importBooks();
+      if (res.failed.length) Alert.alert("Couldn't add some books", `There may not be enough free space:\n\n${res.failed.join('\n')}`);
       if (res.skipped.length) Alert.alert('Some files were skipped', `Supported formats: EPUB, FB2, MOBI, AZW3 and TXT:\n\n${res.skipped.join('\n')}`);
     } catch (e) {
       Alert.alert('Import failed', e instanceof Error ? e.message : String(e));
@@ -84,8 +86,9 @@ export default function Library() {
               label: `Check for updates (you have 1.0.${CURRENT_BUILD})`,
               icon: 'cloud-download-outline' as const,
               onPress: async () => {
-                const u = await checkForUpdate(true);
-                if (!u) Alert.alert('Up to date', `You have the latest version (1.0.${CURRENT_BUILD}).`);
+                const r = await checkForUpdate(true);
+                // A newer build shows the update bar; failures show there too.
+                if (r === 'none') Alert.alert('Up to date', `You have the latest version (1.0.${CURRENT_BUILD}).`);
               },
             },
           ]
@@ -273,8 +276,10 @@ export default function Library() {
   );
 }
 
-function statusText(b: BookEntry): string | null {
-  if (b.status === 'processing') return `Preparing ${Math.round(b.progress * 100)}%`;
+/** "Preparing 40%" while converting (live, so only this cell redraws), or the failure. */
+function useStatusText(b: BookEntry): string | null {
+  const live = useLiveBook(b.id);
+  if (b.status === 'processing') return `Preparing ${Math.round((live?.progress ?? 0) * 100)}%`;
   if (b.status === 'error') return 'Failed to open';
   return null;
 }
@@ -314,7 +319,7 @@ function ContinueCard({ book, c, onPress }: { book: BookEntry; c: AppColors; onP
 }
 
 function GridCell({ book, width, c, onPress, onLongPress }: { book: BookEntry; width: number; c: AppColors; onPress(): void; onLongPress(): void }) {
-  const status = statusText(book);
+  const status = useStatusText(book);
   const pct = book.percent ?? 0;
   const finished = isFinished(book);
   return (
@@ -353,7 +358,7 @@ function GridCell({ book, width, c, onPress, onLongPress }: { book: BookEntry; w
 }
 
 function ListRow({ book, c, onPress, onLongPress }: { book: BookEntry; c: AppColors; onPress(): void; onLongPress(): void }) {
-  const status = statusText(book);
+  const status = useStatusText(book);
   const pct = book.percent ?? 0;
   return (
     <Pressable

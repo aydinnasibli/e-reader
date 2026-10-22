@@ -36,7 +36,8 @@ export function Measurer({ book, blocks, settings, theme, width, pageHeight, onD
     if (finished.current || !ready.current) return;
     if (reported.current < textCount || pendingImages.current > 0) return;
     finished.current = true;
-    onDone(results as Measure[], looks);
+    // A copy: text layout events can still arrive and must not change pages already cut.
+    onDone(results.slice() as Measure[], looks);
   };
 
   // Images and spacers need no text layout.
@@ -90,6 +91,7 @@ export function Measurer({ book, blocks, settings, theme, width, pageHeight, onD
             look={looks[i]}
             theme={theme}
             onTextLayout={(e) => {
+              if (finished.current) return;
               const first = !results[i];
               const text = drawnText(b, looks[i]);
               results[i] = { kind: 'text', lines: lineRanges(text, e.nativeEvent.lines), length: text.length };

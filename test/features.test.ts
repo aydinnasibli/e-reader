@@ -40,6 +40,22 @@ describe('applyMarks', () => {
 describe('search', () => {
   const block: Block = { k: 'p', r: ['Ёлка и елка. ', ['Ёлки', BOLD], ' зелёные'] };
 
+  it('finds the right place after a Turkish İ (which lowercases to two characters)', () => {
+    const text = 'İstanbul and İzmir are big cities';
+    expect(fold(text).length).toBe(text.length);
+    const hits: Hit[] = [];
+    findInBlock({ k: 'p', r: [text] }, 0, fold('izmir'), hits, 10);
+    expect(hits).toHaveLength(1);
+    expect(hits[0].o).toBe(text.indexOf('İzmir'));
+    expect(hits[0].match).toBe('İzmir');
+  });
+
+  it('finds words split across style runs (a bold first letter)', () => {
+    const hits: Hit[] = [];
+    findInBlock({ k: 'p', r: [['T', BOLD], 'he whale surfaced.'] }, 0, fold('the whale'), hits, 10);
+    expect(hits.map((h) => h.match)).toEqual(['The whale']);
+  });
+
   it('folds case and ё without changing offsets', () => {
     expect(fold('ЁлКа')).toBe('елка');
     expect(fold('ЁлКа').length).toBe(4);

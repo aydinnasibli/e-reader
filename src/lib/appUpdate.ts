@@ -3,7 +3,7 @@
 // downloads the newer APK and hands it to Android's installer.
 
 import Constants, { ExecutionEnvironment } from 'expo-constants';
-import { File, Paths } from 'expo-file-system';
+import { Directory, File, Paths } from 'expo-file-system';
 import * as IntentLauncher from 'expo-intent-launcher';
 import { useSyncExternalStore } from 'react';
 import { Platform } from 'react-native';
@@ -65,35 +65,56 @@ async function fetchLatest(): Promise<AvailableUpdate | null> {
   return { build, url: apk.browser_download_url, size: apk.size, notes: rel.body ?? '' };
 }
 
+const busy = () => state.kind === 'downloading' || state.kind === 'installing';
+
 /**
  * Look for a newer build. Quiet by default (no error shown); `manual` checks
- * always run and report problems.
+ * always run and report problems in the update bar.
  */
-export async function checkForUpdate(manual = false): Promise<AvailableUpdate | null> {
-  if (!canSelfUpdate()) return null;
-  if (state.kind === 'downloading' || state.kind === 'installing') return null;
-  if (!manual && Date.now() - lastCheck < CHECK_EVERY_MS) return state.kind === 'available' ? state.update : null;
+export async function checkForUpdate(manual = false): Promise<'available' | 'none' | 'error' | 'busy'> {
+  if (!canSelfUpdate()) return 'none';
+  if (busy()) return 'busy';
+  if (!manual && Date.now() - lastCheck < CHECK_EVERY_MS) return state.kind === 'available' ? 'available' : 'none';
   lastCheck = Date.now();
   if (manual) set({ kind: 'checking' });
   try {
     const latest = await fetchLatest();
+    // An update may have started meanwhile; don't replace its progress.
+    if (busy()) return 'busy';
     if (latest && latest.build > CURRENT_BUILD) {
       set({ kind: 'available', update: latest });
-      return latest;
+      return 'available';
     }
     set({ kind: 'idle' });
-    return null;
+    return 'none';
   } catch (e) {
+    if (busy()) return 'busy';
     set(manual ? { kind: 'error', message: e instanceof Error ? e.message : String(e) } : { kind: 'idle' });
-    return null;
+    return 'error';
+  }
+}
+
+const apkName = (build: number) => `nec-reader-${build}.apk`;
+
+/** Delete downloaded installers of this build or older (they've been installed). */
+export function cleanOldDownloads() {
+  if (!canSelfUpdate()) return;
+  try {
+    for (const f of new Directory(Paths.cache).list()) {
+      const n = f instanceof File ? /^nec-reader-(\d+)\.apk$/.exec(f.name) : null;
+      if (n && Number(n[1]) <= CURRENT_BUILD) f.delete();
+    }
+  } catch {
+    // the cache is the system's to clear anyway
   }
 }
 
 /** Download the APK and open Android's installer for it. */
 export async function installUpdate(update: AvailableUpdate) {
+  if (busy()) return;
   try {
     set({ kind: 'downloading', update, progress: 0 });
-    const dest = new File(Paths.cache, `nec-reader-${update.build}.apk`);
+    const dest = new File(Paths.cache, apkName(update.build));
     if (dest.exists) dest.delete();
     const file = await File.downloadFileAsync(update.url, dest, {
       onProgress: ({ bytesWritten, totalBytes }) => {
@@ -101,6 +122,10 @@ export async function installUpdate(update: AvailableUpdate) {
         set({ kind: 'downloading', update, progress: total ? bytesWritten / total : 0 });
       },
     });
+    if (update.size > 0 && file.size !== update.size) {
+      file.delete();
+      throw new Error('The download was incomplete. Please try again.');
+    }
     set({ kind: 'installing', update });
     await IntentLauncher.startActivityAsync('android.intent.action.VIEW', {
       data: file.contentUri,

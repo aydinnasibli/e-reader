@@ -58,6 +58,7 @@ interface Header {
   textRecords: number;
   encryption: number;
   encoding: number;
+  /** Mobipocket header version; 0 for plain PalmDOC text (no MOBI header). */
   version: number;
   firstImage: number;
   extraFlags: number;
@@ -266,6 +267,14 @@ export async function ingestMobi(ctx: IngestContext): Promise<Manifest> {
     }
   }
   let done = 0;
+  // Plain PalmDOC (.pdb/.prc without a MOBI header) is text, not HTML: escape
+  // it and make each line a paragraph, as for a .txt file.
+  const plain = h.version === 0;
+  const feed = (t: string) => {
+    if (!plain) return tok.feed(t);
+    tok.feed(t.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/\r?\n/g, '</p><p>'));
+  };
+  if (plain) tok.feed('<p>');
 
   const count = Math.min(h.textRecords, pdb.offsets.length - 2 - h.base);
   for (let i = 1; i <= count; i++) {
@@ -277,12 +286,13 @@ export async function ingestMobi(ctx: IngestContext): Promise<Manifest> {
     let text = h.compression === 2 ? palmdocDecompress(rec) : rec;
     if (done + text.length > textEnd) text = text.subarray(0, Math.max(0, textEnd - done));
     done += text.length;
-    tok.feed(decoder.decode(text));
+    feed(decoder.decode(text));
     if (done >= textEnd) break;
     ctx.progress(i / count);
     await ctx.pause();
   }
-  tok.feed(decoder.end());
+  feed(decoder.end());
+  if (plain) tok.feed('</p>');
   tok.end();
   html.finish();
   w.finish();

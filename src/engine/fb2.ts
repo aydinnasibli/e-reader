@@ -32,6 +32,8 @@ class Fb2Handler implements MarkupHandler {
   private capture = '';
   private author: string[] = [];
   private bodyDepth = 0;
+  /** Inside <body name="notes"> (footnotes): no chapter per note, no TOC entry per note. */
+  private notesBody = false;
   private section = 0;
   private titleDepth = 0;
   private titleText = '';
@@ -76,6 +78,7 @@ class Fb2Handler implements MarkupHandler {
     }
     if (name === 'body') {
       this.bodyDepth++;
+      this.notesBody = attrs.name === 'notes' || attrs.name === 'comments';
       this.w.chapterBreak();
       return;
     }
@@ -85,7 +88,7 @@ class Fb2Handler implements MarkupHandler {
     switch (name) {
       case 'section':
         this.section++;
-        if (this.section === 1) w.chapterBreak();
+        if (this.section === 1 && !this.notesBody) w.chapterBreak();
         else w.endBlock();
         break;
       case 'title':
@@ -166,6 +169,7 @@ class Fb2Handler implements MarkupHandler {
     }
     if (name === 'body') {
       this.bodyDepth--;
+      this.notesBody = false;
       this.w.endBlock();
       return;
     }
@@ -181,7 +185,9 @@ class Fb2Handler implements MarkupHandler {
         this.titleDepth--;
         if (this.titleDepth === 0) {
           const t = this.titleText.replace(/\s+/g, ' ').trim();
-          if (t && this.section > 0) this.toc.push({ t: t.length > 120 ? t.slice(0, 117) + '…' : t, l: this.section - 1, b: this.titleBlock });
+          // In the notes body only its own title goes in the TOC, not every note's number.
+          const listed = this.notesBody ? this.section === 0 : this.section > 0;
+          if (t && listed) this.toc.push({ t: t.length > 120 ? t.slice(0, 117) + '…' : t, l: Math.max(0, this.section - 1), b: this.titleBlock });
         }
         this.applyKind();
         break;

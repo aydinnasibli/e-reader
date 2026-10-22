@@ -4,7 +4,7 @@
 
 import { File, Paths } from 'expo-file-system';
 import { useSyncExternalStore } from 'react';
-import { readJson, writeJson } from './storage';
+import { readJson, saveJson } from './storage';
 
 interface BookStats {
   ms: number;
@@ -46,11 +46,14 @@ export function recordReading(bookId: string, ms: number, chars: number) {
     books: { ...s.books, [bookId]: { ms: b.ms + ms, chars: b.chars + Math.max(0, chars) } },
   };
   listeners.forEach((l) => l());
-  if (!saveTimer)
-    saveTimer = setTimeout(() => {
-      saveTimer = null;
-      writeJson(file(), get());
-    }, 2000);
+  if (!saveTimer) saveTimer = setTimeout(flushStats, 2000);
+}
+
+/** Save pending reading time now (the app is going to the background). */
+export function flushStats() {
+  if (saveTimer) clearTimeout(saveTimer);
+  saveTimer = null;
+  if (stats) saveJson(file(), stats);
 }
 
 export function useStats(): Stats {

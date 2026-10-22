@@ -5,7 +5,7 @@ import { File, Paths } from 'expo-file-system';
 import { useSyncExternalStore } from 'react';
 import { Appearance, useColorScheme } from 'react-native';
 import type { Weight } from './fonts';
-import { readJson, writeJson } from './storage';
+import { readJson, saveJson } from './storage';
 
 export type ThemeName = 'light' | 'paper' | 'sepia' | 'mint' | 'gray' | 'night' | 'dark' | 'black' | 'custom';
 export type ReadMode = 'page' | 'scroll';
@@ -128,7 +128,7 @@ export function useSettings(): ReaderSettings {
 
 export function setSettings(patch: Partial<ReaderSettings>) {
   settings = { ...current(), ...patch };
-  writeJson(file(), settings);
+  saveJson(file(), settings);
   listeners.forEach((l) => l());
 }
 
