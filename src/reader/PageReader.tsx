@@ -39,6 +39,8 @@ interface Props {
   bookmarked?: boolean;
   /** Small text shown at the bottom right (e.g. time left). */
   footerRight?: string;
+  /** Turn requests from outside (volume buttons); `n` increments per request. */
+  turn?: { dir: 1 | -1; n: number };
 }
 
 interface Laid {
@@ -55,7 +57,7 @@ interface Cur {
   page: number | null;
 }
 
-export function PageReader({ book, settings, theme, start, startKey, version, onPosition, onTap, marksFor, onLongPressBlock, onLink, bookmarked, footerRight }: Props) {
+export function PageReader({ book, settings, theme, start, startKey, version, onPosition, onTap, marksFor, onLongPressBlock, onLink, bookmarked, footerRight, turn }: Props) {
   const win = useWindowDimensions();
   const liveInsets = useSafeAreaInsets();
   // Showing/hiding the status bar can change the insets on some iPhones; that
@@ -210,6 +212,11 @@ export function PageReader({ book, settings, theme, start, startKey, version, on
       land();
     }
   };
+  const goRef = useRef(go);
+  goRef.current = go;
+  useEffect(() => {
+    if (turn) goRef.current(turn.dir);
+  }, [turn]);
   // Keep the strip aligned if the window size changes.
   useEffect(() => {
     base.setValue(-slot * win.width);

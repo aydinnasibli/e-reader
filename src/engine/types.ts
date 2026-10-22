@@ -49,9 +49,10 @@ export interface TocEntry {
 /** Where an image lives: inside the source zip, or already extracted to a file. */
 export type ImageRef =
   | { zip: [offset: number, compressedSize: number, size: number, method: number]; ext: string }
+  | { pdb: [offset: number, length: number]; ext: string }
   | { file: string };
 
-export type BookFormat = 'epub' | 'fb2' | 'txt';
+export type BookFormat = 'epub' | 'fb2' | 'txt' | 'mobi' | 'azw3';
 
 export interface Manifest {
   v: 1;

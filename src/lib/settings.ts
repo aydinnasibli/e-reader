@@ -37,6 +37,8 @@ export interface ReaderSettings {
   tapForward: boolean;
   /** Screen rotation while reading. Landscape shows two pages side by side. */
   rotation: 'auto' | 'portrait' | 'landscape';
+  /** Volume buttons turn pages (installed app only). */
+  volumeKeys: boolean;
 }
 
 export interface Theme {
@@ -89,6 +91,7 @@ const DEFAULTS: ReaderSettings = {
   pageTurn: 'slide',
   tapForward: false,
   rotation: 'auto',
+  volumeKeys: true,
 };
 
 const file = () => new File(Paths.document, 'settings.json');

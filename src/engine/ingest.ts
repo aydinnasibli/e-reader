@@ -2,12 +2,13 @@
 
 import { ingestEpub } from './epub';
 import { ingestFb2 } from './fb2';
+import { ingestMobi, isMobi } from './mobi';
 import type { IngestContext } from './io';
 import { ingestTxt } from './txt';
 import type { Manifest } from './types';
 import { ZipArchive } from './zip';
 
-export const SUPPORTED_EXTENSIONS = ['epub', 'fb2', 'fb2.zip', 'txt'];
+export const SUPPORTED_EXTENSIONS = ['epub', 'fb2', 'fb2.zip', 'txt', 'mobi', 'azw3', 'azw', 'prc'];
 
 export function isSupportedName(name: string): boolean {
   const n = name.toLowerCase();
@@ -18,6 +19,8 @@ export async function ingestBook(ctx: IngestContext, fileName: string): Promise<
   const head = ctx.src.read(0, Math.min(ctx.src.size, 4));
   const isZip = head[0] === 0x50 && head[1] === 0x4b && head[2] === 3 && head[3] === 4;
   const lower = fileName.toLowerCase();
+
+  if (isMobi(ctx.src)) return ingestMobi(ctx);
 
   if (isZip) {
     const zip = ZipArchive.open(ctx.src);
@@ -39,5 +42,5 @@ function looksLikeFb2(head: Uint8Array): boolean {
 }
 
 export function titleFromFileName(name: string): string {
-  return name.replace(/\.(fb2\.zip|epub|fb2|txt|zip)$/i, '').replace(/[_]+/g, ' ').trim() || 'Untitled';
+  return name.replace(/\.(fb2\.zip|epub|fb2|txt|zip|mobi|azw3|azw|prc)$/i, '').replace(/[_]+/g, ' ').trim() || 'Untitled';
 }

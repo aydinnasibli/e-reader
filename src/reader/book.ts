@@ -205,6 +205,11 @@ export class BookData {
     const ref = this.manifest?.images[key];
     if (ref && 'file' in ref) return imageFile(this.entry.id, ref.file).uri;
     const safe = key.replace(/[^A-Za-z0-9._-]/g, '_');
+    if (ref && 'pdb' in ref) {
+      const out = imageFile(this.entry.id, `p_${safe}.${ref.ext}`);
+      if (!out.exists) out.write(this.source().read(ref.pdb[0], ref.pdb[1]));
+      return out.uri;
+    }
     if (ref && 'zip' in ref) {
       const out = imageFile(this.entry.id, `z_${safe}.${ref.ext}`);
       if (!out.exists) {

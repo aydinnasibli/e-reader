@@ -66,8 +66,13 @@ export class HtmlToBlocks implements MarkupHandler {
     if (id && this.opts.anchors?.has(id)) this.opts.onAnchor?.(id, this.w.blockIndex);
     const tracked = id && this.opts.onIdStart?.(id, this.w.blockIndex) ? id : undefined;
 
+    if (name === 'pagebreak') {
+      // Mobipocket's <mbp:pagebreak/> separates chapters.
+      this.w.chapterBreak();
+      return;
+    }
     if (name === 'img' || name === 'image') {
-      const src = attrs.src ?? attrs['xlink:href'] ?? attrs.href;
+      const src = attrs.src ?? attrs['xlink:href'] ?? attrs.href ?? (attrs.recindex ? `recindex:${attrs.recindex}` : undefined);
       const key = src ? this.opts.image(src) : null;
       if (key) this.w.image(key);
       return;

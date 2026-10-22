@@ -60,7 +60,7 @@ export default function Library() {
     setImporting(true);
     try {
       const res = await importBooks();
-      if (res.skipped.length) Alert.alert('Some files were skipped', `Only EPUB, FB2 and TXT books are supported:\n\n${res.skipped.join('\n')}`);
+      if (res.skipped.length) Alert.alert('Some files were skipped', `Supported formats: EPUB, FB2, MOBI, AZW3 and TXT:\n\n${res.skipped.join('\n')}`);
     } catch (e) {
       Alert.alert('Import failed', e instanceof Error ? e.message : String(e));
     } finally {
@@ -195,7 +195,7 @@ export default function Library() {
       <Ionicons name={books.length ? 'search-outline' : 'library-outline'} size={56} color={c.secondary} />
       <Text style={[styles.emptyTitle, { color: c.text }]}>{books.length ? 'Nothing here' : 'Your library is empty'}</Text>
       <Text style={[styles.emptyText, { color: c.secondary }]}>
-        {books.length ? 'No books match this filter or search.' : 'Add EPUB, FB2 or TXT books from Files. Huge ones are fine.'}
+        {books.length ? 'No books match this filter or search.' : 'Add EPUB, FB2, MOBI, AZW3 or TXT books from Files. Huge ones are fine.'}
       </Text>
       {!books.length && (
         <Pressable onPress={add} style={[styles.emptyBtn, { backgroundColor: c.accent }]}>

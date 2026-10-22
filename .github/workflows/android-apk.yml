@@ -52,7 +52,14 @@ jobs:
 
       - name: Build release APK
         working-directory: android
-        run: ./gradlew assembleRelease --no-daemon -PreactNativeArchitectures=armeabi-v7a,arm64-v8a
+        run: |
+          set -o pipefail
+          ./gradlew assembleRelease --no-daemon -PreactNativeArchitectures=armeabi-v7a,arm64-v8a 2>&1 | tee ../gradle.log || {
+            # Gradle interleaves output from parallel tasks; repeat the errors at the end of the log.
+            echo "===== build errors ====="
+            grep -n -E -B3 -A30 "FAILED|What went wrong|Error:|error:|ERROR|Exception" ../gradle.log | grep -v -E "^[0-9]+-w: " | tail -250
+            exit 1
+          }
 
       - name: Publish release
         env:
