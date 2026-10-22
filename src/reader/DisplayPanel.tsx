@@ -7,7 +7,6 @@ import { type ReactNode, useEffect, useRef, useState } from 'react';
 import { Animated, Pressable, ScrollView, StyleSheet, Switch, Text, View, useWindowDimensions } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { FONTS, ensureFont, fontFace, isFontLoaded } from '@/lib/fonts';
-import { volumeKeysAvailable } from './volumeKeys';
 import {
   BG_SWATCHES,
   FONT_SIZE,
@@ -248,11 +247,6 @@ function PageTab({ s, c }: { s: ReaderSettings; c: Theme }) {
           onPick={(rotation) => setSettings({ rotation })}
         />
       </Row>
-      {volumeKeysAvailable && (
-        <Row c={c} label="Volume buttons turn pages">
-          <Switch value={s.volumeKeys} onValueChange={(volumeKeys) => setSettings({ volumeKeys })} />
-        </Row>
-      )}
       <Row c={c} label="Tap left side to go forward">
         <Switch value={s.tapForward} onValueChange={(tapForward) => setSettings({ tapForward })} />
       </Row>

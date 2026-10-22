@@ -27,8 +27,6 @@ interface Props {
   onLongPressBlock?(b: number): void;
   onLink?(target: string): void;
   footerRight?: string;
-  /** Scroll a screen forward/back (volume buttons); `n` increments per request. */
-  turn?: { dir: 1 | -1; n: number };
 }
 
 interface Win {
@@ -37,7 +35,7 @@ interface Win {
   start: number; // first block shown
 }
 
-export function ScrollReader({ book, settings, theme, start, startKey, version, onPosition, onTap, marksFor, onLongPressBlock, onLink, footerRight, turn }: Props) {
+export function ScrollReader({ book, settings, theme, start, startKey, version, onPosition, onTap, marksFor, onLongPressBlock, onLink, footerRight }: Props) {
   const win = useWindowDimensions();
   const insets = useSafeAreaInsets();
   const width = win.width - settings.margin * 2;
@@ -131,14 +129,6 @@ export function ScrollReader({ book, settings, theme, start, startKey, version, 
     }
   }).current;
 
-  const list = useRef<FlatList<number>>(null);
-  const offset = useRef(0);
-  useEffect(() => {
-    if (!turn) return;
-    const by = (win.height - insets.top - insets.bottom) * 0.9;
-    list.current?.scrollToOffset({ offset: Math.max(0, offset.current + turn.dir * by), animated: true });
-  }, [turn]); // eslint-disable-line react-hooks/exhaustive-deps
-
   const touch = useRef({ x: 0, y: 0, t: 0 });
   // A tap on a footnote link must not also toggle the menu.
   const lastLink = useRef(0);
@@ -181,9 +171,6 @@ export function ScrollReader({ book, settings, theme, start, startKey, version, 
       }}>
       {w && (
         <FlatList
-          ref={list}
-          onScroll={(e) => (offset.current = e.nativeEvent.contentOffset.y)}
-          scrollEventThrottle={64}
           key={startKey}
           data={data}
           keyExtractor={(b) => String(b)}

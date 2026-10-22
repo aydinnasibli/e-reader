@@ -17,7 +17,6 @@ import type { Mark } from '@/reader/marks';
 import { PageReader } from '@/reader/PageReader';
 import { ScrollReader } from '@/reader/ScrollReader';
 import { SelectionSheet, highlightColor } from '@/reader/SelectionSheet';
-import { useVolumePageTurns } from '@/reader/volumeKeys';
 import { DisplayPanel } from '@/reader/DisplayPanel';
 import { NoteSheet } from '@/reader/NoteSheet';
 import { NavigatorSheet, SearchSheet } from '@/reader/Sheets';
@@ -88,11 +87,6 @@ export default function ReaderScreen() {
   const [searchMark, setSearchMark] = useState<{ b: number; s: number; e: number } | null>(null);
   const [failed, setFailed] = useState<string | null>(null);
   const [note, setNote] = useState<string | null>(null);
-  // Volume buttons turn pages while no menu or sheet is open.
-  const [turn, setTurn] = useState<{ dir: 1 | -1; n: number } | undefined>(undefined);
-  useVolumePageTurns(settings.volumeKeys && !chrome && !sheet && !note && !selection, (dir) =>
-    setTurn((t) => ({ dir, n: (t?.n ?? 0) + 1 })),
-  );
   const onLink = useCallback((target: string) => {
     setChrome(false);
     setNote(target);
@@ -250,7 +244,6 @@ export default function ReaderScreen() {
         marksFor={marksFor}
         onLongPressBlock={onLongPressBlock}
         onLink={onLink}
-        turn={turn}
         bookmarked={pageBookmarks.length > 0}
         footerRight={footerRight}
       />
