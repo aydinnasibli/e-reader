@@ -48,7 +48,24 @@ jobs:
       - name: Generate the native Android project
         run: |
           npx expo prebuild --platform android --no-install --clean
-          echo "org.gradle.jvmargs=-Xmx4g -XX:MaxMetaspaceSize=1g" >> android/gradle.properties
+          # More memory for Gradle. Edit the existing line: the generated file
+          # has no trailing newline, so appending would corrupt its last entry.
+          sed -i 's/^org\.gradle\.jvmargs=.*/org.gradle.jvmargs=-Xmx4g -XX:MaxMetaspaceSize=1g/' android/gradle.properties
+          grep -q '^org.gradle.jvmargs=-Xmx4g' android/gradle.properties
+
+      # Gradle would download the NDK itself, with no retry if the download is
+      # damaged. Install it up front instead (the version React Native needs).
+      - name: Install Android NDK
+        env:
+          NDK_VERSION: 27.1.12297006
+        run: |
+          [ -f "$ANDROID_HOME/ndk/$NDK_VERSION/source.properties" ] && exit 0
+          for i in 1 2 3; do
+            yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "ndk;$NDK_VERSION" > /dev/null && exit 0
+            echo "NDK download failed (attempt $i), retrying"
+            sleep 15
+          done
+          exit 1
 
       - name: Build release APK
         working-directory: android

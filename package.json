@@ -65,5 +65,9 @@
     "bench": "node bench/run.mjs",
     "ios:device": "expo run:ios --device --configuration Release"
   },
-  "private": true
+  "private": true,
+  "allowScripts": {
+    "fsevents": false,
+    "unrs-resolver": true
+  }
 }
