@@ -17,6 +17,7 @@ import { PageReader } from '@/reader/PageReader';
 import { ScrollReader } from '@/reader/ScrollReader';
 import { SelectionSheet, highlightColor } from '@/reader/SelectionSheet';
 import { DisplayPanel } from '@/reader/DisplayPanel';
+import { NoteSheet } from '@/reader/NoteSheet';
 import { NavigatorSheet, SearchSheet } from '@/reader/Sheets';
 import { ErrorScreen } from '@/ui/ErrorScreen';
 import { formatMinutes } from '@/ui/format';
@@ -74,6 +75,11 @@ export default function ReaderScreen() {
   const [selection, setSelection] = useState<{ b: number; block: Block; chapter?: string } | null>(null);
   const [searchMark, setSearchMark] = useState<{ b: number; s: number; e: number } | null>(null);
   const [failed, setFailed] = useState<string | null>(null);
+  const [note, setNote] = useState<string | null>(null);
+  const onLink = useCallback((target: string) => {
+    setChrome(false);
+    setNote(target);
+  }, []);
   useEffect(() => {
     if (book) book.onError = (e) => setFailed(e instanceof Error ? e.message : String(e));
   }, [book]);
@@ -226,6 +232,7 @@ export default function ReaderScreen() {
         onTap={toggleChrome}
         marksFor={marksFor}
         onLongPressBlock={onLongPressBlock}
+        onLink={onLink}
         bookmarked={pageBookmarks.length > 0}
         footerRight={footerRight}
       />
@@ -254,6 +261,17 @@ export default function ReaderScreen() {
         }}
         settings={settings}
         theme={theme}
+      />
+      <NoteSheet
+        book={book}
+        target={note}
+        settings={settings}
+        theme={theme}
+        onClose={() => setNote(null)}
+        onGo={(p) => {
+          setNote(null);
+          goTo(p);
+        }}
       />
       <SelectionSheet
         bookId={id}

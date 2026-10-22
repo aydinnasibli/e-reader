@@ -2,10 +2,11 @@
 // exactly these values, so a measured page is the page you see.
 
 import type { TextStyle } from 'react-native';
-import { BOLD, type Block, ITALIC, MONO, type Run, SUB, SUP, runStyle, runText } from '@/engine/types';
+import { BOLD, type Block, ITALIC, MONO, type Run, SUB, SUP, makeRun, runLink, runStyle, runText } from '@/engine/types';
 import { type Weight, fontFace } from '@/lib/fonts';
 import type { ReaderSettings } from '@/lib/settings';
 import { Platform } from 'react-native';
+import { hyphenPoints, pickLanguage } from './hyphenate';
 
 export interface Look {
   fontSize: number;
@@ -21,6 +22,8 @@ export interface Look {
   paddingLeft: number;
   /** Text prepended to the block (first-line indent). */
   prefix: string;
+  /** Hyphenate: the book's language code, or '' to guess from the text. Undefined = off. */
+  hyph?: string;
 }
 
 const MONO_FONT = Platform.select({ ios: 'Menlo', android: 'monospace', default: 'monospace' });
@@ -32,10 +35,11 @@ export function lineHeightOf(s: ReaderSettings) {
 
 /** Everything that changes where lines break; part of the page cache key. */
 export function layoutKeyOf(s: ReaderSettings) {
-  return [s.fontSize, s.lineSpacing, s.letterSpacing, s.paraSpacing, s.font, s.weight, s.align, s.indent].join('|');
+  return [s.fontSize, s.lineSpacing, s.letterSpacing, s.paraSpacing, s.font, s.weight, s.align, s.indent, s.hyphenate].join('|');
 }
 
-export function lookOf(b: Block, s: ReaderSettings): Look {
+/** `lang` is the book's language (from its metadata), used for hyphenation. */
+export function lookOf(b: Block, s: ReaderSettings, lang?: string): Look {
   const fs = s.fontSize;
   const lh = lineHeightOf(s);
   const gap = Math.round(lh * s.paraSpacing);
@@ -51,6 +55,7 @@ export function lookOf(b: Block, s: ReaderSettings): Look {
     marginBottom: 0,
     paddingLeft: 0,
     prefix: s.indent && !b.c ? INDENT : '',
+    hyph: s.hyphenate && (b.k === 'p' || b.k === 'q' || b.k === 'v') ? (lang ?? '') : undefined,
   };
   switch (b.k) {
     case 'h': {
@@ -87,16 +92,88 @@ export function baseTextStyle(look: Look, isPre = false): TextStyle {
   return fontFace(look.font, look.weight, look.bold, false);
 }
 
-/** The runs as drawn: indent prefix first. */
+/**
+ * A block as drawn: indent prefix first, then the text with soft hyphens
+ * inserted when hyphenating. Positions in the book (block text offsets) and
+ * on screen (drawn offsets) are converted with toDrawn()/toBlock().
+ */
+export interface Drawn {
+  runs: Run[];
+  text: string;
+  prefix: number;
+  /** Block offsets with a soft hyphen inserted before them, ascending. */
+  hyphens: number[];
+}
+
+const drawnCache = new WeakMap<Block, Map<string, Drawn>>();
+
+export function drawn(b: Block, look: Look): Drawn {
+  const key = `${look.prefix}|${look.hyph ?? '-'}`;
+  let perBlock = drawnCache.get(b);
+  const hit = perBlock?.get(key);
+  if (hit) return hit;
+  let runs = b.r ?? [];
+  let hyphens: number[] = [];
+  if (look.hyph !== undefined && runs.length) {
+    let text = '';
+    for (const r of runs) text += runText(r);
+    const lang = pickLanguage(look.hyph || undefined, text);
+    if (lang) hyphens = hyphenPoints(text, lang);
+    if (hyphens.length) runs = insertSoftHyphens(runs, hyphens);
+  }
+  if (look.prefix) runs = [look.prefix, ...runs];
+  let text = '';
+  for (const r of runs) text += runText(r);
+  const d: Drawn = { runs, text, prefix: look.prefix.length, hyphens };
+  if (!perBlock) drawnCache.set(b, (perBlock = new Map()));
+  perBlock.set(key, d);
+  return d;
+}
+
+function insertSoftHyphens(runs: Run[], points: number[]): Run[] {
+  const out: Run[] = [];
+  let pos = 0;
+  let k = 0;
+  for (const r of runs) {
+    const t = runText(r);
+    let piece = '';
+    let from = 0;
+    while (k < points.length && points[k] < pos + t.length) {
+      const at = points[k] - pos;
+      piece += t.slice(from, at) + '\u00ad';
+      from = at;
+      k++;
+    }
+    piece += t.slice(from);
+    out.push(makeRun(piece, runStyle(r), runLink(r)));
+    pos += t.length;
+  }
+  return out;
+}
+
+/** Book offset -> drawn offset. */
+export function toDrawn(d: Drawn, o: number): number {
+  let n = 0;
+  while (n < d.hyphens.length && d.hyphens[n] <= o) n++;
+  return d.prefix + o + n;
+}
+
+/** Drawn offset -> book offset. */
+export function toBlock(d: Drawn, i: number): number {
+  const k = i - d.prefix;
+  if (k <= 0) return 0;
+  // Hyphen n sits at drawn (unprefixed) offset hyphens[n] + n.
+  let n = 0;
+  while (n < d.hyphens.length && d.hyphens[n] + n < k) n++;
+  return k - n;
+}
+
 export function drawnRuns(b: Block, look: Look): Run[] {
-  const runs = b.r ?? [];
-  return look.prefix ? [look.prefix, ...runs] : runs;
+  return drawn(b, look).runs;
 }
 
 export function drawnText(b: Block, look: Look): string {
-  let s = look.prefix;
-  for (const r of b.r ?? []) s += runText(r);
-  return s;
+  return drawn(b, look).text;
 }
 
 export function runTextStyle(bits: number, look: Look): TextStyle | undefined {

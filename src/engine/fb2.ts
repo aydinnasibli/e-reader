@@ -39,8 +39,14 @@ class Fb2Handler implements MarkupHandler {
   private subtitle = 0;
   private quote = 0;
   private poem = 0;
-  private styles: number[] = [];
+  private styles: { style: number; link: string | undefined }[] = [];
   private style = 0;
+  private link: string | undefined;
+  /** Footnotes: link targets seen so far, and where linked ids start/end. */
+  private linkKeys = new Set<string>();
+  notes: Record<string, [number, number]> = {};
+  /** Path depth -> id being tracked there. */
+  private tracked = new Map<number, string>();
   private binary: { id: string; type: string; parts: string[] } | null = null;
 
   constructor(
@@ -75,6 +81,7 @@ class Fb2Handler implements MarkupHandler {
     }
     if (!this.bodyDepth) return;
     const w = this.w;
+    const id = attrs.id;
     switch (name) {
       case 'section':
         this.section++;
@@ -114,15 +121,27 @@ class Fb2Handler implements MarkupHandler {
         if (id) w.image(id);
         break;
       }
-      case 'a':
-        this.pushStyle(attrs.type === 'note' ? SUP : 0);
+      case 'a': {
+        const href = hrefAttr(attrs);
+        let link: string | undefined;
+        if (href.startsWith('#')) {
+          link = href;
+          this.linkKeys.add(href);
+        }
+        this.pushStyle(attrs.type === 'note' ? SUP : 0, link);
         break;
+      }
       default:
         if (QUOTE.has(name)) {
           w.endBlock();
           this.quote++;
           this.applyKind();
         } else if (INLINE[name] !== undefined) this.pushStyle(INLINE[name]);
+    }
+    // Ids are opened after the element's own block handling, so they point at its first block.
+    if (id && this.linkKeys.has('#' + id) && !this.notes['#' + id]) {
+      this.notes['#' + id] = [w.blockIndex, w.blockIndex];
+      this.tracked.set(this.path.length, '#' + id);
     }
   }
 
@@ -194,6 +213,14 @@ class Fb2Handler implements MarkupHandler {
           this.applyKind();
         } else if (INLINE[name] !== undefined) this.popStyle();
     }
+    // End every tracked id at or below the closed element (index i => depth i + 1).
+    for (const [depth, key] of this.tracked) {
+      if (depth > i) {
+        const n = this.notes[key];
+        if (n) n[1] = Math.max(n[1], w.blockIndex);
+        this.tracked.delete(depth);
+      }
+    }
   }
 
   text(t: string) {
@@ -207,7 +234,7 @@ class Fb2Handler implements MarkupHandler {
     }
     if (!this.bodyDepth) return;
     if (this.titleDepth) this.titleText += ' ' + t;
-    this.w.text(t, this.style);
+    this.w.text(t, this.style, this.link);
   }
 
   private capturedText = '';
@@ -227,13 +254,16 @@ class Fb2Handler implements MarkupHandler {
     this.capture = '';
   }
 
-  private pushStyle(s: number) {
-    this.styles.push(this.style);
+  private pushStyle(s: number, link?: string) {
+    this.styles.push({ style: this.style, link: this.link });
     this.style |= s;
+    if (link) this.link = link;
   }
 
   private popStyle() {
-    this.style = this.styles.pop() ?? 0;
+    const prev = this.styles.pop();
+    this.style = prev?.style ?? 0;
+    this.link = prev?.link;
   }
 
   private applyKind() {
@@ -319,5 +349,6 @@ export async function ingestFb2(ctx: IngestContext, zip?: ZipArchive, entry?: Zi
     toc: h.toc.length ? h.toc : w.headings,
     images,
     cover,
+    notes: h.notes,
   };
 }

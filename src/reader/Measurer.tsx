@@ -23,7 +23,7 @@ interface Props {
 }
 
 export function Measurer({ book, blocks, settings, theme, width, pageHeight, onDone }: Props) {
-  const looks = useRef<Look[]>(blocks.map((b) => lookOf(b, settings))).current;
+  const looks = useRef<Look[]>(blocks.map((b) => lookOf(b, settings, book.manifest?.lang))).current;
   const results = useRef<(Measure | undefined)[]>(blocks.map(() => undefined)).current;
   const finished = useRef(false);
   const ready = useRef(false);

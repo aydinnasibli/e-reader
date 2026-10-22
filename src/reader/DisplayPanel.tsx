@@ -162,6 +162,9 @@ function TextTab({ s, c }: { s: ReaderSettings; c: Theme }) {
       <Row c={c} label="Indent paragraphs">
         <Switch value={s.indent} onValueChange={(indent) => setSettings({ indent })} />
       </Row>
+      <Row c={c} label="Hyphenation">
+        <Switch value={s.hyphenate} onValueChange={(hyphenate) => setSettings({ hyphenate })} />
+      </Row>
     </>
   );
 }

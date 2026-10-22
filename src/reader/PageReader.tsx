@@ -4,14 +4,14 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Ionicons from '@expo/vector-icons/Ionicons';
-import { ActivityIndicator, Animated, PanResponder, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
+import { ActivityIndicator, Animated, PanResponder, Pressable, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import type { Block, Position } from '@/engine/types';
 import type { ReaderSettings, Theme } from '@/lib/settings';
 import type { BookData } from './book';
 import { BlockImage, BlockText, Spacer } from './BlockText';
 import { Measurer } from './Measurer';
-import { type Look, layoutKeyOf } from './look';
+import { type Look, drawn, layoutKeyOf, toBlock, toDrawn } from './look';
 import type { Mark } from './marks';
 import { type Measure, type Page, pageOf, paginate } from './paginate';
 
@@ -34,6 +34,8 @@ interface Props {
   marksFor?(b: number): Mark[] | undefined;
   /** Long-press on a paragraph. */
   onLongPressBlock?(b: number): void;
+  /** Tap on a footnote reference. */
+  onLink?(target: string): void;
   bookmarked?: boolean;
   /** Small text shown at the bottom right (e.g. time left). */
   footerRight?: string;
@@ -53,7 +55,7 @@ interface Cur {
   page: number | null;
 }
 
-export function PageReader({ book, settings, theme, start, startKey, version, onPosition, onTap, marksFor, onLongPressBlock, bookmarked, footerRight }: Props) {
+export function PageReader({ book, settings, theme, start, startKey, version, onPosition, onTap, marksFor, onLongPressBlock, onLink, bookmarked, footerRight }: Props) {
   const win = useWindowDimensions();
   const liveInsets = useSafeAreaInsets();
   // Showing/hiding the status bar can change the insets on some iPhones; that
@@ -116,9 +118,10 @@ export function PageReader({ book, settings, theme, start, startKey, version, on
     let page: number;
     if (t.last) page = curLaid.pages.length - 1;
     else {
-      const blk = curLaid.blocks[t.pos.b - curLaid.first];
-      const prefix = blk ? curLaid.looks[t.pos.b - curLaid.first].prefix.length : 0;
-      page = pageOf(curLaid.pages, t.pos.b, t.pos.o + (t.pos.o > 0 ? prefix : 0));
+      const k = t.pos.b - curLaid.first;
+      const blk = curLaid.blocks[k];
+      const at = blk && t.pos.o > 0 ? toDrawn(drawn(blk, curLaid.looks[k]), t.pos.o) : 0;
+      page = pageOf(curLaid.pages, t.pos.b, at);
     }
     setCur({ chunk: cur.chunk, page });
   }, [cur, curLaid]);
@@ -128,13 +131,16 @@ export function PageReader({ book, settings, theme, start, startKey, version, on
     if (cur.page === null || !curLaid) return;
     const item = curLaid.pages[cur.page]?.items[0];
     if (!item) return;
-    const prefix = curLaid.looks[item.b - curLaid.first]?.prefix.length ?? 0;
-    const pos = { b: item.b, o: Math.max(0, item.s - prefix) };
+    const bookOffset = (b: number, i: number) => {
+      const k = b - curLaid.first;
+      const blk = curLaid.blocks[k];
+      return blk ? toBlock(drawn(blk, curLaid.looks[k]), i) : 0;
+    };
+    const pos = { b: item.b, o: bookOffset(item.b, item.s) };
     const items = curLaid.pages[cur.page].items;
     const last = items[items.length - 1];
-    const lastPrefix = curLaid.looks[last.b - curLaid.first]?.prefix.length ?? 0;
     lastPos.current = pos;
-    onPosition(pos, { b: last.b, o: Math.max(0, last.e - lastPrefix) });
+    onPosition(pos, { b: last.b, o: bookOffset(last.b, last.e) });
   }, [cur, curLaid, onPosition]);
 
   /** The page one step away, or why there isn't one. */
@@ -222,84 +228,51 @@ export function PageReader({ book, settings, theme, start, startKey, version, on
     if (b !== null) onLongPressBlock?.(b);
   };
 
-  const handlers = useRef<{
-    go(d: 1 | -1): void;
-    onTap(): void;
-    springBack(): void;
-    longPress(pageY: number): void;
-    width: number;
-    follow: boolean;
-    tapForward: boolean;
-    canGo(d: 1 | -1): boolean;
-  }>({
+  // The pan responder is created once; it reads the latest values from here.
+  const handlers = useRef<{ go(d: 1 | -1): void; springBack(): void; width: number; follow: boolean; canGo(d: 1 | -1): boolean }>({
     go,
-    onTap,
     springBack,
-    longPress,
     width: win.width,
     follow: true,
-    tapForward: false,
     canGo: () => true,
   });
   handlers.current = {
     go,
-    onTap,
     springBack,
-    longPress,
     width: win.width,
     follow: settings.pageTurn === 'slide',
-    tapForward: settings.tapForward,
     canGo: (d) => {
       const n = neighbour(d);
       return !!n && n !== 'end' && n !== 'processing';
     },
   };
-  const press = useRef<{ timer: ReturnType<typeof setTimeout> | null; fired: boolean }>({ timer: null, fired: false });
-  const cancelPress = () => {
-    if (press.current.timer) clearTimeout(press.current.timer);
-    press.current.timer = null;
-  };
+  // Swipes are taken by the page strip; taps and long-presses go to whatever
+  // is under the finger (a footnote link, or the page itself).
   const pan = useRef(
     PanResponder.create({
-      onStartShouldSetPanResponder: () => true,
-      onMoveShouldSetPanResponder: (_e, g) => Math.abs(g.dx) > 8 && Math.abs(g.dx) > Math.abs(g.dy),
-      onPanResponderGrant: (e) => {
-        const pageY = e.nativeEvent.pageY;
-        press.current.fired = false;
-        cancelPress();
-        press.current.timer = setTimeout(() => {
-          press.current.timer = null;
-          press.current.fired = true;
-          handlers.current.longPress(pageY);
-        }, 450);
-      },
+      onStartShouldSetPanResponder: () => false,
+      onMoveShouldSetPanResponderCapture: (_e, g) => Math.abs(g.dx) > 8 && Math.abs(g.dx) > Math.abs(g.dy) * 1.2,
+      onPanResponderTerminationRequest: () => false,
       onPanResponderMove: (_e, g) => {
-        if (Math.abs(g.dx) > 8 || Math.abs(g.dy) > 8) cancelPress();
-        if (press.current.fired || !handlers.current.follow) return;
+        if (!handlers.current.follow) return;
         const dir = g.dx < 0 ? 1 : -1;
         drag.setValue(handlers.current.canGo(dir) ? g.dx : g.dx * 0.25);
       },
-      onPanResponderRelease: (e, g) => {
-        cancelPress();
-        if (press.current.fired) return;
+      onPanResponderRelease: (_e, g) => {
         const w = handlers.current.width;
-        if (Math.abs(g.dx) < 8 && Math.abs(g.dy) < 8) {
-          const tx = e.nativeEvent.pageX;
-          if (tx < w * 0.3) handlers.current.go(handlers.current.tapForward ? 1 : -1);
-          else if (tx > w * 0.7) handlers.current.go(1);
-          else handlers.current.onTap();
-          return;
-        }
         if (g.dx < -w * 0.15 || g.vx < -0.4) handlers.current.go(1);
         else if (g.dx > w * 0.15 || g.vx > 0.4) handlers.current.go(-1);
         else handlers.current.springBack();
       },
-      onPanResponderTerminate: () => {
-        cancelPress();
-        handlers.current.springBack();
-      },
+      onPanResponderTerminate: () => handlers.current.springBack(),
     }),
   ).current;
+  const tapPage = (pageX: number) => {
+    const w = win.width;
+    if (pageX < w * 0.3) go(settings.tapForward ? 1 : -1);
+    else if (pageX > w * 0.7) go(1);
+    else onTap();
+  };
 
   // ---- drawing ----
 
@@ -331,6 +304,7 @@ export function PageReader({ book, settings, theme, start, startKey, version, on
             noTopMargin={it.top || it.s > 0}
             noBottomMargin={it.e < len}
             marks={marksFor?.(it.b)}
+            onLink={onLink}
           />
         );
       }
@@ -398,7 +372,13 @@ export function PageReader({ book, settings, theme, start, startKey, version, on
               { width: win.width, height: pageHeight, paddingHorizontal: settings.margin, backgroundColor: theme.bg },
               { opacity: fade, transform: [{ translateX: Animated.add(shift, at * win.width) }] },
             ]}>
-            {content}
+            <Pressable
+              style={styles.fill}
+              onPress={(e) => tapPage(e.nativeEvent.pageX)}
+              onLongPress={(e) => longPress(e.nativeEvent.pageY)}
+              delayLongPress={450}>
+              {content}
+            </Pressable>
           </Animated.View>
         ))}
         {measuring && (
@@ -434,5 +414,6 @@ const styles = StyleSheet.create({
   meta: { fontSize: 12 },
   viewport: { flex: 1, overflow: 'hidden' },
   page: { position: 'absolute', left: 0, top: 0, overflow: 'hidden' },
+  fill: { flex: 1 },
   center: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 24 },
 });

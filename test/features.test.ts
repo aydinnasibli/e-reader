@@ -9,28 +9,28 @@ vi.mock('expo-file-system', () => ({ File: class {}, Directory: class {}, Paths:
 
 describe('applyMarks', () => {
   it('splits styled runs at highlight edges and keeps styles', () => {
-    const segs = applyMarks(['Hello ', ['big', BOLD], ' world'], [{ s: 4, e: 10, color: 'Y' }], 0);
+    const segs = applyMarks(['Hello ', ['big', BOLD], ' world'], [{ s: 4, e: 10, color: 'Y' }], (o) => o);
     expect(segs).toEqual([
-      { text: 'Hell', bits: 0, bg: undefined },
+      { text: 'Hell', bits: 0 },
       { text: 'o ', bits: 0, bg: 'Y' },
       { text: 'big', bits: BOLD, bg: 'Y' },
       { text: ' ', bits: 0, bg: 'Y' },
-      { text: 'world', bits: 0, bg: undefined },
+      { text: 'world', bits: 0 },
     ]);
   });
 
   it('shifts marks for the indent prefix and for a sliced page range', () => {
     // Drawn text is "  abcdef" (2-char indent); the page shows drawn [4, 8) = "cdef".
-    const segs = applyMarks(['cdef'], [{ s: 3, e: 5, color: 'Y' }], 2 - 4);
+    const segs = applyMarks(['cdef'], [{ s: 3, e: 5, color: 'Y' }], (o) => o + 2 - 4);
     expect(segs).toEqual([
-      { text: 'c', bits: 0, bg: undefined },
+      { text: 'c', bits: 0 },
       { text: 'de', bits: 0, bg: 'Y' },
-      { text: 'f', bits: 0, bg: undefined },
+      { text: 'f', bits: 0 },
     ]);
   });
 
   it('leaves text alone without marks', () => {
-    expect(applyMarks(['a', ['b', BOLD]], undefined, 0)).toEqual([
+    expect(applyMarks(['a', ['b', BOLD]], undefined, (o) => o)).toEqual([
       { text: 'a', bits: 0 },
       { text: 'b', bits: BOLD },
     ]);

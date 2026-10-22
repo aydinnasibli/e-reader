@@ -4,7 +4,7 @@ import { Text, type TextLayoutEvent, View } from 'react-native';
 import { type Block, type Run, sliceRuns } from '@/engine/types';
 import type { ReaderSettings, Theme } from '@/lib/settings';
 import type { BookData, ImageInfo } from './book';
-import { type Look, baseTextStyle, drawnRuns, lineHeightOf, lookOf, runTextStyle } from './look';
+import { type Look, baseTextStyle, drawn, lineHeightOf, lookOf, runTextStyle, toDrawn } from './look';
 import { type Mark, applyMarks } from './marks';
 
 interface TextProps {
@@ -18,18 +18,23 @@ interface TextProps {
   noBottomMargin?: boolean;
   /** Highlights / search hits, in block coordinates. */
   marks?: Mark[];
+  /** Tap on a footnote reference. */
+  onLink?: (target: string) => void;
   onTextLayout?: (e: TextLayoutEvent) => void;
 }
 
-export const BlockText = memo(function BlockText({ block, look, theme, range, noTopMargin, noBottomMargin, marks, onTextLayout }: TextProps) {
-  let runs: Run[] = drawnRuns(block, look);
+export const BlockText = memo(function BlockText({ block, look, theme, range, noTopMargin, noBottomMargin, marks, onLink, onTextLayout }: TextProps) {
+  const d = drawn(block, look);
+  let runs: Run[] = d.runs;
   if (range) runs = sliceRuns(runs, range[0], range[1]);
-  const segments = applyMarks(runs, marks, look.prefix.length - (range?.[0] ?? 0));
+  const from = range?.[0] ?? 0;
+  const segments = applyMarks(runs, marks, (o) => toDrawn(d, o) - from);
   return (
     <Text
       allowFontScaling={false}
       // Greedy line breaking, so a paragraph split across pages breaks exactly as measured.
       textBreakStrategy="simple"
+      android_hyphenationFrequency={look.hyph !== undefined ? 'normal' : 'none'}
       onTextLayout={onTextLayout}
       style={{
         ...baseTextStyle(look, block.k === 'pre'),
@@ -43,10 +48,15 @@ export const BlockText = memo(function BlockText({ block, look, theme, range, no
         paddingLeft: look.paddingLeft,
       }}>
       {segments.map((seg, i) => {
-        if (!seg.bits && !seg.bg) return seg.text;
+        if (!seg.bits && !seg.bg && !seg.link) return seg.text;
         const st = runTextStyle(seg.bits, look);
+        const link = seg.link;
         return (
-          <Text key={i} style={seg.bg ? [st, { backgroundColor: seg.bg }] : st}>
+          <Text
+            key={i}
+            style={[st, seg.bg ? { backgroundColor: seg.bg } : null, link ? { color: theme.accent } : null]}
+            onPress={link && onLink ? () => onLink(link) : undefined}
+            suppressHighlighting>
             {seg.text}
           </Text>
         );

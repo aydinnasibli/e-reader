@@ -22,7 +22,10 @@ const INLINE_STYLE: Record<string, number> = {
 interface El {
   name: string;
   prevStyle: number;
+  prevLink: string | undefined;
   block: boolean;
+  /** An id someone links to; its end block is reported on close. */
+  trackedId?: string;
 }
 
 export interface HtmlOptions {
@@ -31,12 +34,18 @@ export interface HtmlOptions {
   /** Element ids worth recording (TOC targets). */
   anchors?: Set<string>;
   onAnchor?(id: string, blockIndex: number): void;
+  /** Resolve an <a href> to a link target key, or null for external links. */
+  link?(href: string): string | null;
+  /** An element with an id starts; return true to get onIdEnd for it. */
+  onIdStart?(id: string, blockIndex: number): boolean;
+  onIdEnd?(id: string, blockIndex: number): void;
 }
 
 export class HtmlToBlocks implements MarkupHandler {
   private stack: El[] = [];
   private skip = 0;
   private style = 0;
+  private link: string | undefined;
   private headings: number[] = [];
   private pre = 0;
   private quote = 0;
@@ -55,6 +64,7 @@ export class HtmlToBlocks implements MarkupHandler {
     }
     const id = attrs.id ?? attrs.name;
     if (id && this.opts.anchors?.has(id)) this.opts.onAnchor?.(id, this.w.blockIndex);
+    const tracked = id && this.opts.onIdStart?.(id, this.w.blockIndex) ? id : undefined;
 
     if (name === 'img' || name === 'image') {
       const src = attrs.src ?? attrs['xlink:href'] ?? attrs.href;
@@ -70,10 +80,14 @@ export class HtmlToBlocks implements MarkupHandler {
       this.w.separator();
       return;
     }
-    if (VOID.has(name)) return;
+    if (VOID.has(name)) {
+      if (tracked) this.opts.onIdEnd?.(tracked, this.w.blockIndex);
+      return;
+    }
 
     const block = BLOCK.has(name);
-    this.stack.push({ name, prevStyle: this.style, block });
+    this.stack.push({ name, prevStyle: this.style, prevLink: this.link, block, trackedId: tracked });
+    if (name === 'a' && attrs.href) this.link = this.opts.link?.(attrs.href) ?? this.link;
     if (block) {
       this.w.endBlock();
       if (name.length === 2 && name[0] === 'h' && name[1] >= '1' && name[1] <= '6') this.headings.push(+name[1]);
@@ -109,6 +123,7 @@ export class HtmlToBlocks implements MarkupHandler {
     while (this.stack.length > i) {
       const el = this.stack.pop()!;
       this.style = el.prevStyle;
+      this.link = el.prevLink;
       if (el.block) {
         this.w.endBlock();
         const n = el.name;
@@ -118,11 +133,12 @@ export class HtmlToBlocks implements MarkupHandler {
         else if (n === 'ul' || n === 'ol') this.lists.pop();
         this.applyKind();
       }
+      if (el.trackedId) this.opts.onIdEnd?.(el.trackedId, this.w.blockIndex);
     }
   }
 
   text(t: string) {
-    if (!this.skip) this.w.text(t, this.style);
+    if (!this.skip) this.w.text(t, this.style, this.link);
   }
 
   /** Close everything at the end of a chapter. */
@@ -130,6 +146,7 @@ export class HtmlToBlocks implements MarkupHandler {
     this.w.endBlock();
     this.stack = [];
     this.style = 0;
+    this.link = undefined;
     this.headings = [];
     this.pre = this.quote = 0;
     this.lists = [];

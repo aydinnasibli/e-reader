@@ -1,7 +1,7 @@
 // Collects inline text into blocks and blocks into chunk files.
 
 import type { BookSink } from './io';
-import { type Block, type BlockKind, type Run, type TocEntry, blockLength, runText, sliceRuns } from './types';
+import { type Block, type BlockKind, LINK, type Run, SUB, SUP, type TocEntry, blockLength, makeRun, runLink, runStyle, runText, sliceRuns } from './types';
 
 /** Target characters per chunk file (~10-15 pages). */
 export const CHUNK_CHARS = 30_000;
@@ -21,6 +21,7 @@ function isWs(c: number) {
 interface PendingRun {
   text: string;
   style: number;
+  link?: string;
 }
 
 export class BookWriter {
@@ -57,11 +58,12 @@ export class BookWriter {
     }
   }
 
-  text(s: string, style = 0) {
+  /** Add inline text. `link` marks it as part of an internal link (e.g. a footnote reference). */
+  text(s: string, style = 0, link?: string) {
     if (!s) return;
     if (s.indexOf('\u00ad') >= 0) s = s.split('\u00ad').join('');
     if (this.kind === 'pre') {
-      this.append(s.replace(/\r\n?/g, '\n'), style);
+      this.append(s.replace(/\r\n?/g, '\n'), style, link);
       return;
     }
     const lead = isWs(s.charCodeAt(0));
@@ -76,8 +78,9 @@ export class BookWriter {
       return;
     }
     // The gap belongs to the text before it, so a space never turns italic or bold.
-    if ((lead || this.pendingSpace) && this.curLen > 0) this.append(' ', this.runs[this.runs.length - 1].style);
-    this.append(core, style);
+    // (Except superscript/subscript: a raised space after a note number looks odd.)
+    if ((lead || this.pendingSpace) && this.curLen > 0) this.append(' ', this.runs[this.runs.length - 1].style & ~(SUP | SUB));
+    this.append(core, style, link);
     this.pendingSpace = trail;
   }
 
@@ -93,7 +96,7 @@ export class BookWriter {
     const pending = this.runs;
     const first = pending[0].text;
     const last = pending[pending.length - 1].text;
-    let runs: Run[] = pending.map((r): Run => (r.style ? [r.text, r.style] : r.text));
+    let runs: Run[] = pending.map((r) => makeRun(r.text, r.style, r.link));
     let len = this.curLen;
     // Only blocks starting or ending in whitespace (line breaks, <pre>) need trimming.
     if (isWs(first.charCodeAt(0)) || isWs(last.charCodeAt(last.length - 1))) {
@@ -146,17 +149,17 @@ export class BookWriter {
     return b;
   }
 
-  private append(s: string, style: number) {
+  private append(s: string, style: number, link?: string) {
     const last = this.runs[this.runs.length - 1];
-    if (last && last.style === style) last.text += s;
-    else this.runs.push({ text: s, style });
+    if (last && last.style === style && last.link === link) last.text += s;
+    else this.runs.push({ text: s, style, link });
     this.curLen += s.length;
     if (this.curLen > MAX_BLOCK + MAX_BLOCK / 2 && this.kind !== 'h') this.splitLong();
   }
 
   /** Emit full-size pieces of an over-long paragraph, keeping the tail open. */
   private splitLong() {
-    const runs = this.runs.map((r): Run => (r.style ? [r.text, r.style] : r.text));
+    const runs = this.runs.map((r) => makeRun(r.text, r.style, r.link));
     const text = runs.map(runText).join('');
     let pos = 0;
     while (text.length - pos > MAX_BLOCK + MAX_BLOCK / 2) {
@@ -169,7 +172,7 @@ export class BookWriter {
       pos = cut;
     }
     const rest = sliceRuns(runs, pos, text.length);
-    this.runs = rest.map((r) => (typeof r === 'string' ? { text: r, style: 0 } : { text: r[0], style: r[1] }));
+    this.runs = rest.map((r) => ({ text: runText(r), style: runStyle(r) & ~LINK, link: runLink(r) }));
     this.curLen = text.length - pos;
   }
 

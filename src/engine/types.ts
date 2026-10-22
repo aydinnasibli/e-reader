@@ -10,9 +10,11 @@ export const ITALIC = 2;
 export const MONO = 4;
 export const SUP = 8;
 export const SUB = 16;
+/** Part of an internal link (footnote reference); the target is the run's third element. */
+export const LINK = 32;
 
-/** A run of text: plain string, or [text, style bits]. */
-export type Run = string | [string, number];
+/** A run of text: plain string, [text, style bits], or [text, style bits, link target]. */
+export type Run = string | [string, number] | [string, number, string];
 
 export type BlockKind =
   | 'p' // paragraph
@@ -64,6 +66,8 @@ export interface Manifest {
   toc: TocEntry[];
   images: Record<string, ImageRef>;
   cover?: string;
+  /** Link target -> [first block, end block) of the note/section it points at. */
+  notes?: Record<string, [number, number]>;
 }
 
 export interface ChunkFile {
@@ -82,6 +86,15 @@ export function runText(r: Run): string {
 
 export function runStyle(r: Run): number {
   return typeof r === 'string' ? 0 : r[1];
+}
+
+export function runLink(r: Run): string | undefined {
+  return typeof r === 'string' ? undefined : r[2];
+}
+
+export function makeRun(text: string, style: number, link?: string): Run {
+  if (link) return [text, style | LINK, link];
+  return style ? [text, style] : text;
 }
 
 export function blockText(b: Block): string {
@@ -112,8 +125,7 @@ export function sliceRuns(runs: Run[], start: number, end: number): Run[] {
     if (rs >= end) break;
     const piece = t.slice(Math.max(0, start - rs), Math.min(t.length, end - rs));
     if (!piece) continue;
-    const st = runStyle(r);
-    out.push(st ? [piece, st] : piece);
+    out.push(makeRun(piece, runStyle(r) & ~LINK, runLink(r)));
   }
   return out;
 }

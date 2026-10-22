@@ -25,6 +25,7 @@ interface Props {
   onTap(): void;
   marksFor?(b: number): Mark[] | undefined;
   onLongPressBlock?(b: number): void;
+  onLink?(target: string): void;
   footerRight?: string;
 }
 
@@ -34,7 +35,7 @@ interface Win {
   start: number; // first block shown
 }
 
-export function ScrollReader({ book, settings, theme, start, startKey, version, onPosition, onTap, marksFor, onLongPressBlock, footerRight }: Props) {
+export function ScrollReader({ book, settings, theme, start, startKey, version, onPosition, onTap, marksFor, onLongPressBlock, onLink, footerRight }: Props) {
   const win = useWindowDimensions();
   const insets = useSafeAreaInsets();
   const width = win.width - settings.margin * 2;
@@ -129,6 +130,15 @@ export function ScrollReader({ book, settings, theme, start, startKey, version, 
   }).current;
 
   const touch = useRef({ x: 0, y: 0, t: 0 });
+  // A tap on a footnote link must not also toggle the menu.
+  const lastLink = useRef(0);
+  const linkPressed = useCallback(
+    (target: string) => {
+      lastLink.current = Date.now();
+      onLink?.(target);
+    },
+    [onLink],
+  );
 
   const renderItem = ({ item: b }: { item: number }) => {
     const c = book.chunkOf(b);
@@ -137,7 +147,7 @@ export function ScrollReader({ book, settings, theme, start, startKey, version, 
     let content;
     if (blk.k === 'img') content = <BlockImage book={book} imageKey={blk.s!} width={width} />;
     else if (blk.k === 'sp' || blk.k === 'hr') content = <Spacer block={blk} settings={settings} theme={theme} />;
-    else content = <BlockText block={blk} look={lookOf(blk, settings)} theme={theme} marks={marksFor?.(b)} />;
+    else content = <BlockText block={blk} look={lookOf(blk, settings, book.manifest?.lang)} theme={theme} marks={marksFor?.(b)} onLink={linkPressed} />;
     return (
       <Pressable onLongPress={() => onLongPressBlock?.(b)} delayLongPress={450} style={{ paddingHorizontal: settings.margin }}>
         {content}
@@ -154,7 +164,10 @@ export function ScrollReader({ book, settings, theme, start, startKey, version, 
       onTouchStart={(e) => (touch.current = { x: e.nativeEvent.pageX, y: e.nativeEvent.pageY, t: Date.now() })}
       onTouchEnd={(e) => {
         const t = touch.current;
-        if (Math.abs(e.nativeEvent.pageX - t.x) < 10 && Math.abs(e.nativeEvent.pageY - t.y) < 10 && Date.now() - t.t < 300) onTap();
+        if (Math.abs(e.nativeEvent.pageX - t.x) < 10 && Math.abs(e.nativeEvent.pageY - t.y) < 10 && Date.now() - t.t < 300) {
+          // Link presses are delivered around the same time; check after they had their turn.
+          setTimeout(() => Date.now() - lastLink.current > 400 && onTap(), 0);
+        }
       }}>
       {w && (
         <FlatList

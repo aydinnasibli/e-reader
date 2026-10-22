@@ -2,7 +2,7 @@ import { strToU8, zipSync } from 'fflate';
 import { describe, expect, it } from 'vitest';
 import { Utf8Decoder, createDecoder, sniffEncoding } from '../src/engine/decode';
 import { type MarkupHandler, MarkupTokenizer } from '../src/engine/markup';
-import { BOLD, ITALIC, SUP, blockText, sliceRuns } from '../src/engine/types';
+import { BOLD, ITALIC, LINK, SUP, blockText, sliceRuns } from '../src/engine/types';
 import { MAX_BLOCK } from '../src/engine/writer';
 import { enc, ingestBytes } from './helpers';
 
@@ -213,7 +213,7 @@ describe('FB2', () => {
       ['sp', ''],
       ['img', 'pic'],
     ]);
-    expect(blocks[3].r).toEqual(['Ну, ', ['князь', ITALIC], '.', ['1', SUP]]);
+    expect(blocks[3].r).toEqual(['Ну, ', ['князь', ITALIC], '.', ['1', SUP | LINK, '#n1']]);
     expect(manifest.toc).toEqual([
       { t: 'Часть первая', l: 0, b: 1 },
       { t: 'I', l: 1, b: 2 },
@@ -234,5 +234,28 @@ describe('TXT headings', () => {
   it('detects non-Latin chapter headings', async () => {
     const { manifest } = await ingestBytes(enc('Глава 1\nТекст.\nГлава вторая\nЕщё текст.\nFəsil 3\nSon.\n'), 'r.txt');
     expect(manifest.toc.map((t) => t.t)).toEqual(['Глава 1', 'Глава вторая', 'Fəsil 3']);
+  });
+});
+
+describe('footnotes', () => {
+  it('links EPUB note references to the note blocks', async () => {
+    const epub = makeEpub({
+      'one.xhtml': '<p>Text<a href="two%20b.xhtml#n1"><sup>1</sup></a> more <a href="http://x.org">web</a>.</p>',
+      'two b.xhtml': '<h2>Notes</h2><aside id="n1"><p>First note.</p><p>Second para.</p></aside><p id="n2">Other</p>',
+    });
+    const { manifest, blocks } = await ingestBytes(epub, 'x.epub');
+    expect(blocks[0].r).toEqual(['Text', ['1', SUP | LINK, 'OEBPS/text/two b.xhtml#n1'], ' more web.']);
+    expect(manifest.notes?.['OEBPS/text/two b.xhtml#n1']).toEqual([2, 4]);
+    expect(manifest.notes?.['OEBPS/text/two b.xhtml#n2']).toBeUndefined();
+  });
+
+  it('links FB2 note references to note sections', async () => {
+    const xml =
+      '<?xml version="1.0" encoding="utf-8"?><FictionBook xmlns:l="http://www.w3.org/1999/xlink"><body><section><p>Word<a l:href="#n1" type="note">[1]</a>.</p></section></body>' +
+      '<body name="notes"><section id="n1"><title><p>1</p></title><p>The note.</p></section></body></FictionBook>';
+    const { manifest, blocks } = await ingestBytes(enc(xml), 'n.fb2');
+    expect(blocks[0].r).toEqual(['Word', ['[1]', SUP | LINK, '#n1'], '.']);
+    expect(manifest.notes?.['#n1']).toEqual([1, 3]);
+    expect(blocks.slice(1, 3).map(blockText)).toEqual(['1', 'The note.']);
   });
 });

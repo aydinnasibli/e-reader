@@ -30,6 +30,8 @@ export interface ReaderSettings {
   margin: number;
   align: 'justify' | 'left';
   indent: boolean;
+  /** Break long words at syllables (soft hyphens). */
+  hyphenate: boolean;
   pageTurn: PageTurn;
   /** Tapping either side goes forward (swipe to go back). */
   tapForward: boolean;
@@ -81,6 +83,7 @@ const DEFAULTS: ReaderSettings = {
   margin: 20,
   align: 'justify',
   indent: true,
+  hyphenate: true,
   pageTurn: 'slide',
   tapForward: false,
 };
@@ -127,8 +130,8 @@ export function setSettings(patch: Partial<ReaderSettings>) {
 
 /** Reset text and spacing (not colours or page options). */
 export function resetSettings() {
-  const { font, weight, fontSize, lineSpacing, letterSpacing, paraSpacing, margin, align, indent } = DEFAULTS;
-  setSettings({ font, weight, fontSize, lineSpacing, letterSpacing, paraSpacing, margin, align, indent });
+  const { font, weight, fontSize, lineSpacing, letterSpacing, paraSpacing, margin, align, indent, hyphenate } = DEFAULTS;
+  setSettings({ font, weight, fontSize, lineSpacing, letterSpacing, paraSpacing, margin, align, indent, hyphenate });
 }
 
 // ---------- colours ----------

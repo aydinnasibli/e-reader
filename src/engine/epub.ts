@@ -255,6 +255,9 @@ export async function ingestEpub(ctx: IngestContext, zip: ZipArchive): Promise<M
 
   const fileStart = new Map<string, number>();
   const anchorBlock = new Map<string, number>();
+  // Footnotes: every internal link seen so far, and where linked ids start/end.
+  const linkKeys = new Set<string>();
+  const notes: Record<string, [number, number]> = {};
 
   const spine = pkg.spine.map((id) => pkg.items.get(id)).filter((i): i is ManifestItem => !!i);
   const entries = spine.map((i) => zip.find(i.href));
@@ -270,6 +273,24 @@ export async function ingestEpub(ctx: IngestContext, zip: ZipArchive): Promise<M
     const anchors = wanted.get(item.href);
     const html = new HtmlToBlocks(w, {
       anchors,
+      link: (href) => {
+        if (/^[a-z][a-z0-9+.-]*:/i.test(href)) return null; // http:, mailto:, ...
+        const frag = fragmentOf(href);
+        const path = href.startsWith('#') ? item.href : resolvePath(item.href, href);
+        const key = frag ? `${path}#${frag}` : path;
+        linkKeys.add(key);
+        return key;
+      },
+      onIdStart: (id, b) => {
+        const key = `${item.href}#${id}`;
+        if (!linkKeys.has(key) || notes[key]) return false;
+        notes[key] = [b, b];
+        return true;
+      },
+      onIdEnd: (id, b) => {
+        const n = notes[`${item.href}#${id}`];
+        if (n) n[1] = Math.max(n[1], b);
+      },
       onAnchor: (id, b) => {
         const key = item.href + '#' + id;
         if (!anchorBlock.has(key)) anchorBlock.set(key, b);
@@ -309,6 +330,14 @@ export async function ingestEpub(ctx: IngestContext, zip: ZipArchive): Promise<M
   }
   w.finish();
 
+  // Links to whole chapters point at the chapter's first block.
+  for (const key of linkKeys) {
+    if (!notes[key] && !key.includes('#') && fileStart.has(key)) {
+      const b = fileStart.get(key)!;
+      notes[key] = [b, b + 1];
+    }
+  }
+
   let toc: TocEntry[] = [];
   for (const t of rawToc) {
     const hash = t.href.indexOf('#');
@@ -329,6 +358,7 @@ export async function ingestEpub(ctx: IngestContext, zip: ZipArchive): Promise<M
     toc,
     images,
     cover,
+    notes,
   };
 }
 

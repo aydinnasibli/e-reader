@@ -1,10 +1,12 @@
 import { DarkTheme, DefaultTheme, type ErrorBoundaryProps, Stack, ThemeProvider } from 'expo-router';
 import { ErrorScreen } from '@/ui/ErrorScreen';
+import { Platform } from 'react-native';
 import { loadLibrary } from '@/lib/library';
 import { DialogHost } from '@/ui/dialogs';
 import { useAppColors } from '@/ui/theme';
 
-loadLibrary();
+// Phones only: the library lives in the app's files (web builds just render the shell).
+if (Platform.OS !== 'web') loadLibrary();
 
 export default function RootLayout() {
   const c = useAppColors();
