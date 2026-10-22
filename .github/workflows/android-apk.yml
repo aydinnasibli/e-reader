@@ -54,10 +54,30 @@ jobs:
         working-directory: android
         run: |
           set -o pipefail
+          # Gradle hides the output of node commands it runs while configuring;
+          # put a wrapper first on PATH that records any node command that fails.
+          WRAP="$RUNNER_TEMP/nodewrap"
+          mkdir -p "$WRAP"
+          cat > "$WRAP/node" <<EOF
+          #!/usr/bin/env bash
+          err=\$(mktemp)
+          "$(command -v node)" "\$@" 2>"\$err"
+          rc=\$?
+          cat "\$err" >&2
+          if [ \$rc -ne 0 ]; then
+            { echo "--- node exited \$rc in \$PWD:"; printf ' %q' "\$@"; echo; cat "\$err"; } >> "$RUNNER_TEMP/node-failures.log"
+          fi
+          rm -f "\$err"
+          exit \$rc
+          EOF
+          chmod +x "$WRAP/node"
+          export PATH="$WRAP:$PATH"
           ./gradlew assembleRelease --no-daemon -PreactNativeArchitectures=armeabi-v7a,arm64-v8a 2>&1 | tee ../gradle.log || {
             # Gradle interleaves output from parallel tasks; repeat the errors at the end of the log.
             echo "===== build errors ====="
             grep -n -E -B3 -A30 "FAILED|What went wrong|Error:|error:|ERROR|Exception" ../gradle.log | grep -v -E "^[0-9]+-w: " | tail -250
+            echo "===== failed node commands ====="
+            cat "$RUNNER_TEMP/node-failures.log" 2>/dev/null | tail -150
             exit 1
           }
 
