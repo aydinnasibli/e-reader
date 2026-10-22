@@ -3,7 +3,7 @@
 // whole book.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { FlatList, type ListViewToken, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
+import { FlatList, type ViewToken, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import type { Block, Position } from '@/engine/types';
 import type { ReaderSettings, Theme } from '@/lib/settings';
@@ -115,7 +115,7 @@ export function ScrollReader({ book, settings, theme, start, startKey, version, 
 
   const positionRef = useRef(onPosition);
   positionRef.current = onPosition;
-  const onViewable = useRef(({ viewableItems }: { viewableItems: ListViewToken[] }) => {
+  const onViewable = useRef(({ viewableItems }: { viewableItems: ViewToken<number>[] }) => {
     const first = viewableItems.find((v) => v.isViewable);
     if (first && typeof first.item === 'number') {
       const p = { b: first.item, o: 0 };

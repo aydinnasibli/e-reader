@@ -48,7 +48,7 @@ export class FileSource implements ByteSource {
     const n = Math.max(0, Math.min(length, this.size - offset));
     if (n === 0) return new Uint8Array(0);
     this.handle.offset = offset;
-    return this.handle.readBytesSync(n);
+    return this.handle.readBytes(n);
   }
 
   close() {
@@ -70,16 +70,16 @@ export class FileSink implements BookSink {
   }
 
   writeChunk(index: number, json: string, info: ChunkInfo) {
-    chunkFile(this.id, index).writeSync(json);
+    chunkFile(this.id, index).write(json);
     this.onChunk?.(index, info);
   }
 
   writeImage(name: string, data: Uint8Array) {
-    imageFile(this.id, name).writeSync(data);
+    imageFile(this.id, name).write(data);
   }
 
   writeImageBase64(name: string, base64: string) {
-    imageFile(this.id, name).writeSync(base64, { encoding: 'base64' });
+    imageFile(this.id, name).write(base64, { encoding: 'base64' });
   }
 }
 
@@ -93,5 +93,5 @@ export function readJson<T>(file: File): T | null {
 }
 
 export function writeJson(file: File, value: unknown) {
-  file.writeSync(JSON.stringify(value));
+  file.write(JSON.stringify(value));
 }

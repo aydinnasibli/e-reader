@@ -195,7 +195,7 @@ export class BookData {
       const out = imageFile(this.entry.id, `z_${safe}.${ref.ext}`);
       if (!out.exists) {
         const [offset, csize, size, method] = ref.zip;
-        out.writeSync(readZipData(this.source(), offset, csize, size, method));
+        out.write(readZipData(this.source(), offset, csize, size, method));
       }
       return out.uri;
     }
@@ -209,7 +209,7 @@ export class BookData {
     if (zip && e) {
       const ext = /\.([a-z0-9]{2,5})$/i.exec(key)?.[1]?.toLowerCase() ?? 'jpg';
       const out = imageFile(this.entry.id, `z_${safe}.${ext}`);
-      if (!out.exists) out.writeSync(zip.read(e));
+      if (!out.exists) out.write(zip.read(e));
       return out.uri;
     }
     return null;
