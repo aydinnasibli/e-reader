@@ -44,7 +44,24 @@ const html = m.exports.giantChapterHtml(40);
 const deflated = deflateSync(html, { level: 6 });
 const fixture = `var BENCH_FIXTURE = { chapterB64: ${JSON.stringify(Buffer.from(deflated).toString('base64'))}, chapterSize: ${html.length} };\n`;
 const only = `var BENCH_ONLY = ${JSON.stringify(process.env.BENCH_ONLY ?? '')};\n`;
-const program = fixture + only + code + '\nBench.main();\n';
+// The standalone Hermes CLI predates TextEncoder (React Native's Hermes has it).
+const textEncoder = `if (typeof TextEncoder === 'undefined') {
+  globalThis.TextEncoder = function () {};
+  TextEncoder.prototype.encode = function (s) {
+    var out = new Uint8Array(s.length * 3);
+    var n = 0;
+    for (var i = 0; i < s.length; i++) {
+      var c = s.codePointAt(i);
+      if (c > 0xffff) i++;
+      if (c < 0x80) out[n++] = c;
+      else if (c < 0x800) { out[n++] = 0xc0 | (c >> 6); out[n++] = 0x80 | (c & 63); }
+      else if (c < 0x10000) { out[n++] = 0xe0 | (c >> 12); out[n++] = 0x80 | ((c >> 6) & 63); out[n++] = 0x80 | (c & 63); }
+      else { out[n++] = 0xf0 | (c >> 18); out[n++] = 0x80 | ((c >> 12) & 63); out[n++] = 0x80 | ((c >> 6) & 63); out[n++] = 0x80 | (c & 63); }
+    }
+    return out.slice(0, n);
+  };
+}\n`;
+const program = textEncoder + fixture + only + code + '\nBench.main();\n';
 
 if (targets.includes('node')) {
   const file = join(out, 'bench-node.js');
@@ -61,7 +78,7 @@ if (targets.includes('hermes')) {
     plugins: ['@babel/plugin-transform-classes', '@babel/plugin-transform-block-scoping', '@babel/plugin-transform-async-to-generator'],
   }).code;
   const file = join(out, 'bench-hermes.js');
-  writeFileSync(file, fixture + only + lowered + '\nBench.main();\n');
+  writeFileSync(file, textEncoder + fixture + only + lowered + '\nBench.main();\n');
   const hermes = process.env.HERMES;
   if (!hermes) throw new Error('Set HERMES to the hermes CLI binary');
   execFileSync(hermes, ['-O', '-gc-max-heap=3G', file], { stdio: 'inherit', maxBuffer: 1 << 26 });

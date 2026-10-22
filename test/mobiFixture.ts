@@ -89,8 +89,16 @@ export function buildMobi(o: Options): Uint8Array {
   const compression = o.compression ?? 2;
   const htmlBytes = enc.encode(o.html);
   const textBytes = o.extraFlow ? Uint8Array.from([...htmlBytes, ...enc.encode(o.extraFlow)]) : htmlBytes;
+  // Identical records (big generated books repeat text) are compressed once.
+  const packed = new Map<string, Uint8Array>();
+  const compress = (r: Uint8Array) => {
+    const key = String.fromCharCode.apply(null, Array.from(r));
+    let c = packed.get(key);
+    if (!c) packed.set(key, (c = palmdocCompress(r)));
+    return c;
+  };
   const textRecs = splitRecords(textBytes).map((r) => {
-    const body = compression === 2 ? palmdocCompress(r) : r;
+    const body = compression === 2 ? compress(r) : r;
     // Trailing data: a multibyte-overlap byte (flag 1) then a 1-byte TBS entry (flag 2).
     return o.trailing ? Uint8Array.from([...body, 0x00, 0x81]) : body;
   });

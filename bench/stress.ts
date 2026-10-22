@@ -9,6 +9,7 @@ import { deflateSync } from 'fflate';
 import { createDecoder } from '../src/engine/decode';
 import type { BookSink, ByteSource, IngestContext } from '../src/engine/io';
 import { ingestBook } from '../src/engine/ingest';
+import { buildMobi, fakeJpeg } from '../test/mobiFixture';
 
 declare const print: ((...a: unknown[]) => void) | undefined;
 declare const HermesInternal: { getInstrumentedStats(): Record<string, number> } | undefined;
@@ -350,6 +351,22 @@ async function measure(label: string, fileName: string, bytes: Uint8Array) {
   );
 }
 
+/** A Kindle book: chapters of English text, PalmDOC-compressed, with images. */
+function makeMobi(totalMB: number, images: number) {
+  // An 8 KB unit (page break, heading, paragraphs) repeated, so its 4 KB text
+  // records repeat and the generator compresses each kind once.
+  let unit = '<mbp:pagebreak/><h2>Chapter</h2>';
+  for (;;) {
+    const p = `<p>${sentence(EN)} ${sentence(EN)}</p>`;
+    if (unit.length + p.length > 8192) break;
+    unit += p;
+  }
+  unit = unit.padEnd(8192, ' ');
+  const imgs: Uint8Array[] = [];
+  for (let i = 0; i < images; i++) imgs.push(fakeJpeg(i));
+  return buildMobi({ html: unit.repeat(totalMB * 128), title: 'Big Kindle book', author: 'Bench', images: imgs, cover: 0, trailing: true });
+}
+
 export async function main() {
   const only = typeof BENCH_ONLY === 'string' ? BENCH_ONLY : '';
   const want = (k: string) => !only || only.split(',').includes(k);
@@ -361,4 +378,5 @@ export async function main() {
     await measure('EPUB 40MB chapter+300ch+300 imgs', 'big.epub', makeEpub(giant, 300, 300, 1));
   }
   if (want('fb2')) await measure('FB2 UTF-8 + 40 big images', 'big.fb2', makeFb2(50, 40, 1));
+  if (want('mobi')) await measure('MOBI PalmDOC + 20 images', 'big.mobi', makeMobi(30, 20));
 }
