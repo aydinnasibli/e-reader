@@ -18,7 +18,7 @@ export interface Action {
 
 type Dialog =
   | { kind: 'actions'; title?: string; actions: Action[] }
-  | { kind: 'prompt'; title: string; initial: string; placeholder?: string; confirm: string; onSubmit(text: string): void };
+  | { kind: 'prompt'; title: string; initial: string; placeholder?: string; confirm: string; multiline?: boolean; onSubmit(text: string): void };
 
 let current: Dialog | null = null;
 let listener: ((d: Dialog | null) => void) | null = null;
@@ -32,8 +32,19 @@ export function showActions(title: string | undefined, actions: Action[]) {
   open({ kind: 'actions', title, actions });
 }
 
-export function showPrompt(title: string, opts: { initial?: string; placeholder?: string; confirm?: string; onSubmit(text: string): void }) {
-  open({ kind: 'prompt', title, initial: opts.initial ?? '', placeholder: opts.placeholder, confirm: opts.confirm ?? 'Save', onSubmit: opts.onSubmit });
+export function showPrompt(
+  title: string,
+  opts: { initial?: string; placeholder?: string; confirm?: string; multiline?: boolean; onSubmit(text: string): void },
+) {
+  open({
+    kind: 'prompt',
+    title,
+    initial: opts.initial ?? '',
+    placeholder: opts.placeholder,
+    confirm: opts.confirm ?? 'Save',
+    multiline: opts.multiline,
+    onSubmit: opts.onSubmit,
+  });
 }
 
 export function DialogHost() {
@@ -77,7 +88,8 @@ export function DialogHost() {
             onChangeText={setText}
             placeholder={dialog.placeholder}
             placeholderTextColor={c.secondary}
-            style={[styles.input, { color: c.text, borderColor: c.border, backgroundColor: c.card }]}
+            multiline={dialog.multiline}
+            style={[styles.input, dialog.multiline && styles.multiline, { color: c.text, borderColor: c.border, backgroundColor: c.card }]}
             onSubmitEditing={() => {
               if (text.trim()) dialog.onSubmit(text.trim());
               close();
@@ -109,6 +121,7 @@ const styles = StyleSheet.create({
   label: { flex: 1, fontSize: 17 },
   prompt: { paddingHorizontal: 20, paddingTop: 4, gap: 14 },
   input: { borderWidth: StyleSheet.hairlineWidth, borderRadius: 10, paddingHorizontal: 14, paddingVertical: 12, fontSize: 17 },
+  multiline: { minHeight: 110, maxHeight: 220, textAlignVertical: 'top' },
   buttons: { flexDirection: 'row', gap: 10 },
   btn: { flex: 1, alignItems: 'center', paddingVertical: 12, borderRadius: 10 },
 });

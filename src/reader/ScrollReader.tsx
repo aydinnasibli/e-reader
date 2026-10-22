@@ -3,13 +3,14 @@
 // whole book.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { FlatList, type ViewToken, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
+import { FlatList, Pressable, StyleSheet, Text, View, type ViewToken, useWindowDimensions } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import type { Block, Position } from '@/engine/types';
 import type { ReaderSettings, Theme } from '@/lib/settings';
 import type { BookData } from './book';
 import { BlockImage, BlockText, Spacer } from './BlockText';
 import { lookOf } from './look';
+import type { Mark } from './marks';
 
 const MAX_WINDOW_CHUNKS = 8;
 
@@ -22,6 +23,9 @@ interface Props {
   version: number;
   onPosition(pos: Position): void;
   onTap(): void;
+  marksFor?(b: number): Mark[] | undefined;
+  onLongPressBlock?(b: number): void;
+  footerRight?: string;
 }
 
 interface Win {
@@ -30,7 +34,7 @@ interface Win {
   start: number; // first block shown
 }
 
-export function ScrollReader({ book, settings, theme, start, startKey, version, onPosition, onTap }: Props) {
+export function ScrollReader({ book, settings, theme, start, startKey, version, onPosition, onTap, marksFor, onLongPressBlock, footerRight }: Props) {
   const win = useWindowDimensions();
   const insets = useSafeAreaInsets();
   const width = win.width - settings.margin * 2;
@@ -133,8 +137,12 @@ export function ScrollReader({ book, settings, theme, start, startKey, version, 
     let content;
     if (blk.k === 'img') content = <BlockImage book={book} imageKey={blk.s!} width={width} />;
     else if (blk.k === 'sp' || blk.k === 'hr') content = <Spacer block={blk} settings={settings} theme={theme} />;
-    else content = <BlockText block={blk} look={lookOf(blk, settings)} theme={theme} />;
-    return <View style={{ paddingHorizontal: settings.margin }}>{content}</View>;
+    else content = <BlockText block={blk} look={lookOf(blk, settings)} theme={theme} marks={marksFor?.(b)} />;
+    return (
+      <Pressable onLongPress={() => onLongPressBlock?.(b)} delayLongPress={450} style={{ paddingHorizontal: settings.margin }}>
+        {content}
+      </Pressable>
+    );
   };
 
   const atEnd = w ? w.last >= book.chunkCount - 1 : false;
@@ -154,7 +162,7 @@ export function ScrollReader({ book, settings, theme, start, startKey, version, 
           data={data}
           keyExtractor={(b) => String(b)}
           renderItem={renderItem}
-          extraData={`${settings.fontSize}|${settings.lineSpacing}|${settings.font}|${settings.justify}|${settings.indent}|${settings.margin}|${settings.theme}`}
+          extraData={[settings, marksFor]}
           contentContainerStyle={{ paddingTop: insets.top + 12, paddingBottom: insets.bottom + 40 }}
           maintainVisibleContentPosition={{ minIndexForVisible: 0 }}
           onEndReached={extendEnd}
@@ -175,7 +183,9 @@ export function ScrollReader({ book, settings, theme, start, startKey, version, 
         />
       )}
       <View pointerEvents="none" style={[styles.badge, { bottom: insets.bottom + 6, backgroundColor: theme.bg }]}>
-        <Text style={{ color: theme.muted, fontSize: 12 }}>{pct.toFixed(1)}%</Text>
+        <Text style={{ color: theme.muted, fontSize: 12 }}>
+          {pct.toFixed(1)}%{footerRight ? ` · ${footerRight}` : ''}
+        </Text>
       </View>
     </View>
   );

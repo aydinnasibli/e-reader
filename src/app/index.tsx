@@ -22,6 +22,7 @@ import { type BookEntry, deleteBook, importBooks, updateBook, useLibrary } from 
 import { Cover } from '@/ui/Cover';
 import { showActions, showPrompt } from '@/ui/dialogs';
 import { formatBytes } from '@/ui/format';
+import { StatsSheet } from '@/ui/StatsSheet';
 import { type AppColors, useAppColors } from '@/ui/theme';
 
 const GAP = 16;
@@ -34,6 +35,7 @@ export default function Library() {
   const [query, setQuery] = useState('');
   const [filter, setFilter] = useState<Filter>({ kind: 'all' });
   const [importing, setImporting] = useState(false);
+  const [statsOpen, setStatsOpen] = useState(false);
   const columns = width >= 700 ? 5 : 3;
   const cellWidth = (width - GAP * (columns + 1)) / columns;
 
@@ -205,6 +207,9 @@ export default function Library() {
           },
           headerRight: () => (
             <View style={styles.headerButtons}>
+              <Pressable onPress={() => setStatsOpen(true)} hitSlop={10} accessibilityLabel="Reading stats">
+                <Ionicons name="stats-chart-outline" size={22} color={c.text} />
+              </Pressable>
               <Pressable onPress={viewMenu} hitSlop={10} accessibilityLabel="View options">
                 <Ionicons name="options-outline" size={24} color={c.text} />
               </Pressable>
@@ -247,6 +252,7 @@ export default function Library() {
           renderItem={({ item }) => <ListRow book={item} c={c} onPress={() => open(item)} onLongPress={() => bookMenu(item)} />}
         />
       )}
+      <StatsSheet visible={statsOpen} onClose={() => setStatsOpen(false)} />
     </View>
   );
 }

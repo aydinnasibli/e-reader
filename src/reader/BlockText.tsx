@@ -1,10 +1,11 @@
 import { Image } from 'expo-image';
 import { memo, useEffect, useState } from 'react';
 import { Text, type TextLayoutEvent, View } from 'react-native';
-import { type Block, type Run, runStyle, runText, sliceRuns } from '@/engine/types';
+import { type Block, type Run, sliceRuns } from '@/engine/types';
 import type { ReaderSettings, Theme } from '@/lib/settings';
 import type { BookData, ImageInfo } from './book';
 import { type Look, drawnRuns, lineHeightOf, lookOf, runTextStyle } from './look';
+import { type Mark, applyMarks } from './marks';
 
 interface TextProps {
   block: Block;
@@ -15,12 +16,15 @@ interface TextProps {
   /** Drop the top margin (first thing on a page, or a continued paragraph). */
   noTopMargin?: boolean;
   noBottomMargin?: boolean;
+  /** Highlights / search hits, in block coordinates. */
+  marks?: Mark[];
   onTextLayout?: (e: TextLayoutEvent) => void;
 }
 
-export const BlockText = memo(function BlockText({ block, look, theme, range, noTopMargin, noBottomMargin, onTextLayout }: TextProps) {
+export const BlockText = memo(function BlockText({ block, look, theme, range, noTopMargin, noBottomMargin, marks, onTextLayout }: TextProps) {
   let runs: Run[] = drawnRuns(block, look);
   if (range) runs = sliceRuns(runs, range[0], range[1]);
+  const segments = applyMarks(runs, marks, look.prefix.length - (range?.[0] ?? 0));
   return (
     <Text
       allowFontScaling={false}
@@ -38,14 +42,13 @@ export const BlockText = memo(function BlockText({ block, look, theme, range, no
         marginBottom: noBottomMargin ? 0 : look.marginBottom,
         paddingLeft: look.paddingLeft,
       }}>
-      {runs.map((r, i) => {
-        const bits = runStyle(r);
-        return bits ? (
-          <Text key={i} style={runTextStyle(bits, look)}>
-            {runText(r)}
+      {segments.map((seg, i) => {
+        if (!seg.bits && !seg.bg) return seg.text;
+        const st = runTextStyle(seg.bits, look);
+        return (
+          <Text key={i} style={seg.bg ? [st, { backgroundColor: seg.bg }] : st}>
+            {seg.text}
           </Text>
-        ) : (
-          runText(r)
         );
       })}
     </Text>

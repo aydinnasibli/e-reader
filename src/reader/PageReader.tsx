@@ -3,6 +3,7 @@
 // 100 MB book.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import Ionicons from '@expo/vector-icons/Ionicons';
 import { ActivityIndicator, Animated, PanResponder, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import type { Block, Position } from '@/engine/types';
@@ -11,6 +12,7 @@ import type { BookData } from './book';
 import { BlockImage, BlockText, Spacer } from './BlockText';
 import { Measurer } from './Measurer';
 import { type Look } from './look';
+import type { Mark } from './marks';
 import { type Measure, type Page, pageOf, paginate } from './paginate';
 
 export const HEADER = 30;
@@ -25,8 +27,16 @@ interface Props {
   startKey: number;
   /** Bumped whenever the book grows (still converting) or finishes. */
   version: number;
-  onPosition(pos: Position): void;
+  /** Called with the first and last position shown. */
+  onPosition(pos: Position, end?: Position): void;
   onTap(): void;
+  /** Highlights and search hits for a block. */
+  marksFor?(b: number): Mark[] | undefined;
+  /** Long-press on a paragraph. */
+  onLongPressBlock?(b: number): void;
+  bookmarked?: boolean;
+  /** Small text shown at the bottom right (e.g. time left). */
+  footerRight?: string;
 }
 
 interface Laid {
@@ -43,7 +53,7 @@ interface Cur {
   page: number | null;
 }
 
-export function PageReader({ book, settings, theme, start, startKey, version, onPosition, onTap }: Props) {
+export function PageReader({ book, settings, theme, start, startKey, version, onPosition, onTap, marksFor, onLongPressBlock, bookmarked, footerRight }: Props) {
   const win = useWindowDimensions();
   const liveInsets = useSafeAreaInsets();
   // Showing/hiding the status bar can change the insets on some iPhones; that
@@ -120,8 +130,11 @@ export function PageReader({ book, settings, theme, start, startKey, version, on
     if (!item) return;
     const prefix = curLaid.looks[item.b - curLaid.first]?.prefix.length ?? 0;
     const pos = { b: item.b, o: Math.max(0, item.s - prefix) };
+    const items = curLaid.pages[cur.page].items;
+    const last = items[items.length - 1];
+    const lastPrefix = curLaid.looks[last.b - curLaid.first]?.prefix.length ?? 0;
     lastPos.current = pos;
-    onPosition(pos);
+    onPosition(pos, { b: last.b, o: Math.max(0, last.e - lastPrefix) });
   }, [cur, curLaid, onPosition]);
 
   /** The page one step away, or why there isn't one. */
@@ -176,10 +189,35 @@ export function PageReader({ book, settings, theme, start, startKey, version, on
     base.setValue(-slot * win.width);
   }, [win.width]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const handlers = useRef<{ go(d: 1 | -1): void; onTap(): void; springBack(): void; width: number; canGo(d: 1 | -1): boolean }>({
+  // Where each item of each visible page sits, for long-press hit testing.
+  const itemBoxes = useRef(new Map<string, { b: number; y: number; h: number }>());
+  const viewportTop = useRef(0);
+  const viewportRef = useRef<View>(null);
+  const curKeyRef = useRef('');
+  const blockAt = (pageY: number): number | null => {
+    const y = pageY - viewportTop.current;
+    for (const [k, box] of itemBoxes.current) {
+      if (k.startsWith(curKeyRef.current + '|') && y >= box.y && y < box.y + box.h) return box.b;
+    }
+    return null;
+  };
+  const longPress = (pageY: number) => {
+    const b = blockAt(pageY);
+    if (b !== null) onLongPressBlock?.(b);
+  };
+
+  const handlers = useRef<{
+    go(d: 1 | -1): void;
+    onTap(): void;
+    springBack(): void;
+    longPress(pageY: number): void;
+    width: number;
+    canGo(d: 1 | -1): boolean;
+  }>({
     go,
     onTap,
     springBack,
+    longPress,
     width: win.width,
     canGo: () => true,
   });
@@ -187,21 +225,41 @@ export function PageReader({ book, settings, theme, start, startKey, version, on
     go,
     onTap,
     springBack,
+    longPress,
     width: win.width,
     canGo: (d) => {
       const n = neighbour(d);
       return !!n && n !== 'end' && n !== 'processing';
     },
   };
+  const press = useRef<{ timer: ReturnType<typeof setTimeout> | null; fired: boolean }>({ timer: null, fired: false });
+  const cancelPress = () => {
+    if (press.current.timer) clearTimeout(press.current.timer);
+    press.current.timer = null;
+  };
   const pan = useRef(
     PanResponder.create({
       onStartShouldSetPanResponder: () => true,
       onMoveShouldSetPanResponder: (_e, g) => Math.abs(g.dx) > 8 && Math.abs(g.dx) > Math.abs(g.dy),
+      onPanResponderGrant: (e) => {
+        const pageY = e.nativeEvent.pageY;
+        press.current.fired = false;
+        cancelPress();
+        press.current.timer = setTimeout(() => {
+          press.current.timer = null;
+          press.current.fired = true;
+          handlers.current.longPress(pageY);
+        }, 450);
+      },
       onPanResponderMove: (_e, g) => {
+        if (Math.abs(g.dx) > 8 || Math.abs(g.dy) > 8) cancelPress();
+        if (press.current.fired) return;
         const dir = g.dx < 0 ? 1 : -1;
         drag.setValue(handlers.current.canGo(dir) ? g.dx : g.dx * 0.25);
       },
       onPanResponderRelease: (e, g) => {
+        cancelPress();
+        if (press.current.fired) return;
         const w = handlers.current.width;
         if (Math.abs(g.dx) < 8 && Math.abs(g.dy) < 8) {
           const tx = e.nativeEvent.pageX;
@@ -214,13 +272,16 @@ export function PageReader({ book, settings, theme, start, startKey, version, on
         else if (g.dx > w * 0.15 || g.vx > 0.4) handlers.current.go(-1);
         else handlers.current.springBack();
       },
-      onPanResponderTerminate: () => handlers.current.springBack(),
+      onPanResponderTerminate: () => {
+        cancelPress();
+        handlers.current.springBack();
+      },
     }),
   ).current;
 
   // ---- drawing ----
 
-  const renderPage = (data: { laid: Laid; page: Page } | undefined, placeholder?: string) => {
+  const renderPage = (data: { laid: Laid; page: Page } | undefined, placeholder?: string, key = '') => {
     if (!data) {
       return (
         <View style={styles.center}>
@@ -229,24 +290,35 @@ export function PageReader({ book, settings, theme, start, startKey, version, on
       );
     }
     const { laid: l, page } = data;
-    return page.items.map((it) => {
+    return page.items.map((it, idx) => {
       const k = it.b - l.first;
       const blk = l.blocks[k];
       if (!blk) return null;
-      if (blk.k === 'img') return <BlockImage key={it.b} book={book} imageKey={blk.s!} width={width} height={it.h} />;
-      if (blk.k === 'sp' || blk.k === 'hr') return <Spacer key={it.b} block={blk} settings={settings} theme={theme} />;
-      const m = l.measures[k];
-      const len = m.kind === 'text' ? m.length : 0;
+      let content;
+      if (blk.k === 'img') content = <BlockImage book={book} imageKey={blk.s!} width={width} height={it.h} />;
+      else if (blk.k === 'sp' || blk.k === 'hr') content = <Spacer block={blk} settings={settings} theme={theme} />;
+      else {
+        const m = l.measures[k];
+        const len = m.kind === 'text' ? m.length : 0;
+        content = (
+          <BlockText
+            block={blk}
+            look={l.looks[k]}
+            theme={theme}
+            range={[it.s, it.e]}
+            noTopMargin={it.top || it.s > 0}
+            noBottomMargin={it.e < len}
+            marks={marksFor?.(it.b)}
+          />
+        );
+      }
+      const boxKey = `${key}|${idx}`;
       return (
-        <BlockText
+        <View
           key={`${it.b}:${it.s}`}
-          block={blk}
-          look={l.looks[k]}
-          theme={theme}
-          range={[it.s, it.e]}
-          noTopMargin={it.top || it.s > 0}
-          noBottomMargin={it.e < len}
-        />
+          onLayout={(e) => itemBoxes.current.set(boxKey, { b: it.b, y: e.nativeEvent.layout.y, h: e.nativeEvent.layout.height })}>
+          {content}
+        </View>
       );
     });
   };
@@ -264,9 +336,15 @@ export function PageReader({ book, settings, theme, start, startKey, version, on
   const strip: { key: string; at: number; content: ReturnType<typeof renderPage> }[] = [];
   const prevKey = pageKey(prev);
   const nextKey = pageKey(next);
-  if (prevKey && prev !== 'end' && prev) strip.push({ key: prevKey, at: slot - 1, content: prev === 'processing' ? renderPage(undefined, processingMsg) : renderPage(prev.pageData) });
-  strip.push({ key: cur.page === null ? `pending:${cur.chunk}` : `p:${cur.chunk}:${cur.page}`, at: slot, content: renderPage(current) });
-  if (nextKey && next !== 'end' && next) strip.push({ key: nextKey, at: slot + 1, content: next === 'processing' ? renderPage(undefined, processingMsg) : renderPage(next.pageData) });
+  const curKey = cur.page === null ? `pending:${cur.chunk}` : `p:${cur.chunk}:${cur.page}`;
+  curKeyRef.current = curKey;
+  if (prevKey && prev !== 'end' && prev)
+    strip.push({ key: prevKey, at: slot - 1, content: prev === 'processing' ? renderPage(undefined, processingMsg) : renderPage(prev.pageData, undefined, prevKey) });
+  strip.push({ key: curKey, at: slot, content: renderPage(current, undefined, curKey) });
+  if (nextKey && next !== 'end' && next)
+    strip.push({ key: nextKey, at: slot + 1, content: next === 'processing' ? renderPage(undefined, processingMsg) : renderPage(next.pageData, undefined, nextKey) });
+  // Forget boxes of pages that are no longer on the strip.
+  for (const k of itemBoxes.current.keys()) if (!strip.some((p) => k.startsWith(p.key + '|'))) itemBoxes.current.delete(k);
 
   const firstItem = current?.page.items[0];
   const chapter = firstItem ? book.chapterAt(firstItem.b)?.t : undefined;
@@ -274,12 +352,17 @@ export function PageReader({ book, settings, theme, start, startKey, version, on
 
   return (
     <View style={[styles.root, { backgroundColor: theme.bg, paddingTop: insets.top, paddingBottom: insets.bottom }]}>
-      <View style={[styles.header, { paddingHorizontal: settings.margin }]}>
+      <View style={[styles.header, { paddingHorizontal: settings.margin + 22 }]}>
         <Text numberOfLines={1} style={[styles.meta, { color: theme.muted }]}>
           {chapter ?? book.entry.title}
         </Text>
+        {bookmarked ? <Ionicons name="bookmark" size={20} color={theme.accent} style={styles.ribbon} /> : null}
       </View>
-      <View style={styles.viewport} {...pan.panHandlers}>
+      <View
+        ref={viewportRef}
+        style={styles.viewport}
+        onLayout={() => viewportRef.current?.measureInWindow((_x, y) => (viewportTop.current = y))}
+        {...pan.panHandlers}>
         {strip.map(({ key, at, content }) => (
           <Animated.View
             key={key}
@@ -310,6 +393,7 @@ export function PageReader({ book, settings, theme, start, startKey, version, on
         <Text style={[styles.meta, { color: theme.muted }]}>
           {book.complete ? `${pct.toFixed(1)}%` : `${pct.toFixed(1)}% · preparing ${Math.round(book.progress * 100)}%`}
         </Text>
+        <Text style={[styles.meta, { color: theme.muted }]}>{footerRight ?? ''}</Text>
       </View>
     </View>
   );
@@ -318,7 +402,8 @@ export function PageReader({ book, settings, theme, start, startKey, version, on
 const styles = StyleSheet.create({
   root: { flex: 1 },
   header: { height: HEADER, justifyContent: 'center', alignItems: 'center' },
-  footer: { height: FOOTER, alignItems: 'center', justifyContent: 'center' },
+  footer: { height: FOOTER, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  ribbon: { position: 'absolute', right: 10, top: 2 },
   meta: { fontSize: 12 },
   viewport: { flex: 1, overflow: 'hidden' },
   page: { position: 'absolute', left: 0, top: 0, overflow: 'hidden' },
