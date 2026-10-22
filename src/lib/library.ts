@@ -206,6 +206,12 @@ export async function importBooks(): Promise<ImportResult> {
   return { added, skipped };
 }
 
+/** Convert a book again from its original file (after damage or an engine upgrade). */
+export function reprocessBook(id: string) {
+  updateBook(id, { status: 'processing', progress: 0, error: undefined });
+  void runQueue();
+}
+
 export function deleteBook(id: string) {
   books = books.filter((b) => b.id !== id);
   live.delete(id);

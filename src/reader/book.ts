@@ -92,7 +92,21 @@ export class BookData {
     return this.cache.get(i)?.[b - this.chunkStart(i)];
   }
 
+  /** Called when book data can't be read (damaged files). */
+  onError?: (e: unknown) => void;
+
+  /**
+   * Load a chunk. On failure the error goes to onError and the returned
+   * promise never settles, so callers don't each need failure handling.
+   */
   loadChunk(i: number): Promise<Block[]> {
+    return this.readChunk(i).catch((e) => {
+      this.onError?.(e);
+      return new Promise<Block[]>(() => {});
+    });
+  }
+
+  private readChunk(i: number): Promise<Block[]> {
     const hit = this.cache.get(i);
     if (hit) {
       // refresh LRU order

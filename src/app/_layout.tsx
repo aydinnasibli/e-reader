@@ -1,4 +1,5 @@
-import { DarkTheme, DefaultTheme, Stack, ThemeProvider } from 'expo-router';
+import { DarkTheme, DefaultTheme, type ErrorBoundaryProps, Stack, ThemeProvider } from 'expo-router';
+import { ErrorScreen } from '@/ui/ErrorScreen';
 import { loadLibrary } from '@/lib/library';
 import { DialogHost } from '@/ui/dialogs';
 import { useAppColors } from '@/ui/theme';
@@ -18,4 +19,9 @@ export default function RootLayout() {
       <DialogHost />
     </ThemeProvider>
   );
+}
+
+/** Shown instead of a blank screen if something crashes while drawing. */
+export function ErrorBoundary({ error, retry }: ErrorBoundaryProps) {
+  return <ErrorScreen title="Something went wrong" message={error.message} actions={[{ label: 'Try again', onPress: retry, primary: true }]} />;
 }

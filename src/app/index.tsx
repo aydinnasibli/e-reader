@@ -2,7 +2,8 @@ import Ionicons from '@expo/vector-icons/Ionicons';
 import * as Haptics from 'expo-haptics';
 import { Stack, router } from 'expo-router';
 import { useMemo, useState } from 'react';
-import { ActivityIndicator, Alert, FlatList, Pressable, ScrollView, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
+import { FlashList } from '@shopify/flash-list';
+import { ActivityIndicator, Alert, Pressable, ScrollView, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
 import {
   type Filter,
   SORT_LABELS,
@@ -23,6 +24,8 @@ import { Cover } from '@/ui/Cover';
 import { showActions, showPrompt } from '@/ui/dialogs';
 import { formatBytes } from '@/ui/format';
 import { StatsSheet } from '@/ui/StatsSheet';
+import { UpdateBanner } from '@/ui/UpdateBanner';
+import { CURRENT_BUILD, canSelfUpdate, checkForUpdate } from '@/lib/appUpdate';
 import { type AppColors, useAppColors } from '@/ui/theme';
 
 const GAP = 16;
@@ -75,6 +78,18 @@ export default function Library() {
         checked: shelves.sort === k,
         onPress: () => setSort(k),
       })),
+      ...(canSelfUpdate()
+        ? [
+            {
+              label: `Check for updates (you have 1.0.${CURRENT_BUILD})`,
+              icon: 'cloud-download-outline' as const,
+              onPress: async () => {
+                const u = await checkForUpdate(true);
+                if (!u) Alert.alert('Up to date', `You have the latest version (1.0.${CURRENT_BUILD}).`);
+              },
+            },
+          ]
+        : []),
     ]);
 
   const newCollection = (then?: (id: string) => void) =>
@@ -153,7 +168,9 @@ export default function Library() {
   const active = (f: Filter) => f.kind === filter.kind && (f.kind !== 'collection' || (filter.kind === 'collection' && f.id === filter.id));
 
   const header = (
-    <View>
+    // The grid's content is inset by half a gap; undo that for the full-width header.
+    <View style={{ marginHorizontal: shelves.view === 'grid' ? -GAP / 2 : 0 }}>
+      <UpdateBanner />
       <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chips}>
         {chips.map((ch) => (
           <Pressable
@@ -225,7 +242,7 @@ export default function Library() {
         }}
       />
       {shelves.view === 'grid' ? (
-        <FlatList
+        <FlashList
           key={`grid${columns}`}
           data={visible}
           numColumns={columns}
@@ -234,12 +251,11 @@ export default function Library() {
           keyboardDismissMode="on-drag"
           ListHeaderComponent={header}
           ListEmptyComponent={empty}
-          contentContainerStyle={{ paddingBottom: 40, flexGrow: 1 }}
-          columnWrapperStyle={{ paddingHorizontal: GAP / 2 }}
+          contentContainerStyle={{ paddingBottom: 40, paddingHorizontal: GAP / 2 }}
           renderItem={({ item }) => <GridCell book={item} width={cellWidth} c={c} onPress={() => open(item)} onLongPress={() => bookMenu(item)} />}
         />
       ) : (
-        <FlatList
+        <FlashList
           key="list"
           data={visible}
           keyExtractor={(b) => b.id}
@@ -247,7 +263,7 @@ export default function Library() {
           keyboardDismissMode="on-drag"
           ListHeaderComponent={header}
           ListEmptyComponent={empty}
-          contentContainerStyle={{ paddingBottom: 40, flexGrow: 1 }}
+          contentContainerStyle={{ paddingBottom: 40 }}
           ItemSeparatorComponent={() => <View style={[styles.sep, { backgroundColor: c.border }]} />}
           renderItem={({ item }) => <ListRow book={item} c={c} onPress={() => open(item)} onLongPress={() => bookMenu(item)} />}
         />

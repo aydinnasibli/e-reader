@@ -1,12 +1,12 @@
 import * as Haptics from 'expo-haptics';
 import { useKeepAwake } from 'expo-keep-awake';
-import { router, useLocalSearchParams } from 'expo-router';
+import { type ErrorBoundaryProps, router, useLocalSearchParams } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, AppState, Pressable, StyleSheet, Text, View } from 'react-native';
 import { type Block, type Position, blockText } from '@/engine/types';
 import { addBookmark, highlightsByBlock, removeBookmark, useAnnotations } from '@/lib/annotations';
-import { getBook, loadManifest, updateBook, useBookStatus, useLiveBook } from '@/lib/library';
+import { getBook, loadManifest, reprocessBook, updateBook, useBookStatus, useLiveBook } from '@/lib/library';
 import { useFontReady } from '@/lib/fonts';
 import { useReaderTheme, useSettings } from '@/lib/settings';
 import { ReadingTracker, charsPerMinute } from '@/lib/stats';
@@ -18,6 +18,7 @@ import { ScrollReader } from '@/reader/ScrollReader';
 import { SelectionSheet, highlightColor } from '@/reader/SelectionSheet';
 import { DisplayPanel } from '@/reader/DisplayPanel';
 import { NavigatorSheet, SearchSheet } from '@/reader/Sheets';
+import { ErrorScreen } from '@/ui/ErrorScreen';
 import { formatMinutes } from '@/ui/format';
 
 const before = (a: Position, b: Position) => a.b < b.b || (a.b === b.b && a.o <= b.o);
@@ -72,6 +73,10 @@ export default function ReaderScreen() {
   const [sheet, setSheet] = useState<'nav' | 'search' | 'display' | null>(null);
   const [selection, setSelection] = useState<{ b: number; block: Block; chapter?: string } | null>(null);
   const [searchMark, setSearchMark] = useState<{ b: number; s: number; e: number } | null>(null);
+  const [failed, setFailed] = useState<string | null>(null);
+  useEffect(() => {
+    if (book) book.onError = (e) => setFailed(e instanceof Error ? e.message : String(e));
+  }, [book]);
 
   // Reading time: page turns feed the tracker; jumps reset it.
   const tracker = useRef(new ReadingTracker(id)).current;
@@ -159,14 +164,27 @@ export default function ReaderScreen() {
     }
   };
 
-  if (!book || status === 'error') {
+  if (!book) {
+    return <ErrorScreen title="Book not found" actions={[{ label: 'Back to library', onPress: () => router.back(), primary: true }]} />;
+  }
+  // Converted data missing or damaged: offer to convert again from the original file.
+  if (status === 'error' || failed || (status === 'ready' && !book.complete)) {
     return (
-      <View style={[styles.center, { backgroundColor: theme.bg }]}>
-        <Text style={{ color: theme.text, marginBottom: 16 }}>{book ? getBook(id)?.error ?? 'This book could not be opened.' : 'Book not found.'}</Text>
-        <Pressable onPress={() => router.back()}>
-          <Text style={{ color: theme.accent, fontSize: 16 }}>Back to library</Text>
-        </Pressable>
-      </View>
+      <ErrorScreen
+        title="This book couldn't be opened"
+        message={failed ?? getBook(id)?.error ?? 'Its prepared data is missing or damaged.'}
+        actions={[
+          {
+            label: 'Prepare it again',
+            primary: true,
+            onPress: () => {
+              reprocessBook(id);
+              router.back();
+            },
+          },
+          { label: 'Back to library', onPress: () => router.back() },
+        ]}
+      />
     );
   }
 
@@ -252,3 +270,16 @@ export default function ReaderScreen() {
 const styles = StyleSheet.create({
   center: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 24 },
 });
+
+export function ErrorBoundary({ error, retry }: ErrorBoundaryProps) {
+  return (
+    <ErrorScreen
+      title="The reader hit a problem"
+      message={error.message}
+      actions={[
+        { label: 'Try again', onPress: retry, primary: true },
+        { label: 'Back to library', onPress: () => router.back() },
+      ]}
+    />
+  );
+}

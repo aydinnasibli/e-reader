@@ -83,7 +83,9 @@ export class FileSink implements BookSink {
   }
 }
 
-export function readJson<T>(file: File): T | null {
+const sibling = (file: File, suffix: string) => new File(file.parentDirectory, file.name + suffix);
+
+function tryRead<T>(file: File): T | null {
   try {
     if (!file.exists) return null;
     return JSON.parse(file.textSync()) as T;
@@ -92,6 +94,27 @@ export function readJson<T>(file: File): T | null {
   }
 }
 
+/**
+ * Read a JSON file written by writeJson(). If the app died mid-save or the
+ * file got damaged, fall back to the previous good copy.
+ */
+export function readJson<T>(file: File): T | null {
+  return tryRead<T>(file) ?? tryRead<T>(sibling(file, '.bak')) ?? tryRead<T>(sibling(file, '.tmp'));
+}
+
+/**
+ * Save JSON without ever leaving a half-written file: write a temporary file,
+ * keep the previous version as .bak, then move the new one into place.
+ */
 export function writeJson(file: File, value: unknown) {
-  file.write(JSON.stringify(value));
+  const tmp = sibling(file, '.tmp');
+  tmp.write(JSON.stringify(value));
+  if (file.exists) {
+    try {
+      file.copySync(sibling(file, '.bak'), { overwrite: true });
+    } catch {
+      // a missing backup is not fatal
+    }
+  }
+  tmp.moveSync(file, { overwrite: true });
 }
