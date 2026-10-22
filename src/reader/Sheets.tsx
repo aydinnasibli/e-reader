@@ -2,19 +2,10 @@
 
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { type ReactNode, useEffect, useRef, useState } from 'react';
-import { ActivityIndicator, FlatList, Pressable, ScrollView, StyleSheet, Switch, Text, TextInput, View } from 'react-native';
+import { ActivityIndicator, FlatList, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import type { Position, TocEntry } from '@/engine/types';
 import { type Bookmark, type Highlight, removeBookmark, removeHighlight, useAnnotations } from '@/lib/annotations';
-import {
-  FONT_SIZES,
-  LINE_SPACINGS,
-  MARGINS,
-  type ReaderSettings,
-  THEMES,
-  type Theme,
-  type ThemeName,
-  setSettings,
-} from '@/lib/settings';
+import type { Theme } from '@/lib/settings';
 import { Sheet } from '@/ui/Sheet';
 import type { BookData } from './book';
 import { type Hit, MAX_HITS, type SearchProgress, searchBook } from './search';
@@ -276,105 +267,6 @@ export function SearchSheet({
   );
 }
 
-// ---------- settings ----------
-
-function Row({ label, theme, children }: { label: string; theme: Theme; children: ReactNode }) {
-  return (
-    <View style={styles.row}>
-      <Text style={[styles.label, { color: theme.text }]}>{label}</Text>
-      <View style={styles.rowRight}>{children}</View>
-    </View>
-  );
-}
-
-function Choice<T>({ options, value, onPick, theme, render }: { options: T[]; value: T; onPick(v: T): void; theme: Theme; render(v: T): string }) {
-  return (
-    <View style={[styles.segment, { backgroundColor: theme.bg }]}>
-      {options.map((o, i) => (
-        <Pressable key={i} onPress={() => onPick(o)} style={[styles.segItem, o === value && { backgroundColor: theme.accent }]}>
-          <Text style={{ color: o === value ? '#fff' : theme.text, fontSize: 14, fontWeight: '500' }}>{render(o)}</Text>
-        </Pressable>
-      ))}
-    </View>
-  );
-}
-
-export function SettingsSheet({ visible, onClose, theme, settings }: { visible: boolean; onClose(): void; theme: Theme; settings: ReaderSettings }) {
-  const sizeIndex = FONT_SIZES.indexOf(settings.fontSize);
-  const step = (d: number) => {
-    const i = Math.max(0, Math.min(FONT_SIZES.length - 1, (sizeIndex < 0 ? 5 : sizeIndex) + d));
-    setSettings({ fontSize: FONT_SIZES[i] });
-  };
-  return (
-    <Sheet visible={visible} onClose={onClose} colors={sheetColors(theme)}>
-      <ScrollView>
-        <View style={styles.sizeRow}>
-          <Pressable onPress={() => step(-1)} style={[styles.sizeBtn, { backgroundColor: theme.bg }]} accessibilityLabel="Smaller text">
-            <Text style={{ color: theme.text, fontSize: 15 }}>A</Text>
-          </Pressable>
-          <Text style={{ color: theme.muted, width: 40, textAlign: 'center' }}>{settings.fontSize}</Text>
-          <Pressable onPress={() => step(1)} style={[styles.sizeBtn, { backgroundColor: theme.bg }]} accessibilityLabel="Larger text">
-            <Text style={{ color: theme.text, fontSize: 24 }}>A</Text>
-          </Pressable>
-        </View>
-        <View style={styles.themes}>
-          {(Object.keys(THEMES) as ThemeName[]).map((name) => (
-            <Pressable
-              key={name}
-              onPress={() => setSettings({ theme: name })}
-              style={[styles.swatch, { backgroundColor: THEMES[name].bg, borderColor: settings.theme === name ? theme.accent : theme.border }]}>
-              <Text style={{ color: THEMES[name].text, fontSize: 15, fontWeight: '600' }}>Aa</Text>
-              <Text style={{ color: THEMES[name].muted, fontSize: 11, marginTop: 2, textTransform: 'capitalize' }}>{name}</Text>
-            </Pressable>
-          ))}
-        </View>
-        <Row label="Mode" theme={theme}>
-          <Choice
-            options={['page', 'scroll'] as ReaderSettings['mode'][]}
-            value={settings.mode}
-            onPick={(mode) => setSettings({ mode })}
-            theme={theme}
-            render={(m) => (m === 'page' ? 'Pages' : 'Scroll')}
-          />
-        </Row>
-        <Row label="Font" theme={theme}>
-          <Choice
-            options={['serif', 'sans'] as ReaderSettings['font'][]}
-            value={settings.font}
-            onPick={(font) => setSettings({ font })}
-            theme={theme}
-            render={(f) => (f === 'serif' ? 'Serif' : 'Sans')}
-          />
-        </Row>
-        <Row label="Line spacing" theme={theme}>
-          <Choice
-            options={LINE_SPACINGS}
-            value={settings.lineSpacing}
-            onPick={(lineSpacing) => setSettings({ lineSpacing })}
-            theme={theme}
-            render={(v) => (v === LINE_SPACINGS[0] ? 'Tight' : v === LINE_SPACINGS[1] ? 'Normal' : 'Loose')}
-          />
-        </Row>
-        <Row label="Margins" theme={theme}>
-          <Choice
-            options={MARGINS}
-            value={settings.margin}
-            onPick={(margin) => setSettings({ margin })}
-            theme={theme}
-            render={(v) => (v === MARGINS[0] ? 'Narrow' : v === MARGINS[1] ? 'Normal' : 'Wide')}
-          />
-        </Row>
-        <Row label="Justify text" theme={theme}>
-          <Switch value={settings.justify} onValueChange={(justify) => setSettings({ justify })} />
-        </Row>
-        <Row label="Indent paragraphs" theme={theme}>
-          <Switch value={settings.indent} onValueChange={(indent) => setSettings({ indent })} />
-        </Row>
-      </ScrollView>
-    </Sheet>
-  );
-}
-
 const styles = StyleSheet.create({
   tabs: { flexDirection: 'row', marginHorizontal: 16, marginBottom: 8, borderRadius: 10, padding: 3 },
   tab: { flex: 1, alignItems: 'center', paddingVertical: 8, borderRadius: 8 },
@@ -389,13 +281,4 @@ const styles = StyleSheet.create({
   searchInput: { flex: 1, fontSize: 16, height: 44 },
   searchStatus: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 20, paddingVertical: 10 },
   hit: { paddingHorizontal: 20, paddingVertical: 12 },
-  sizeRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 12, paddingVertical: 10 },
-  sizeBtn: { width: 96, height: 44, borderRadius: 12, alignItems: 'center', justifyContent: 'center' },
-  themes: { flexDirection: 'row', justifyContent: 'space-between', paddingHorizontal: 20, paddingVertical: 10 },
-  swatch: { width: 72, height: 60, borderRadius: 12, borderWidth: 2, alignItems: 'center', justifyContent: 'center' },
-  row: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 20, paddingVertical: 8, minHeight: 50 },
-  rowRight: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-  label: { fontSize: 16 },
-  segment: { flexDirection: 'row', borderRadius: 9, padding: 2 },
-  segItem: { paddingHorizontal: 12, paddingVertical: 7, borderRadius: 7 },
 });

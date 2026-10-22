@@ -11,7 +11,7 @@ import type { ReaderSettings, Theme } from '@/lib/settings';
 import type { BookData } from './book';
 import { BlockImage, BlockText, Spacer } from './BlockText';
 import { Measurer } from './Measurer';
-import { type Look } from './look';
+import { type Look, layoutKeyOf } from './look';
 import type { Mark } from './marks';
 import { type Measure, type Page, pageOf, paginate } from './paginate';
 
@@ -61,7 +61,7 @@ export function PageReader({ book, settings, theme, start, startKey, version, on
   const insets = useMemo(() => liveInsets, [win.width, win.height]); // eslint-disable-line react-hooks/exhaustive-deps
   const width = win.width - settings.margin * 2;
   const pageHeight = Math.floor(win.height - insets.top - insets.bottom - HEADER - FOOTER);
-  const layoutKey = `${width}|${pageHeight}|${settings.fontSize}|${settings.lineSpacing}|${settings.font}|${settings.justify}|${settings.indent}`;
+  const layoutKey = `${width}|${pageHeight}|${layoutKeyOf(settings)}`;
 
   // Laid-out chunks for the current layout.
   const laid = useMemo(() => new Map<number, Laid>(), [layoutKey]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -163,6 +163,7 @@ export function PageReader({ book, settings, theme, start, startKey, version, on
   const base = useRef(new Animated.Value(0)).current; // -slot * width
   const drag = useRef(new Animated.Value(0)).current; // finger offset
   const shift = useMemo(() => Animated.add(base, drag), [base, drag]);
+  const fade = useRef(new Animated.Value(1)).current;
   const animating = useRef(false);
   const springBack = () => Animated.spring(drag, { toValue: 0, useNativeDriver: true, bounciness: 0 }).start();
   const go = (dir: 1 | -1) => {
@@ -174,15 +175,30 @@ export function PageReader({ book, settings, theme, start, startKey, version, on
     }
     animating.current = true;
     const nextSlot = slot + dir;
-    Animated.parallel([
-      Animated.timing(base, { toValue: -nextSlot * win.width, duration: 220, useNativeDriver: true }),
-      Animated.timing(drag, { toValue: 0, duration: 220, useNativeDriver: true }),
-    ]).start(() => {
+    const land = () => {
       if (n.cur.page === null) target.current = { pos: { b: book.chunkStart(n.cur.chunk), o: 0 }, last: dir < 0 };
       setSlot(nextSlot);
       setCur(n.cur);
       animating.current = false;
-    });
+    };
+    if (settings.pageTurn === 'slide') {
+      Animated.parallel([
+        Animated.timing(base, { toValue: -nextSlot * win.width, duration: 220, useNativeDriver: true }),
+        Animated.timing(drag, { toValue: 0, duration: 220, useNativeDriver: true }),
+      ]).start(land);
+    } else if (settings.pageTurn === 'fade') {
+      // Dip to the background colour, switch, fade back in.
+      Animated.timing(fade, { toValue: 0, duration: 110, useNativeDriver: true }).start(() => {
+        drag.setValue(0);
+        base.setValue(-nextSlot * win.width);
+        land();
+        Animated.timing(fade, { toValue: 1, duration: 140, useNativeDriver: true }).start();
+      });
+    } else {
+      drag.setValue(0);
+      base.setValue(-nextSlot * win.width);
+      land();
+    }
   };
   // Keep the strip aligned if the window size changes.
   useEffect(() => {
@@ -212,6 +228,8 @@ export function PageReader({ book, settings, theme, start, startKey, version, on
     springBack(): void;
     longPress(pageY: number): void;
     width: number;
+    follow: boolean;
+    tapForward: boolean;
     canGo(d: 1 | -1): boolean;
   }>({
     go,
@@ -219,6 +237,8 @@ export function PageReader({ book, settings, theme, start, startKey, version, on
     springBack,
     longPress,
     width: win.width,
+    follow: true,
+    tapForward: false,
     canGo: () => true,
   });
   handlers.current = {
@@ -227,6 +247,8 @@ export function PageReader({ book, settings, theme, start, startKey, version, on
     springBack,
     longPress,
     width: win.width,
+    follow: settings.pageTurn === 'slide',
+    tapForward: settings.tapForward,
     canGo: (d) => {
       const n = neighbour(d);
       return !!n && n !== 'end' && n !== 'processing';
@@ -253,7 +275,7 @@ export function PageReader({ book, settings, theme, start, startKey, version, on
       },
       onPanResponderMove: (_e, g) => {
         if (Math.abs(g.dx) > 8 || Math.abs(g.dy) > 8) cancelPress();
-        if (press.current.fired) return;
+        if (press.current.fired || !handlers.current.follow) return;
         const dir = g.dx < 0 ? 1 : -1;
         drag.setValue(handlers.current.canGo(dir) ? g.dx : g.dx * 0.25);
       },
@@ -263,7 +285,7 @@ export function PageReader({ book, settings, theme, start, startKey, version, on
         const w = handlers.current.width;
         if (Math.abs(g.dx) < 8 && Math.abs(g.dy) < 8) {
           const tx = e.nativeEvent.pageX;
-          if (tx < w * 0.3) handlers.current.go(-1);
+          if (tx < w * 0.3) handlers.current.go(handlers.current.tapForward ? 1 : -1);
           else if (tx > w * 0.7) handlers.current.go(1);
           else handlers.current.onTap();
           return;
@@ -324,6 +346,11 @@ export function PageReader({ book, settings, theme, start, startKey, version, on
   };
 
   const current = cur.page !== null && curLaid ? { laid: curLaid, page: curLaid.pages[cur.page] } : undefined;
+  // While a new layout is being measured (settings changed, or a jump), keep
+  // showing the last page instead of a blank one.
+  const lastShown = useRef<typeof current>(undefined);
+  if (current) lastShown.current = current;
+  const shown = current ?? lastShown.current;
   const prev = neighbour(-1);
   const next = neighbour(1);
   const processingMsg = `Still preparing the rest of this book… ${Math.round(book.progress * 100)}%`;
@@ -340,7 +367,7 @@ export function PageReader({ book, settings, theme, start, startKey, version, on
   curKeyRef.current = curKey;
   if (prevKey && prev !== 'end' && prev)
     strip.push({ key: prevKey, at: slot - 1, content: prev === 'processing' ? renderPage(undefined, processingMsg) : renderPage(prev.pageData, undefined, prevKey) });
-  strip.push({ key: curKey, at: slot, content: renderPage(current, undefined, curKey) });
+  strip.push({ key: curKey, at: slot, content: renderPage(shown, undefined, curKey) });
   if (nextKey && next !== 'end' && next)
     strip.push({ key: nextKey, at: slot + 1, content: next === 'processing' ? renderPage(undefined, processingMsg) : renderPage(next.pageData, undefined, nextKey) });
   // Forget boxes of pages that are no longer on the strip.
@@ -369,7 +396,7 @@ export function PageReader({ book, settings, theme, start, startKey, version, on
             style={[
               styles.page,
               { width: win.width, height: pageHeight, paddingHorizontal: settings.margin, backgroundColor: theme.bg },
-              { transform: [{ translateX: Animated.add(shift, at * win.width) }] },
+              { opacity: fade, transform: [{ translateX: Animated.add(shift, at * win.width) }] },
             ]}>
             {content}
           </Animated.View>

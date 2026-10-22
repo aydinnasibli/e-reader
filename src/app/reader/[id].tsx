@@ -7,7 +7,8 @@ import { ActivityIndicator, AppState, Pressable, StyleSheet, Text, View } from '
 import { type Block, type Position, blockText } from '@/engine/types';
 import { addBookmark, highlightsByBlock, removeBookmark, useAnnotations } from '@/lib/annotations';
 import { getBook, loadManifest, updateBook, useBookStatus, useLiveBook } from '@/lib/library';
-import { THEMES, useSettings } from '@/lib/settings';
+import { useFontReady } from '@/lib/fonts';
+import { useReaderTheme, useSettings } from '@/lib/settings';
 import { ReadingTracker, charsPerMinute } from '@/lib/stats';
 import { BookData } from '@/reader/book';
 import { Chrome } from '@/reader/Chrome';
@@ -15,7 +16,8 @@ import type { Mark } from '@/reader/marks';
 import { PageReader } from '@/reader/PageReader';
 import { ScrollReader } from '@/reader/ScrollReader';
 import { SelectionSheet, highlightColor } from '@/reader/SelectionSheet';
-import { NavigatorSheet, SearchSheet, SettingsSheet } from '@/reader/Sheets';
+import { DisplayPanel } from '@/reader/DisplayPanel';
+import { NavigatorSheet, SearchSheet } from '@/reader/Sheets';
 import { formatMinutes } from '@/ui/format';
 
 const before = (a: Position, b: Position) => a.b < b.b || (a.b === b.b && a.o <= b.o);
@@ -24,7 +26,9 @@ export default function ReaderScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   useKeepAwake();
   const settings = useSettings();
-  const theme = THEMES[settings.theme];
+  const theme = useReaderTheme(settings);
+  // Pages are measured with the real font, so wait until it's loaded.
+  const fontReady = useFontReady(settings.font);
   const status = useBookStatus(id);
   const live = useLiveBook(id);
   const ann = useAnnotations(id);
@@ -65,7 +69,7 @@ export default function ReaderScreen() {
   const [pos, setPos] = useState<Position>(startPos);
   const [end, setEnd] = useState<Position | undefined>(undefined);
   const [chrome, setChrome] = useState(false);
-  const [sheet, setSheet] = useState<'nav' | 'search' | 'settings' | null>(null);
+  const [sheet, setSheet] = useState<'nav' | 'search' | 'display' | null>(null);
   const [selection, setSelection] = useState<{ b: number; block: Block; chapter?: string } | null>(null);
   const [searchMark, setSearchMark] = useState<{ b: number; s: number; e: number } | null>(null);
 
@@ -166,11 +170,13 @@ export default function ReaderScreen() {
     );
   }
 
-  if (book.chunkCount === 0) {
+  if (book.chunkCount === 0 || !fontReady) {
     return (
       <View style={[styles.center, { backgroundColor: theme.bg }]}>
         <ActivityIndicator color={theme.muted} />
-        <Text style={{ color: theme.muted, marginTop: 12 }}>Preparing book… {Math.round((live?.progress ?? 0) * 100)}%</Text>
+        <Text style={{ color: theme.muted, marginTop: 12 }}>
+          {book.chunkCount === 0 ? `Preparing book… ${Math.round((live?.progress ?? 0) * 100)}%` : 'Loading font…'}
+        </Text>
         <Pressable onPress={() => router.back()} style={{ marginTop: 24 }}>
           <Text style={{ color: theme.accent, fontSize: 16 }}>Back to library</Text>
         </Pressable>
@@ -189,7 +195,7 @@ export default function ReaderScreen() {
   const Reader = settings.mode === 'page' ? PageReader : ScrollReader;
   return (
     <View style={{ flex: 1, backgroundColor: theme.bg }}>
-      <StatusBar hidden={!chrome} style={theme.dark ? 'light' : 'dark'} />
+      <StatusBar hidden={!chrome && sheet !== 'display'} style={theme.dark ? 'light' : 'dark'} />
       <Reader
         key={settings.mode}
         book={book}
@@ -206,7 +212,7 @@ export default function ReaderScreen() {
         footerRight={footerRight}
       />
       <Chrome
-        visible={chrome}
+        visible={chrome && sheet !== 'display'}
         theme={theme}
         title={book.entry.title}
         chapter={book.chapterAt(pos.b)?.t}
@@ -217,12 +223,20 @@ export default function ReaderScreen() {
         onSearch={() => setSheet('search')}
         onBookmark={toggleBookmark}
         onContents={() => setSheet('nav')}
-        onSettings={() => setSheet('settings')}
+        onDisplay={() => setSheet('display')}
         onSeek={async (f) => goTo(await book.positionAt(f))}
       />
       <NavigatorSheet visible={sheet === 'nav'} onClose={() => setSheet(null)} theme={theme} book={book} currentBlock={pos.b} onGo={goTo} />
       <SearchSheet visible={sheet === 'search'} onClose={() => setSheet(null)} theme={theme} book={book} onGo={goTo} />
-      <SettingsSheet visible={sheet === 'settings'} onClose={() => setSheet(null)} theme={theme} settings={settings} />
+      <DisplayPanel
+        visible={sheet === 'display'}
+        onClose={() => {
+          setSheet(null);
+          setChrome(false);
+        }}
+        settings={settings}
+        theme={theme}
+      />
       <SelectionSheet
         bookId={id}
         bookTitle={book.entry.title}

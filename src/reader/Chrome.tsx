@@ -20,7 +20,7 @@ interface Props {
   onSearch(): void;
   onBookmark(): void;
   onContents(): void;
-  onSettings(): void;
+  onDisplay(): void;
   onSeek(fraction: number): void;
 }
 
@@ -42,9 +42,10 @@ export function Chrome(p: Props) {
   if (!mounted) return null;
   const shown = drag ?? p.fraction;
   const bar = { backgroundColor: theme.chrome, borderColor: theme.border };
-  const icon = (name: keyof typeof Ionicons.glyphMap, onPress: () => void, label: string, color = theme.text) => (
-    <Pressable onPress={onPress} hitSlop={8} style={({ pressed }) => [styles.iconBtn, pressed && { opacity: 0.5 }]} accessibilityLabel={label}>
-      <Ionicons name={name} size={23} color={color} />
+  const tool = (name: keyof typeof Ionicons.glyphMap, onPress: () => void, label: string, color = theme.text) => (
+    <Pressable onPress={onPress} hitSlop={6} style={({ pressed }) => [styles.tool, pressed && { opacity: 0.5 }]} accessibilityLabel={label}>
+      <Ionicons name={name} size={24} color={color} />
+      <Text style={[styles.toolLabel, { color }]}>{label}</Text>
     </Pressable>
   );
 
@@ -53,14 +54,13 @@ export function Chrome(p: Props) {
       <Animated.View
         pointerEvents={p.visible ? 'auto' : 'none'}
         style={[styles.top, bar, { paddingTop: insets.top + 4, opacity: fade, transform: [{ translateY: fade.interpolate({ inputRange: [0, 1], outputRange: [-12, 0] }) }] }]}>
-        {icon('chevron-back', p.onBack, 'Back to library')}
+        <Pressable onPress={p.onBack} hitSlop={8} style={styles.back} accessibilityLabel="Back to library">
+          <Ionicons name="chevron-back" size={24} color={theme.text} />
+        </Pressable>
         <Text numberOfLines={1} style={[styles.title, { color: theme.text }]}>
           {p.title}
         </Text>
-        {icon('search', p.onSearch, 'Search in book')}
-        {icon(p.bookmarked ? 'bookmark' : 'bookmark-outline', p.onBookmark, p.bookmarked ? 'Remove bookmark' : 'Add bookmark', p.bookmarked ? theme.accent : theme.text)}
-        {icon('list', p.onContents, 'Contents, bookmarks and highlights')}
-        {icon('text', p.onSettings, 'Text settings')}
+        <View style={styles.back} />
       </Animated.View>
       <Animated.View
         pointerEvents={p.visible ? 'auto' : 'none'}
@@ -82,6 +82,12 @@ export function Chrome(p: Props) {
         <View style={styles.infoRow}>
           <Text style={[styles.small, { color: theme.muted }]}>{(shown * 100).toFixed(1)}%</Text>
           <Text style={[styles.small, { color: theme.muted }]}>{p.info ?? ''}</Text>
+        </View>
+        <View style={[styles.tools, { borderColor: theme.border }]}>
+          {tool('list', p.onContents, 'Contents')}
+          {tool('search', p.onSearch, 'Search')}
+          {tool(p.bookmarked ? 'bookmark' : 'bookmark-outline', p.onBookmark, 'Bookmark', p.bookmarked ? theme.accent : theme.text)}
+          {tool('text', p.onDisplay, 'Display')}
         </View>
       </Animated.View>
     </>
@@ -110,8 +116,11 @@ const styles = StyleSheet.create({
     paddingTop: 12,
     borderTopWidth: StyleSheet.hairlineWidth,
   },
-  iconBtn: { padding: 8 },
-  title: { flex: 1, fontSize: 15, fontWeight: '600', marginHorizontal: 4 },
+  back: { padding: 8, width: 40 },
+  title: { flex: 1, fontSize: 15, fontWeight: '600', textAlign: 'center' },
+  tools: { flexDirection: 'row', justifyContent: 'space-around', marginTop: 10, paddingTop: 10, borderTopWidth: StyleSheet.hairlineWidth },
+  tool: { alignItems: 'center', minWidth: 64, paddingVertical: 2 },
+  toolLabel: { fontSize: 11, marginTop: 3 },
   chapter: { fontSize: 14, fontWeight: '600', textAlign: 'center' },
   slider: { alignSelf: 'stretch', height: 40 },
   infoRow: { flexDirection: 'row', justifyContent: 'space-between' },

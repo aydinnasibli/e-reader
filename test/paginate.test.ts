@@ -3,7 +3,19 @@ import type { Block } from '../src/engine/types';
 import type { Look } from '../src/reader/look';
 import { type Measure, lineRanges, pageOf, paginate } from '../src/reader/paginate';
 
-const look = (mt = 0, mb = 0): Look => ({ fontSize: 10, lineHeight: 10, textAlign: 'left', marginTop: mt, marginBottom: mb, paddingLeft: 0, prefix: '' });
+const look = (mt = 0, mb = 0): Look => ({
+  fontSize: 10,
+  lineHeight: 10,
+  font: 'serif',
+  weight: 'regular',
+  bold: false,
+  letterSpacing: 0,
+  textAlign: 'left',
+  marginTop: mt,
+  marginBottom: mb,
+  paddingLeft: 0,
+  prefix: '',
+});
 const text = (lines: number, len = 10): Measure => ({
   kind: 'text',
   lines: Array.from({ length: lines }, (_, i) => ({ start: i * len, end: (i + 1) * len, height: 10 })),

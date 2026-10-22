@@ -3,6 +3,13 @@
   "version": "1.0.0",
   "main": "expo-router/entry",
   "dependencies": {
+    "@expo-google-fonts/atkinson-hyperlegible": "^0.4.1",
+    "@expo-google-fonts/eb-garamond": "^0.4.3",
+    "@expo-google-fonts/literata": "^0.4.3",
+    "@expo-google-fonts/lora": "^0.4.2",
+    "@expo-google-fonts/merriweather": "^0.4.2",
+    "@expo-google-fonts/open-sans": "^0.4.2",
+    "@expo-google-fonts/pt-serif": "^0.4.1",
     "@expo/ui": "~57.0.26",
     "@expo/vector-icons": "^15.0.2",
     "@react-native-community/slider": "5.2.0",

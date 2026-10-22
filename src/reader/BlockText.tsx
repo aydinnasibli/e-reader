@@ -4,7 +4,7 @@ import { Text, type TextLayoutEvent, View } from 'react-native';
 import { type Block, type Run, sliceRuns } from '@/engine/types';
 import type { ReaderSettings, Theme } from '@/lib/settings';
 import type { BookData, ImageInfo } from './book';
-import { type Look, drawnRuns, lineHeightOf, lookOf, runTextStyle } from './look';
+import { type Look, baseTextStyle, drawnRuns, lineHeightOf, lookOf, runTextStyle } from './look';
 import { type Mark, applyMarks } from './marks';
 
 interface TextProps {
@@ -32,11 +32,11 @@ export const BlockText = memo(function BlockText({ block, look, theme, range, no
       textBreakStrategy="simple"
       onTextLayout={onTextLayout}
       style={{
+        ...baseTextStyle(look, block.k === 'pre'),
         color: theme.text,
         fontSize: look.fontSize,
         lineHeight: look.lineHeight,
-        fontFamily: look.fontFamily,
-        fontWeight: look.fontWeight,
+        letterSpacing: look.letterSpacing,
         textAlign: look.textAlign,
         marginTop: noTopMargin ? 0 : look.marginTop,
         marginBottom: noBottomMargin ? 0 : look.marginBottom,

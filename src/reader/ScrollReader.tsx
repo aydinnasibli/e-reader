@@ -162,7 +162,7 @@ export function ScrollReader({ book, settings, theme, start, startKey, version, 
           data={data}
           keyExtractor={(b) => String(b)}
           renderItem={renderItem}
-          extraData={[settings, marksFor]}
+          extraData={[settings, theme, marksFor]}
           contentContainerStyle={{ paddingTop: insets.top + 12, paddingBottom: insets.bottom + 40 }}
           maintainVisibleContentPosition={{ minIndexForVisible: 0 }}
           onEndReached={extendEnd}
