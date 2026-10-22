@@ -8,6 +8,8 @@ export interface Line {
   start: number;
   end: number;
   height: number;
+  /** Drawn width of the line, when the text engine reported it (for hit testing). */
+  w?: number;
 }
 
 export type Measure =
@@ -35,7 +37,7 @@ export interface Page {
  * drawn text. Engines may drop or add a trailing newline per line, so each
  * line is located by searching near where it should start.
  */
-export function lineRanges(full: string, lines: { text: string; height: number }[]): Line[] {
+export function lineRanges(full: string, lines: { text: string; height: number; width?: number }[]): Line[] {
   const out: Line[] = [];
   let pos = 0;
   for (let i = 0; i < lines.length; i++) {
@@ -48,7 +50,8 @@ export function lineRanges(full: string, lines: { text: string; height: number }
     }
     let end = i === lines.length - 1 ? full.length : Math.min(full.length, start + t.length);
     if (end < start) end = start;
-    out.push({ start, end, height: lines[i].height });
+    const w = lines[i].width;
+    out.push(w ? { start, end, height: lines[i].height, w } : { start, end, height: lines[i].height });
     pos = end;
   }
   return out;

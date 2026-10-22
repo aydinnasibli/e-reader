@@ -1,5 +1,7 @@
 // The "Display" panel: slides up over the bottom of the page and changes
-// reading settings live. Settings are global and saved immediately.
+// reading settings live. Settings are global and saved immediately. While a
+// slider is dragged the reader shows the text redrawn with each value
+// (onSlide); the value is saved, and pages laid out, when it is released.
 
 import Ionicons from '@expo/vector-icons/Ionicons';
 import Slider from '@react-native-community/slider';
@@ -32,14 +34,18 @@ const TABS: { key: Tab; label: string }[] = [
   { key: 'page', label: 'Page' },
 ];
 
+/** A slider moved (`done` false) or was released (`done` true). */
+export type SlideHandler = (patch: Partial<ReaderSettings>, done: boolean) => void;
+
 interface Props {
   visible: boolean;
   onClose(): void;
   settings: ReaderSettings;
   theme: Theme;
+  onSlide: SlideHandler;
 }
 
-export function DisplayPanel({ visible, onClose, settings, theme }: Props) {
+export function DisplayPanel({ visible, onClose, settings, theme, onSlide }: Props) {
   const insets = useSafeAreaInsets();
   const win = useWindowDimensions();
   const height = Math.min(460, Math.round(win.height * 0.5)) + insets.bottom;
@@ -96,8 +102,8 @@ export function DisplayPanel({ visible, onClose, settings, theme }: Props) {
           </Pressable>
         </View>
         <ScrollView contentContainerStyle={styles.body} showsVerticalScrollIndicator={false}>
-          {tab === 'text' && <TextTab s={settings} c={c} />}
-          {tab === 'spacing' && <SpacingTab s={settings} c={c} />}
+          {tab === 'text' && <TextTab s={settings} c={c} slide={onSlide} />}
+          {tab === 'spacing' && <SpacingTab s={settings} c={c} slide={onSlide} />}
           {tab === 'colors' && <ColorsTab s={settings} c={c} />}
           {tab === 'page' && <PageTab s={settings} c={c} />}
         </ScrollView>
@@ -108,7 +114,7 @@ export function DisplayPanel({ visible, onClose, settings, theme }: Props) {
 
 // ---------- tabs ----------
 
-function TextTab({ s, c }: { s: ReaderSettings; c: Theme }) {
+function TextTab({ s, c, slide }: { s: ReaderSettings; c: Theme; slide: SlideHandler }) {
   return (
     <>
       <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.fonts}>
@@ -138,12 +144,7 @@ function TextTab({ s, c }: { s: ReaderSettings; c: Theme }) {
         format={(v) => `${v}`}
         left={<Text style={{ color: c.text, fontSize: 14 }}>A</Text>}
         right={<Text style={{ color: c.text, fontSize: 24 }}>A</Text>}
-        onDone={(fontSize) => setSettings({ fontSize })}
-        preview={(v) => (
-          <Text numberOfLines={1} style={[fontFace(s.font, s.weight, false, false), { color: c.text, fontSize: v, textAlign: 'center' }]}>
-            The quick fox · Съешь ещё
-          </Text>
-        )}
+        onChange={(fontSize, done) => slide({ fontSize }, done)}
       />
       <Row c={c} label="Weight">
         <Segment c={c} value={s.weight} options={['regular', 'medium'] as const} render={(w) => (w === 'regular' ? 'Regular' : 'Bolder')} onPick={(weight) => setSettings({ weight })} />
@@ -169,13 +170,13 @@ function TextTab({ s, c }: { s: ReaderSettings; c: Theme }) {
   );
 }
 
-function SpacingTab({ s, c }: { s: ReaderSettings; c: Theme }) {
+function SpacingTab({ s, c, slide }: { s: ReaderSettings; c: Theme; slide: SlideHandler }) {
   return (
     <>
-      <SliderRow c={c} label="Line spacing" value={s.lineSpacing} min={LINE_SPACING.min} max={LINE_SPACING.max} step={0.05} format={(v) => v.toFixed(2)} onDone={(lineSpacing) => setSettings({ lineSpacing })} />
-      <SliderRow c={c} label="Letter spacing" value={s.letterSpacing} min={LETTER_SPACING.min} max={LETTER_SPACING.max} step={0.1} format={(v) => v.toFixed(1)} onDone={(letterSpacing) => setSettings({ letterSpacing })} />
-      <SliderRow c={c} label="Paragraph spacing" value={s.paraSpacing} min={PARA_SPACING.min} max={PARA_SPACING.max} step={0.05} format={(v) => `${v.toFixed(2)} lines`} onDone={(paraSpacing) => setSettings({ paraSpacing })} />
-      <SliderRow c={c} label="Margins" value={s.margin} min={MARGIN.min} max={MARGIN.max} step={2} format={(v) => `${v}`} onDone={(margin) => setSettings({ margin })} />
+      <SliderRow c={c} label="Line spacing" value={s.lineSpacing} min={LINE_SPACING.min} max={LINE_SPACING.max} step={0.05} format={(v) => v.toFixed(2)} onChange={(lineSpacing, done) => slide({ lineSpacing }, done)} />
+      <SliderRow c={c} label="Letter spacing" value={s.letterSpacing} min={LETTER_SPACING.min} max={LETTER_SPACING.max} step={0.1} format={(v) => v.toFixed(1)} onChange={(letterSpacing, done) => slide({ letterSpacing }, done)} />
+      <SliderRow c={c} label="Paragraph spacing" value={s.paraSpacing} min={PARA_SPACING.min} max={PARA_SPACING.max} step={0.05} format={(v) => `${v.toFixed(2)} lines`} onChange={(paraSpacing, done) => slide({ paraSpacing }, done)} />
+      <SliderRow c={c} label="Margins" value={s.margin} min={MARGIN.min} max={MARGIN.max} step={2} format={(v) => `${v}`} onChange={(margin, done) => slide({ margin }, done)} />
       <Pressable onPress={resetSettings} style={[styles.reset, { borderColor: c.border }]}>
         <Text style={{ color: c.text, fontSize: 15 }}>Reset text and spacing</Text>
       </Pressable>
@@ -326,10 +327,9 @@ function SliderRow({
   max,
   step,
   format,
-  onDone,
+  onChange,
   left,
   right,
-  preview,
 }: {
   c: Theme;
   label: string;
@@ -338,32 +338,38 @@ function SliderRow({
   max: number;
   step: number;
   format(v: number): string;
-  onDone(v: number): void;
+  onChange(v: number, done: boolean): void;
   left?: ReactNode;
   right?: ReactNode;
-  preview?(v: number): ReactNode;
 }) {
   const [live, setLive] = useState<number | null>(null);
   const shown = live ?? value;
+  const snap = (v: number) => Math.round(Math.round(v / step) * step * 1000) / 1000;
   return (
     <View style={styles.sliderBlock}>
       <View style={styles.sliderHead}>
         <Text style={[styles.label, { color: c.text }]}>{label}</Text>
         <Text style={{ color: c.muted, fontSize: 14 }}>{format(shown)}</Text>
       </View>
-      {preview && live !== null ? <View style={styles.preview}>{preview(live)}</View> : null}
       <View style={styles.sliderRow}>
         {left}
         <Slider
+          testID={`slider-${label}`}
           style={{ flex: 1, height: 36 }}
           minimumValue={min}
           maximumValue={max}
           step={step}
           value={value}
-          onValueChange={(v) => setLive(Math.round(v / step) * step)}
+          onValueChange={(v) => {
+            const n = snap(v);
+            // Sliders report every pixel; only pass on real changes.
+            if (n === live) return;
+            setLive(n);
+            onChange(n, false);
+          }}
           onSlidingComplete={(v) => {
             setLive(null);
-            onDone(Math.round(v / step) * step);
+            onChange(snap(v), true);
           }}
           minimumTrackTintColor={c.accent}
           maximumTrackTintColor={c.border}
@@ -404,7 +410,6 @@ const styles = StyleSheet.create({
   sliderBlock: { paddingTop: 10 },
   sliderHead: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'baseline' },
   sliderRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
-  preview: { paddingVertical: 6, minHeight: 40, justifyContent: 'center' },
   reset: { alignSelf: 'center', marginTop: 18, borderWidth: StyleSheet.hairlineWidth, borderRadius: 10, paddingHorizontal: 16, paddingVertical: 9 },
   themeGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 10, paddingVertical: 10 },
   themeSwatch: { width: 60, height: 56, borderRadius: 12, borderWidth: 2, alignItems: 'center', justifyContent: 'center' },

@@ -9,7 +9,7 @@ import { type Block, type Position, blockText } from '@/engine/types';
 import { addBookmark, highlightsByBlock, removeBookmark, useAnnotations } from '@/lib/annotations';
 import { getBook, loadManifest, reprocessBook, updateBook, useBookStatus, useLiveBook } from '@/lib/library';
 import { useFontReady } from '@/lib/fonts';
-import { useReaderTheme, useSettings } from '@/lib/settings';
+import { type ReaderSettings, setSettings, useReaderTheme, useSettings } from '@/lib/settings';
 import { ReadingTracker, charsPerMinute } from '@/lib/stats';
 import { BookData } from '@/reader/book';
 import { Chrome } from '@/reader/Chrome';
@@ -18,6 +18,7 @@ import { PageReader } from '@/reader/PageReader';
 import { ScrollReader } from '@/reader/ScrollReader';
 import { SelectionSheet, highlightColor } from '@/reader/SelectionSheet';
 import { DisplayPanel } from '@/reader/DisplayPanel';
+import { LivePreview } from '@/reader/LivePreview';
 import { NoteSheet } from '@/reader/NoteSheet';
 import { NavigatorSheet, SearchSheet } from '@/reader/Sheets';
 import { ErrorScreen } from '@/ui/ErrorScreen';
@@ -83,7 +84,7 @@ export default function ReaderScreen() {
   const [end, setEnd] = useState<Position | undefined>(undefined);
   const [chrome, setChrome] = useState(false);
   const [sheet, setSheet] = useState<'nav' | 'search' | 'display' | null>(null);
-  const [selection, setSelection] = useState<{ b: number; block: Block; chapter?: string } | null>(null);
+  const [selection, setSelection] = useState<{ b: number; block: Block; chapter?: string; at?: number } | null>(null);
   const [searchMark, setSearchMark] = useState<{ b: number; s: number; e: number } | null>(null);
   const [failed, setFailed] = useState<string | null>(null);
   const [note, setNote] = useState<string | null>(null);
@@ -147,6 +148,47 @@ export default function ReaderScreen() {
   }, []);
   const toggleChrome = useCallback(() => setChrome((c) => !c), []);
 
+  // Display sliders: `draft` holds the values being dragged, drawn by
+  // LivePreview. On release the values are saved and the preview stays until
+  // the reader has laid out pages with them (or a few seconds at most).
+  const [draft, setDraft] = useState<Partial<ReaderSettings> | null>(null);
+  const readyKey = useRef('');
+  const waitingFrom = useRef<string | null>(null);
+  const draftTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const endDraft = useCallback(() => {
+    waitingFrom.current = null;
+    if (draftTimer.current) clearTimeout(draftTimer.current);
+    setDraft(null);
+  }, []);
+  const onLayoutReady = useCallback(
+    (key: string) => {
+      readyKey.current = key;
+      if (waitingFrom.current !== null && key !== waitingFrom.current) endDraft();
+    },
+    [endDraft],
+  );
+  const onSlide = useCallback(
+    (patch: Partial<ReaderSettings>, done: boolean) => {
+      if (!done) {
+        if (draftTimer.current) clearTimeout(draftTimer.current);
+        waitingFrom.current = null;
+        setDraft((d) => ({ ...d, ...patch }));
+        return;
+      }
+      const changed = (Object.keys(patch) as (keyof ReaderSettings)[]).some((k) => patch[k] !== settings[k]);
+      setSettings(patch);
+      // Scroll mode redraws at once; page mode needs its new pages first.
+      if (!changed || settings.mode !== 'page') return endDraft();
+      waitingFrom.current = readyKey.current;
+      if (draftTimer.current) clearTimeout(draftTimer.current);
+      draftTimer.current = setTimeout(endDraft, 4000);
+    },
+    [settings, endDraft],
+  );
+  useEffect(() => () => {
+    if (draftTimer.current) clearTimeout(draftTimer.current);
+  }, []);
+
   // Highlights and the current search hit, as drawable marks per block.
   const marks = useMemo(() => {
     const m = new Map<number, Mark[]>();
@@ -158,12 +200,12 @@ export default function ReaderScreen() {
   const marksFor = useCallback((b: number) => marks.get(b), [marks]);
 
   const onLongPressBlock = useCallback(
-    (b: number) => {
+    (b: number, at?: number) => {
       const block = book?.block(b);
       if (!block || !block.r) return;
       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(() => {});
       setChrome(false);
-      setSelection({ b, block, chapter: book?.chapterAt(b)?.t });
+      setSelection({ b, block, chapter: book?.chapterAt(b)?.t, at });
     },
     [book],
   );
@@ -246,7 +288,9 @@ export default function ReaderScreen() {
         onLink={onLink}
         bookmarked={pageBookmarks.length > 0}
         footerRight={footerRight}
+        onLayoutReady={onLayoutReady}
       />
+      {draft ? <LivePreview book={book} settings={{ ...settings, ...draft }} theme={theme} pos={pos} /> : null}
       <Chrome
         visible={chrome && sheet !== 'display'}
         theme={theme}
@@ -272,6 +316,7 @@ export default function ReaderScreen() {
         }}
         settings={settings}
         theme={theme}
+        onSlide={onSlide}
       />
       <NoteSheet
         book={book}

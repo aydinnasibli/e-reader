@@ -5,6 +5,7 @@
 import { File, Paths } from 'expo-file-system';
 import { useSyncExternalStore } from 'react';
 import type { HighlightColor } from '@/ui/theme';
+import { cutRange } from './highlightRanges';
 import { readJson, writeJson } from './storage';
 
 export interface Bookmark {
@@ -106,10 +107,16 @@ export function removeBookmark(bookId: string, id: string) {
 export function addHighlight(bookId: string, h: Omit<Highlight, 'id' | 'createdAt'>): Highlight {
   const a = getAnnotations(bookId);
   const full = { ...h, id: newId(), createdAt: Date.now() };
-  // A new highlight replaces any it overlaps in the same block.
-  const rest = a.highlights.filter((x) => !(x.b === h.b && x.s < h.e && h.s < x.e));
+  // The new highlight takes over its range; older ones keep the parts outside it.
+  const rest = cutRange(a.highlights, h.b, h.s, h.e, newId);
   save(bookId, { ...a, highlights: [...rest, full].sort(byPosition) });
   return full;
+}
+
+/** Remove highlighting from [s, e) of a block, trimming or splitting highlights. */
+export function clearHighlightRange(bookId: string, b: number, s: number, e: number) {
+  const a = getAnnotations(bookId);
+  save(bookId, { ...a, highlights: cutRange(a.highlights, b, s, e, newId).sort(byPosition) });
 }
 
 export function updateHighlight(bookId: string, id: string, patch: Partial<Pick<Highlight, 'color' | 'note'>>) {

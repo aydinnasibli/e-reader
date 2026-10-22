@@ -3,14 +3,16 @@
 // whole book.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { FlatList, Pressable, StyleSheet, Text, View, type ViewToken, useWindowDimensions } from 'react-native';
+import { FlatList, Pressable, StyleSheet, Text, type TextLayoutEvent, View, type ViewToken, useWindowDimensions } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import type { Block, Position } from '@/engine/types';
 import type { ReaderSettings, Theme } from '@/lib/settings';
 import type { BookData } from './book';
 import { BlockImage, BlockText, Spacer } from './BlockText';
-import { lookOf } from './look';
+import { hitText } from './hitTest';
+import { drawn, lookOf, toBlock } from './look';
 import type { Mark } from './marks';
+import { type Line, lineRanges } from './paginate';
 
 const MAX_WINDOW_CHUNKS = 8;
 
@@ -24,7 +26,7 @@ interface Props {
   onPosition(pos: Position): void;
   onTap(): void;
   marksFor?(b: number): Mark[] | undefined;
-  onLongPressBlock?(b: number): void;
+  onLongPressBlock?(b: number, at?: number): void;
   onLink?(target: string): void;
   footerRight?: string;
 }
@@ -140,6 +142,35 @@ export function ScrollReader({ book, settings, theme, start, startKey, version, 
     [onLink],
   );
 
+  // Line layout of each shown paragraph, and its view, for finding the word
+  // under a long-press.
+  const lines = useRef(new Map<number, Line[]>()).current;
+  const views = useRef(new Map<number, View>()).current;
+  // One stable callback per paragraph (BlockText is memoized); it reads the
+  // current settings when called, since a new layout reports new lines.
+  const settingsRef = useRef(settings);
+  settingsRef.current = settings;
+  const onLayoutFns = useRef(new Map<number, (e: TextLayoutEvent) => void>()).current;
+  const layoutFn = (b: number, blk: Block) => {
+    let f = onLayoutFns.get(b);
+    if (!f) {
+      f = (e) => lines.set(b, lineRanges(drawn(blk, lookOf(blk, settingsRef.current, book.manifest?.lang)).text, e.nativeEvent.lines));
+      onLayoutFns.set(b, f);
+    }
+    return f;
+  };
+  const longPress = (b: number, blk: Block, pageX: number, pageY: number) => {
+    const look = lookOf(blk, settings, book.manifest?.lang);
+    const ls = lines.get(b);
+    const view = views.get(b);
+    if (!blk.r || !ls || !view) return onLongPressBlock?.(b);
+    view.measureInWindow((x, y) => {
+      const d = drawn(blk, look);
+      const at = hitText(d.text, ls, 0, d.text.length, pageX - x - settings.margin - look.paddingLeft, pageY - y - look.marginTop, width - look.paddingLeft, look.textAlign === 'justify');
+      onLongPressBlock?.(b, toBlock(d, at));
+    });
+  };
+
   const renderItem = ({ item: b }: { item: number }) => {
     const c = book.chunkOf(b);
     const blk = blocks.get(c)?.[b - book.chunkStart(c)];
@@ -147,9 +178,24 @@ export function ScrollReader({ book, settings, theme, start, startKey, version, 
     let content;
     if (blk.k === 'img') content = <BlockImage book={book} imageKey={blk.s!} width={width} />;
     else if (blk.k === 'sp' || blk.k === 'hr') content = <Spacer block={blk} settings={settings} theme={theme} />;
-    else content = <BlockText block={blk} look={lookOf(blk, settings, book.manifest?.lang)} theme={theme} marks={marksFor?.(b)} onLink={linkPressed} />;
+    else {
+      const look = lookOf(blk, settings, book.manifest?.lang);
+      content = <BlockText block={blk} look={look} theme={theme} marks={marksFor?.(b)} onLink={linkPressed} onTextLayout={layoutFn(b, blk)} />;
+    }
     return (
-      <Pressable onLongPress={() => onLongPressBlock?.(b)} delayLongPress={450} style={{ paddingHorizontal: settings.margin }}>
+      <Pressable
+        ref={(v) => {
+          if (v) views.set(b, v);
+          else {
+            // Scrolled away: forget it, so long books don't pile up entries.
+            views.delete(b);
+            lines.delete(b);
+            onLayoutFns.delete(b);
+          }
+        }}
+        onLongPress={(e) => longPress(b, blk, e.nativeEvent.pageX, e.nativeEvent.pageY)}
+        delayLongPress={450}
+        style={{ paddingHorizontal: settings.margin }}>
         {content}
       </Pressable>
     );

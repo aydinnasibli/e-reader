@@ -48,10 +48,16 @@
     "react-native-worklets": "0.10.1"
   },
   "devDependencies": {
+    "@react-native/jest-preset": "^0.86.3",
+    "@testing-library/react-native": "^13.3.3",
+    "@types/jest": "^29.5.14",
     "@types/node": "^22.20.5",
     "@types/react": "~19.2.0",
     "eslint": "^9.0.0",
     "eslint-config-expo": "~57.0.2",
+    "jest": "^29.7.0",
+    "jest-expo": "~57.0.6",
+    "react-test-renderer": "19.2.3",
     "typescript": "~6.0.3",
     "vitest": "^5.0.5"
   },
@@ -61,9 +67,10 @@
     "ios": "expo start --ios",
     "web": "expo start --web",
     "lint": "expo lint",
-    "test": "vitest run",
+    "test": "vitest run && jest",
     "bench": "node bench/run.mjs",
-    "ios:device": "expo run:ios --device --configuration Release"
+    "ios:device": "expo run:ios --device --configuration Release",
+    "test:ui": "jest"
   },
   "private": true,
   "allowScripts": {

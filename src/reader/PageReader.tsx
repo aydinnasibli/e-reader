@@ -11,12 +11,22 @@ import type { ReaderSettings, Theme } from '@/lib/settings';
 import type { BookData } from './book';
 import { BlockImage, BlockText, Spacer } from './BlockText';
 import { Measurer } from './Measurer';
+import { hitText } from './hitTest';
 import { type Look, drawn, layoutKeyOf, toBlock, toDrawn } from './look';
 import type { Mark } from './marks';
-import { type Measure, type Page, pageOf, paginate } from './paginate';
+import { type Measure, type Page, type PageItem, pageOf, paginate } from './paginate';
 
 export const HEADER = 30;
 export const FOOTER = 30;
+
+/** Size of a page (one column of a spread) for a window, safe-area insets and margin. */
+export function pageFrame(win: { width: number; height: number }, insets: { top: number; bottom: number }, margin: number) {
+  // Landscape on a wide screen: two pages side by side, turned together.
+  const spread = win.width > win.height && win.width >= 640;
+  const width = spread ? Math.floor((win.width - margin * 3) / 2) : win.width - margin * 2;
+  const pageHeight = Math.floor(win.height - insets.top - insets.bottom - HEADER - FOOTER);
+  return { spread, width, pageHeight };
+}
 
 interface Props {
   book: BookData;
@@ -32,13 +42,15 @@ interface Props {
   onTap(): void;
   /** Highlights and search hits for a block. */
   marksFor?(b: number): Mark[] | undefined;
-  /** Long-press on a paragraph. */
-  onLongPressBlock?(b: number): void;
+  /** Long-press on a paragraph, with the character offset pressed (when known). */
+  onLongPressBlock?(b: number, at?: number): void;
   /** Tap on a footnote reference. */
   onLink?(target: string): void;
   bookmarked?: boolean;
   /** Small text shown at the bottom right (e.g. time left). */
   footerRight?: string;
+  /** Called with the layout key once a page of that layout is on screen. */
+  onLayoutReady?(key: string): void;
 }
 
 interface Laid {
@@ -55,18 +67,15 @@ interface Cur {
   page: number | null;
 }
 
-export function PageReader({ book, settings, theme, start, startKey, version, onPosition, onTap, marksFor, onLongPressBlock, onLink, bookmarked, footerRight }: Props) {
+export function PageReader({ book, settings, theme, start, startKey, version, onPosition, onTap, marksFor, onLongPressBlock, onLink, bookmarked, footerRight, onLayoutReady }: Props) {
   const win = useWindowDimensions();
   const liveInsets = useSafeAreaInsets();
   // Showing/hiding the status bar can change the insets on some iPhones; that
   // must not re-paginate the book, so they are only re-read when the window changes.
   const insets = useMemo(() => liveInsets, [win.width, win.height]); // eslint-disable-line react-hooks/exhaustive-deps
-  // Landscape on a wide screen: two pages side by side, turned together.
-  const spread = win.width > win.height && win.width >= 640;
-  const width = spread ? Math.floor((win.width - settings.margin * 3) / 2) : win.width - settings.margin * 2;
+  const { spread, width, pageHeight } = pageFrame(win, insets, settings.margin);
   const step = spread ? 2 : 1;
   const spreadStart = (p: number) => (spread ? p - (p % 2) : p);
-  const pageHeight = Math.floor(win.height - insets.top - insets.bottom - HEADER - FOOTER);
   const layoutKey = `${width}|${pageHeight}|${layoutKeyOf(settings)}`;
 
   // Laid-out chunks for the current layout.
@@ -216,20 +225,26 @@ export function PageReader({ book, settings, theme, start, startKey, version, on
   }, [win.width]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Where each item of each visible page sits, for long-press hit testing.
-  const itemBoxes = useRef(new Map<string, { b: number; y: number; h: number }>());
+  const itemBoxes = useRef(new Map<string, { y: number; h: number; it: PageItem; laid: Laid }>());
   const viewportTop = useRef(0);
   const viewportRef = useRef<View>(null);
-  /** The block at a screen height within one page column (`column` is that column's key). */
-  const blockAt = (pageY: number, column: string): number | null => {
+  /** The block and character under a point within one page column (`column` is that column's key). */
+  const longPress = (pageX: number, pageY: number, column: string) => {
     const y = pageY - viewportTop.current;
     for (const [k, box] of itemBoxes.current) {
-      if (k.startsWith(column + '|') && y >= box.y && y < box.y + box.h) return box.b;
+      if (!k.startsWith(column + '|') || y < box.y || y >= box.y + box.h) continue;
+      const { it, laid: l } = box;
+      const i = it.b - l.first;
+      const blk = l.blocks[i];
+      const m = l.measures[i];
+      const look = l.looks[i];
+      if (!blk || m?.kind !== 'text') return onLongPressBlock?.(it.b);
+      const top = it.top || it.s > 0 ? 0 : look.marginTop;
+      const left = settings.margin + (column.endsWith(':R') ? width + settings.margin : 0) + look.paddingLeft;
+      const d = drawn(blk, look);
+      const at = hitText(d.text, m.lines, it.s, it.e, pageX - left, y - box.y - top, width - look.paddingLeft, look.textAlign === 'justify');
+      return onLongPressBlock?.(it.b, toBlock(d, at));
     }
-    return null;
-  };
-  const longPress = (pageY: number, column: string) => {
-    const b = blockAt(pageY, column);
-    if (b !== null) onLongPressBlock?.(b);
   };
 
   // The pan responder is created once; it reads the latest values from here.
@@ -294,7 +309,7 @@ export function PageReader({ book, settings, theme, start, startKey, version, on
         key={colKey}
         style={spread ? { width } : styles.fill}
         onPress={(e) => tapPage(e.nativeEvent.pageX)}
-        onLongPress={(e) => longPress(e.nativeEvent.pageY, colKey)}
+        onLongPress={(e) => longPress(e.nativeEvent.pageX, e.nativeEvent.pageY, colKey)}
         delayLongPress={450}>
         {page ? renderItems(data.laid, page, colKey) : null}
       </Pressable>
@@ -336,7 +351,7 @@ export function PageReader({ book, settings, theme, start, startKey, version, on
       return (
         <View
           key={`${it.b}:${it.s}`}
-          onLayout={(e) => itemBoxes.current.set(boxKey, { b: it.b, y: e.nativeEvent.layout.y, h: e.nativeEvent.layout.height })}>
+          onLayout={(e) => itemBoxes.current.set(boxKey, { y: e.nativeEvent.layout.y, h: e.nativeEvent.layout.height, it, laid: l })}>
           {content}
         </View>
       );
@@ -344,6 +359,10 @@ export function PageReader({ book, settings, theme, start, startKey, version, on
   };
 
   const current = cur.page !== null && curLaid && curLaid.pages[cur.page] ? { laid: curLaid, index: cur.page } : undefined;
+  const ready = !!current;
+  useEffect(() => {
+    if (ready) onLayoutReady?.(layoutKey);
+  }, [ready, layoutKey]); // eslint-disable-line react-hooks/exhaustive-deps
   // While a new layout is being measured (settings changed, or a jump), keep
   // showing the last page instead of a blank one.
   const lastShown = useRef<typeof current>(undefined);

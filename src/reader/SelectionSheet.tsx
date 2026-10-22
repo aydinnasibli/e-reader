@@ -1,6 +1,7 @@
-// Long-press a paragraph to get here. Tap a word to start a selection and
-// another to extend it, then highlight, annotate, copy, look up, translate or
-// share. Works the same on both platforms and in Expo Go.
+// Long-press a word to get here, with that word selected. Tap other words to
+// extend the selection (or a word inside it to start over from there), then
+// highlight, annotate, copy, look up, translate or share. Works the same on
+// both platforms and in Expo Go.
 
 import Ionicons from '@expo/vector-icons/Ionicons';
 import * as Clipboard from 'expo-clipboard';
@@ -10,34 +11,21 @@ import * as WebBrowser from 'expo-web-browser';
 import { useMemo, useState } from 'react';
 import { Pressable, ScrollView, Share, StyleSheet, Text, View } from 'react-native';
 import { type Block, blockText } from '@/engine/types';
-import { type Highlight, addHighlight, removeHighlight, updateHighlight, useAnnotations } from '@/lib/annotations';
+import { type Highlight, addHighlight, clearHighlightRange, updateHighlight, useAnnotations } from '@/lib/annotations';
 import type { Theme } from '@/lib/settings';
 import { showPrompt } from '@/ui/dialogs';
 import { Sheet } from '@/ui/Sheet';
 import { HIGHLIGHT_COLORS, type HighlightColor } from '@/ui/theme';
+import { type Sel, tapWord, tokenize, tokensFor, wordAt } from './selection';
 
 interface Props {
   bookId: string;
   bookTitle: string;
   lang?: string;
-  /** Global block index and the block itself; null when closed. */
-  target: { b: number; block: Block; chapter?: string } | null;
+  /** Global block index, the block, and the character pressed; null when closed. */
+  target: { b: number; block: Block; chapter?: string; at?: number } | null;
   theme: Theme;
   onClose(): void;
-}
-
-interface Token {
-  text: string;
-  start: number;
-  word: boolean;
-}
-
-function tokenize(text: string): Token[] {
-  const out: Token[] = [];
-  const re = /\s+|[^\s]+/g;
-  let m: RegExpExecArray | null;
-  while ((m = re.exec(text))) out.push({ text: m[0], start: m.index, word: !/^\s/.test(m[0]) });
-  return out;
 }
 
 export function highlightColor(color: HighlightColor, dark: boolean) {
@@ -48,38 +36,43 @@ export function SelectionSheet({ bookId, bookTitle, lang, target, theme, onClose
   const ann = useAnnotations(bookId);
   const text = useMemo(() => (target ? blockText(target.block) : ''), [target]);
   const tokens = useMemo(() => tokenize(text), [text]);
-  const [sel, setSel] = useState<{ a: number; z: number; taps: number } | null>(null);
+  // Start with the long-pressed word selected.
+  const initialSel = (): Sel | null => {
+    if (!target || target.at === undefined) return null;
+    const i = wordAt(tokens, target.at);
+    return i < 0 ? null : { a: i, z: i };
+  };
+  const [kept, setSel] = useState<Sel | null>(initialSel);
   const [lastTarget, setLastTarget] = useState(target);
+  let sel = kept;
   if (target !== lastTarget) {
+    // A new paragraph (or the sheet closing). The state update applies on the
+    // next render; this one must not use the old selection with the new text.
+    sel = initialSel();
     setLastTarget(target);
-    setSel(null);
+    setSel(sel);
   }
+  if (sel && !(tokens[sel.a] && tokens[sel.z])) sel = null;
 
   const highlights = target ? ann.highlights.filter((h) => h.b === target.b) : [];
-  const range: [number, number] | null = sel
-    ? [tokens[sel.a].start, tokens[sel.z].start + tokens[sel.z].text.length]
-    : null;
-  const selectedText = range ? text.slice(range[0], range[1]) : text;
-  // The highlight the selection sits in, if any.
-  const existing: Highlight | undefined = range
-    ? highlights.find((h) => h.s <= range[0] && range[1] <= h.e)
-    : undefined;
+  // Nothing selected means the whole paragraph.
+  const range: [number, number] = sel ? [tokens[sel.a].start, tokens[sel.z].start + tokens[sel.z].text.length] : [0, text.length];
+  const selectedText = text.slice(range[0], range[1]);
+  // A highlight that is exactly the selection: colours and notes edit it.
+  const exact: Highlight | undefined = highlights.find((h) => h.s === range[0] && h.e === range[1]);
+  // Any highlighting inside the selection, which "Remove" clears.
+  const touched = highlights.some((h) => h.s < range[1] && range[0] < h.e);
+  // The highlight the selection sits inside, offered as a quick selection.
+  const around = exact ? undefined : highlights.find((h) => h.s <= range[0] && range[1] <= h.e);
 
   const tap = (i: number) => {
     if (!tokens[i].word) return;
     Haptics.selectionAsync().catch(() => {});
-    // Tapping inside a highlight with nothing selected selects that highlight.
-    const at = tokens[i].start;
-    const h = highlights.find((x) => x.s <= at && at < x.e);
-    if (!sel && h) {
-      const a = tokens.findIndex((t) => t.start + t.text.length > h.s && t.word);
-      let z = a;
-      for (let k = a; k < tokens.length && tokens[k].start < h.e; k++) if (tokens[k].word) z = k;
-      setSel({ a, z, taps: 2 });
-      return;
-    }
-    if (!sel || sel.taps >= 2) setSel({ a: i, z: i, taps: 1 });
-    else setSel({ a: Math.min(sel.a, i), z: Math.max(sel.z, i), taps: 2 });
+    setSel(tapWord(sel, i));
+  };
+  const selectRange = (s: number, e: number) => {
+    Haptics.selectionAsync().catch(() => {});
+    setSel(tokensFor(tokens, s, e));
   };
 
   const close = (then?: () => void) => {
@@ -90,9 +83,9 @@ export function SelectionSheet({ bookId, bookTitle, lang, target, theme, onClose
   const applyColor = (color: HighlightColor) => {
     if (!target) return;
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {});
-    if (existing) updateHighlight(bookId, existing.id, { color });
+    if (exact) updateHighlight(bookId, exact.id, { color });
     else {
-      const [s, e] = range ?? [0, text.length];
+      const [s, e] = range;
       addHighlight(bookId, { b: target.b, s, e, color, text: text.slice(s, e), chapter: target.chapter });
     }
     close();
@@ -101,8 +94,8 @@ export function SelectionSheet({ bookId, bookTitle, lang, target, theme, onClose
   const note = () => {
     if (!target) return;
     const t = target;
-    const [s, e] = range ?? [0, text.length];
-    const ex = existing;
+    const [s, e] = range;
+    const ex = exact;
     close(() =>
       showPrompt(ex?.note ? 'Edit note' : 'Add note', {
         initial: ex?.note ?? '',
@@ -145,12 +138,18 @@ export function SelectionSheet({ bookId, bookTitle, lang, target, theme, onClose
   return (
     <Sheet visible={!!target} onClose={() => close()} colors={sheetColors}>
       <Text style={[styles.hint, { color: theme.muted }]}>
-        {sel ? (sel.taps === 1 ? 'Tap another word to extend the selection' : 'Selection ready') : 'Tap a word to select, or use the whole paragraph'}
+        {sel ? 'Tap words to extend the selection, or a selected word to start over' : 'Whole paragraph selected. Tap a word to select it instead'}
       </Text>
+      <View style={styles.chips}>
+        {sel ? (
+          <Chip label="Whole paragraph" onPress={() => setSel(null)} theme={theme} />
+        ) : null}
+        {around ? <Chip label="Select highlight" onPress={() => selectRange(around.s, around.e)} theme={theme} /> : null}
+      </View>
       <ScrollView style={styles.textBox} contentContainerStyle={styles.textPad}>
         <Text style={[styles.text, { color: theme.text }]}>
           {tokens.map((t, i) => {
-            const inSel = sel && i >= sel.a && i <= sel.z;
+            const inSel = sel ? i >= sel.a && i <= sel.z : false;
             const h = highlights.find((x) => x.s <= t.start && t.start < x.e);
             const bg = inSel ? selBg : h ? highlightColor(h.color, theme.dark) : undefined;
             return (
@@ -169,14 +168,14 @@ export function SelectionSheet({ bookId, bookTitle, lang, target, theme, onClose
             accessibilityLabel={`Highlight ${col}`}
             style={[
               styles.dot,
-              { backgroundColor: highlightColor(col, theme.dark), borderColor: existing?.color === col ? theme.text : 'transparent' },
+              { backgroundColor: highlightColor(col, theme.dark), borderColor: exact?.color === col ? theme.text : 'transparent' },
             ]}
           />
         ))}
-        {existing ? (
+        {touched && target ? (
           <Pressable
             onPress={() => {
-              removeHighlight(bookId, existing.id);
+              clearHighlightRange(bookId, target.b, range[0], range[1]);
               close();
             }}
             style={styles.dotBtn}
@@ -186,13 +185,21 @@ export function SelectionSheet({ bookId, bookTitle, lang, target, theme, onClose
         ) : null}
       </View>
       <View style={[styles.actions, { borderColor: theme.border }]}>
-        <Action icon="create-outline" label={existing?.note ? 'Edit note' : 'Note'} onPress={note} theme={theme} />
+        <Action icon="create-outline" label={exact?.note ? 'Edit note' : 'Note'} onPress={note} theme={theme} />
         <Action icon="copy-outline" label="Copy" onPress={copy} theme={theme} />
         <Action icon="book-outline" label="Look up" onPress={lookUp} theme={theme} />
         <Action icon="language-outline" label="Translate" onPress={translate} theme={theme} />
         <Action icon="share-outline" label="Share" onPress={share} theme={theme} />
       </View>
     </Sheet>
+  );
+}
+
+function Chip({ label, onPress, theme }: { label: string; onPress(): void; theme: Theme }) {
+  return (
+    <Pressable onPress={onPress} style={({ pressed }) => [styles.chip, { borderColor: theme.border, opacity: pressed ? 0.5 : 1 }]}>
+      <Text style={{ color: theme.text, fontSize: 13 }}>{label}</Text>
+    </Pressable>
   );
 }
 
@@ -207,6 +214,8 @@ function Action({ icon, label, onPress, theme }: { icon: keyof typeof Ionicons.g
 
 const styles = StyleSheet.create({
   hint: { fontSize: 13, paddingHorizontal: 20, paddingBottom: 6 },
+  chips: { flexDirection: 'row', gap: 8, paddingHorizontal: 20, paddingBottom: 8 },
+  chip: { borderWidth: StyleSheet.hairlineWidth, borderRadius: 14, paddingHorizontal: 12, paddingVertical: 5 },
   textBox: { maxHeight: 260, marginHorizontal: 12 },
   textPad: { paddingHorizontal: 8, paddingBottom: 8 },
   text: { fontSize: 18, lineHeight: 28 },

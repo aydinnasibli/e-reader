@@ -45,7 +45,7 @@ src/engine/   format conversion (EPUB, FB2, TXT), no React; runs in Node for tes
 src/lib/      storage, library and settings
 src/reader/   page and scroll readers, pagination, menus
 src/app/      screens (Expo Router)
-test/         unit tests (vitest)
+test/         unit tests (vitest); test/ui/ screen tests (jest + React Native Testing Library)
 bench/        stress benchmark for huge books
 ```
 
@@ -54,7 +54,7 @@ bench/        stress benchmark for huge books
 ```sh
 npx tsc --noEmit   # typecheck
 npx expo lint      # lint
-npm test           # unit tests
+npm test           # unit tests and screen tests
 ```
 
 ### Stress benchmark
