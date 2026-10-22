@@ -238,6 +238,15 @@ function PageTab({ s, c }: { s: ReaderSettings; c: Theme }) {
           onPick={(pageTurn) => setSettings({ pageTurn })}
         />
       </Row>
+      <Row c={c} label="Rotation">
+        <Segment
+          c={c}
+          value={s.rotation}
+          options={['auto', 'portrait', 'landscape'] as const}
+          render={(r) => (r === 'auto' ? 'Auto' : r === 'portrait' ? 'Portrait' : 'Landscape')}
+          onPick={(rotation) => setSettings({ rotation })}
+        />
+      </Row>
       <Row c={c} label="Tap left side to go forward">
         <Switch value={s.tapForward} onValueChange={(tapForward) => setSettings({ tapForward })} />
       </Row>

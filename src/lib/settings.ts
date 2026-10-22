@@ -35,6 +35,8 @@ export interface ReaderSettings {
   pageTurn: PageTurn;
   /** Tapping either side goes forward (swipe to go back). */
   tapForward: boolean;
+  /** Screen rotation while reading. Landscape shows two pages side by side. */
+  rotation: 'auto' | 'portrait' | 'landscape';
 }
 
 export interface Theme {
@@ -86,6 +88,7 @@ const DEFAULTS: ReaderSettings = {
   hyphenate: true,
   pageTurn: 'slide',
   tapForward: false,
+  rotation: 'auto',
 };
 
 const file = () => new File(Paths.document, 'settings.json');

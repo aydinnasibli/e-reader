@@ -61,7 +61,11 @@ export function PageReader({ book, settings, theme, start, startKey, version, on
   // Showing/hiding the status bar can change the insets on some iPhones; that
   // must not re-paginate the book, so they are only re-read when the window changes.
   const insets = useMemo(() => liveInsets, [win.width, win.height]); // eslint-disable-line react-hooks/exhaustive-deps
-  const width = win.width - settings.margin * 2;
+  // Landscape on a wide screen: two pages side by side, turned together.
+  const spread = win.width > win.height && win.width >= 640;
+  const width = spread ? Math.floor((win.width - settings.margin * 3) / 2) : win.width - settings.margin * 2;
+  const step = spread ? 2 : 1;
+  const spreadStart = (p: number) => (spread ? p - (p % 2) : p);
   const pageHeight = Math.floor(win.height - insets.top - insets.bottom - HEADER - FOOTER);
   const layoutKey = `${width}|${pageHeight}|${layoutKeyOf(settings)}`;
 
@@ -123,8 +127,8 @@ export function PageReader({ book, settings, theme, start, startKey, version, on
       const at = blk && t.pos.o > 0 ? toDrawn(drawn(blk, curLaid.looks[k]), t.pos.o) : 0;
       page = pageOf(curLaid.pages, t.pos.b, at);
     }
-    setCur({ chunk: cur.chunk, page });
-  }, [cur, curLaid]);
+    setCur({ chunk: cur.chunk, page: spreadStart(page) });
+  }, [cur, curLaid]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Report the reading position.
   useEffect(() => {
@@ -137,24 +141,24 @@ export function PageReader({ book, settings, theme, start, startKey, version, on
       return blk ? toBlock(drawn(blk, curLaid.looks[k]), i) : 0;
     };
     const pos = { b: item.b, o: bookOffset(item.b, item.s) };
-    const items = curLaid.pages[cur.page].items;
+    const items = (curLaid.pages[cur.page + step - 1] ?? curLaid.pages[cur.page]).items;
     const last = items[items.length - 1];
     lastPos.current = pos;
     onPosition(pos, { b: last.b, o: bookOffset(last.b, last.e) });
-  }, [cur, curLaid, onPosition]);
+  }, [cur, curLaid, onPosition, step]);
 
   /** The page one step away, or why there isn't one. */
-  const neighbour = (dir: 1 | -1): { cur: Cur; pageData?: { laid: Laid; page: Page } } | 'end' | 'processing' | null => {
+  const neighbour = (dir: 1 | -1): { cur: Cur; pageData?: { laid: Laid; index: number } } | 'end' | 'processing' | null => {
     if (cur.page === null || !curLaid) return null;
-    const p = cur.page + dir;
-    if (p >= 0 && p < curLaid.pages.length) return { cur: { chunk: cur.chunk, page: p }, pageData: { laid: curLaid, page: curLaid.pages[p] } };
+    const p = cur.page + dir * step;
+    if (p >= 0 && p < curLaid.pages.length) return { cur: { chunk: cur.chunk, page: p }, pageData: { laid: curLaid, index: p } };
     const c = cur.chunk + dir;
     if (c < 0) return 'end';
     if (c >= book.chunkCount) return book.complete ? 'end' : 'processing';
     const l = laid.get(c);
     if (!l) return { cur: { chunk: c, page: null } };
-    const np = dir > 0 ? 0 : l.pages.length - 1;
-    return { cur: { chunk: c, page: np }, pageData: { laid: l, page: l.pages[np] } };
+    const np = dir > 0 ? 0 : spreadStart(l.pages.length - 1);
+    return { cur: { chunk: c, page: np }, pageData: { laid: l, index: np } };
   };
 
   // ---- gestures and the slide animation ----
@@ -215,16 +219,16 @@ export function PageReader({ book, settings, theme, start, startKey, version, on
   const itemBoxes = useRef(new Map<string, { b: number; y: number; h: number }>());
   const viewportTop = useRef(0);
   const viewportRef = useRef<View>(null);
-  const curKeyRef = useRef('');
-  const blockAt = (pageY: number): number | null => {
+  /** The block at a screen height within one page column (`column` is that column's key). */
+  const blockAt = (pageY: number, column: string): number | null => {
     const y = pageY - viewportTop.current;
     for (const [k, box] of itemBoxes.current) {
-      if (k.startsWith(curKeyRef.current + '|') && y >= box.y && y < box.y + box.h) return box.b;
+      if (k.startsWith(column + '|') && y >= box.y && y < box.y + box.h) return box.b;
     }
     return null;
   };
-  const longPress = (pageY: number) => {
-    const b = blockAt(pageY);
+  const longPress = (pageY: number, column: string) => {
+    const b = blockAt(pageY, column);
     if (b !== null) onLongPressBlock?.(b);
   };
 
@@ -276,7 +280,8 @@ export function PageReader({ book, settings, theme, start, startKey, version, on
 
   // ---- drawing ----
 
-  const renderPage = (data: { laid: Laid; page: Page } | undefined, placeholder?: string, key = '') => {
+  /** One page view: a single page, or two pages side by side in a spread. */
+  const renderPage = (data: { laid: Laid; index: number } | undefined, placeholder?: string, key = '') => {
     if (!data) {
       return (
         <View style={styles.center}>
@@ -284,7 +289,26 @@ export function PageReader({ book, settings, theme, start, startKey, version, on
         </View>
       );
     }
-    const { laid: l, page } = data;
+    const column = (page: Page | undefined, colKey: string) => (
+      <Pressable
+        key={colKey}
+        style={spread ? { width } : styles.fill}
+        onPress={(e) => tapPage(e.nativeEvent.pageX)}
+        onLongPress={(e) => longPress(e.nativeEvent.pageY, colKey)}
+        delayLongPress={450}>
+        {page ? renderItems(data.laid, page, colKey) : null}
+      </Pressable>
+    );
+    if (!spread) return column(data.laid.pages[data.index], key);
+    return (
+      <View style={[styles.row, { gap: settings.margin }]}>
+        {column(data.laid.pages[data.index], `${key}:L`)}
+        {column(data.laid.pages[data.index + 1], `${key}:R`)}
+      </View>
+    );
+  };
+
+  const renderItems = (l: Laid, page: Page, key: string) => {
     return page.items.map((it, idx) => {
       const k = it.b - l.first;
       const blk = l.blocks[k];
@@ -319,7 +343,7 @@ export function PageReader({ book, settings, theme, start, startKey, version, on
     });
   };
 
-  const current = cur.page !== null && curLaid ? { laid: curLaid, page: curLaid.pages[cur.page] } : undefined;
+  const current = cur.page !== null && curLaid && curLaid.pages[cur.page] ? { laid: curLaid, index: cur.page } : undefined;
   // While a new layout is being measured (settings changed, or a jump), keep
   // showing the last page instead of a blank one.
   const lastShown = useRef<typeof current>(undefined);
@@ -338,16 +362,15 @@ export function PageReader({ book, settings, theme, start, startKey, version, on
   const prevKey = pageKey(prev);
   const nextKey = pageKey(next);
   const curKey = cur.page === null ? `pending:${cur.chunk}` : `p:${cur.chunk}:${cur.page}`;
-  curKeyRef.current = curKey;
   if (prevKey && prev !== 'end' && prev)
     strip.push({ key: prevKey, at: slot - 1, content: prev === 'processing' ? renderPage(undefined, processingMsg) : renderPage(prev.pageData, undefined, prevKey) });
   strip.push({ key: curKey, at: slot, content: renderPage(shown, undefined, curKey) });
   if (nextKey && next !== 'end' && next)
     strip.push({ key: nextKey, at: slot + 1, content: next === 'processing' ? renderPage(undefined, processingMsg) : renderPage(next.pageData, undefined, nextKey) });
   // Forget boxes of pages that are no longer on the strip.
-  for (const k of itemBoxes.current.keys()) if (!strip.some((p) => k.startsWith(p.key + '|'))) itemBoxes.current.delete(k);
+  for (const k of itemBoxes.current.keys()) if (!strip.some((p) => k.startsWith(p.key + '|') || k.startsWith(p.key + ':'))) itemBoxes.current.delete(k);
 
-  const firstItem = current?.page.items[0];
+  const firstItem = current?.laid.pages[current.index].items[0];
   const chapter = firstItem ? book.chapterAt(firstItem.b)?.t : undefined;
   const pct = firstItem ? book.fraction(lastPos.current) * 100 : 0;
 
@@ -372,13 +395,7 @@ export function PageReader({ book, settings, theme, start, startKey, version, on
               { width: win.width, height: pageHeight, paddingHorizontal: settings.margin, backgroundColor: theme.bg },
               { opacity: fade, transform: [{ translateX: Animated.add(shift, at * win.width) }] },
             ]}>
-            <Pressable
-              style={styles.fill}
-              onPress={(e) => tapPage(e.nativeEvent.pageX)}
-              onLongPress={(e) => longPress(e.nativeEvent.pageY)}
-              delayLongPress={450}>
-              {content}
-            </Pressable>
+            {content}
           </Animated.View>
         ))}
         {measuring && (
@@ -415,5 +432,6 @@ const styles = StyleSheet.create({
   viewport: { flex: 1, overflow: 'hidden' },
   page: { position: 'absolute', left: 0, top: 0, overflow: 'hidden' },
   fill: { flex: 1 },
+  row: { flex: 1, flexDirection: 'row' },
   center: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 24 },
 });

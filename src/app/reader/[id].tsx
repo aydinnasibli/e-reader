@@ -1,5 +1,6 @@
 import * as Haptics from 'expo-haptics';
 import { useKeepAwake } from 'expo-keep-awake';
+import * as ScreenOrientation from 'expo-screen-orientation';
 import { type ErrorBoundaryProps, router, useLocalSearchParams } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -29,6 +30,16 @@ export default function ReaderScreen() {
   useKeepAwake();
   const settings = useSettings();
   const theme = useReaderTheme(settings);
+  // Rotation lock while reading; back to free rotation when leaving the book.
+  useEffect(() => {
+    const { OrientationLock } = ScreenOrientation;
+    const lock =
+      settings.rotation === 'portrait' ? OrientationLock.PORTRAIT_UP : settings.rotation === 'landscape' ? OrientationLock.LANDSCAPE : OrientationLock.DEFAULT;
+    ScreenOrientation.lockAsync(lock).catch(() => {});
+    return () => {
+      ScreenOrientation.lockAsync(OrientationLock.DEFAULT).catch(() => {});
+    };
+  }, [settings.rotation]);
   // Pages are measured with the real font, so wait until it's loaded.
   const fontReady = useFontReady(settings.font);
   const status = useBookStatus(id);

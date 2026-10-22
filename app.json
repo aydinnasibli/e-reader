@@ -3,7 +3,7 @@
     "name": "Nec e-book reader",
     "slug": "nec-ebook-reader",
     "version": "1.0.0",
-    "orientation": "portrait",
+    "orientation": "default",
     "icon": "./assets/images/icon.png",
     "scheme": "necreader",
     "userInterfaceStyle": "automatic",
