@@ -1,8 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
-
-// paginate.ts only needs types from look.ts; stub react-native for the import chain.
-vi.mock('react-native', () => ({ Platform: { select: (o: Record<string, string>) => o.default } }));
-
+import { describe, expect, it } from 'vitest';
 import type { Block } from '../src/engine/types';
 import type { Look } from '../src/reader/look';
 import { type Measure, lineRanges, pageOf, paginate } from '../src/reader/paginate';
