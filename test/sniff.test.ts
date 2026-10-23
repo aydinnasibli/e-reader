@@ -3,7 +3,7 @@
 
 import { strToU8, zipSync } from 'fflate';
 import { describe, expect, it } from 'vitest';
-import { describeError, friendlyStoredError, sniffFormat } from '../src/engine/ingest';
+import { bookFileName, describeError, friendlyStoredError, sniffFormat } from '../src/engine/ingest';
 import { BookError } from '../src/engine/io';
 import { MobiError } from '../src/engine/mobi';
 import { MemorySource, enc } from './helpers';
@@ -52,6 +52,19 @@ describe('sniffFormat', () => {
     expect(sniff(new Uint8Array(0))).toBeNull();
     // A damaged ZIP (header only) isn't one either.
     expect(sniff(Uint8Array.from([0x50, 0x4b, 3, 4, 1, 2, 3]))).toBeNull();
+  });
+});
+
+describe('bookFileName', () => {
+  it('keeps a name that already says what the file is, otherwise adds the format', () => {
+    expect(bookFileName('Moby Dick.epub', 'epub')).toBe('Moby Dick.epub');
+    expect(bookFileName('document', 'epub')).toBe('document.epub');
+    expect(bookFileName('1712345678', 'txt')).toBe('1712345678.txt');
+    expect(bookFileName('War and Peace.zip', 'fb2.zip')).toBe('War and Peace.fb2.zip');
+    expect(bookFileName('Dune.azw', 'mobi')).toBe('Dune.azw');
+    expect(bookFileName('Dune.mobi', 'azw3')).toBe('Dune.mobi');
+    expect(bookFileName('notes.txt', 'epub')).toBe('notes.epub');
+    expect(bookFileName('  ', 'txt')).toBe('Untitled.txt');
   });
 });
 

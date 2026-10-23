@@ -2,6 +2,7 @@ import { DarkTheme, DefaultTheme, type ErrorBoundaryProps, Stack, ThemeProvider 
 import { ErrorScreen } from '@/ui/ErrorScreen';
 import { AppState, Platform } from 'react-native';
 import { flushLibrary, loadLibrary } from '@/lib/library';
+import { useSharedFileNavigation } from '@/lib/openWith';
 import { flushStats } from '@/lib/stats';
 import { DialogHost } from '@/ui/dialogs';
 import { useAppColors } from '@/ui/theme';
@@ -21,6 +22,7 @@ if (Platform.OS !== 'web') {
 
 export default function RootLayout() {
   const c = useAppColors();
+  useSharedFileNavigation();
   const base = c.dark ? DarkTheme : DefaultTheme;
   return (
     <ThemeProvider value={{ ...base, colors: { ...base.colors, background: c.bg, card: c.bg, text: c.text, primary: c.accent, border: c.border } }}>

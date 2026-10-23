@@ -33,6 +33,19 @@ export function sniffFormat(src: ByteSource): SniffedFormat | null {
   return looksLikeText(head) ? 'txt' : null;
 }
 
+/**
+ * The name to keep a shared file under: its own when it already says what
+ * the file is, otherwise with the recognised format's extension
+ * ("document" -> "document.epub", "book.zip" -> "book.fb2.zip").
+ */
+export function bookFileName(name: string, format: SniffedFormat): string {
+  const n = name.trim() || 'Untitled';
+  const lower = n.toLowerCase();
+  const kindle = format === 'mobi' || format === 'azw3';
+  if (lower.endsWith('.' + format) || (kindle && /\.(mobi|azw3?|prc)$/.test(lower))) return n;
+  return n.replace(/\.(fb2\.zip|epub|fb2|txt|zip|mobi|azw3|azw|prc)$/i, '') + '.' + format;
+}
+
 function sniffZip(src: ByteSource): SniffedFormat | null {
   let zip: ZipArchive;
   try {
