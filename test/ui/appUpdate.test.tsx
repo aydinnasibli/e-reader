@@ -24,33 +24,33 @@ const release = (build: number) => ({
 });
 
 /** The update state, read through the store the banner uses. */
-function state() {
-  const hook = renderHook(() => useUpdateState());
-  hook.unmount(); // just reading it; later changes needn't redraw anything
+async function state() {
+  const hook = await renderHook(() => useUpdateState());
+  await hook.unmount(); // just reading it; later changes needn't redraw anything
   return hook.result.current as { kind: string; message?: string };
 }
 
 it('no connection: says so in plain words', async () => {
   fetchMock.mockRejectedValueOnce(new TypeError('Network request failed'));
   expect(await checkForUpdate(true)).toBe('error');
-  expect(state()).toEqual({ kind: 'error', message: 'Couldn’t connect. Check the internet connection and try again.' });
+  expect(await state()).toEqual({ kind: 'error', message: 'Couldn’t connect. Check the internet connection and try again.' });
 });
 
 it('the server refusing (rate limit): not a raw status code', async () => {
   fetchMock.mockResolvedValueOnce({ ok: false, status: 403 });
   await checkForUpdate(true);
-  expect(state().message).toBe('The update server is busy right now. Try again in a while.');
+  expect((await state()).message).toBe('The update server is busy right now. Try again in a while.');
 });
 
 it('"Not now" hides the offer from the automatic checks; checking from the menu shows it again', async () => {
   fetchMock.mockResolvedValue(release(11));
   expect(await checkForUpdate(true)).toBe('available');
   snoozeUpdate();
-  expect(state().kind).toBe('idle');
+  expect((await state()).kind).toBe('idle');
   // The automatic check (on coming back to the app, hours later) doesn't bring it back...
   jest.spyOn(Date, 'now').mockReturnValue(Date.now() + 7 * 60 * 60 * 1000);
   expect(await checkForUpdate()).toBe('none');
-  expect(state().kind).toBe('idle');
+  expect((await state()).kind).toBe('idle');
   // ...a newer build does, and so does checking from the menu.
   fetchMock.mockResolvedValue(release(12));
   jest.spyOn(Date, 'now').mockReturnValue(Date.now() + 14 * 60 * 60 * 1000);

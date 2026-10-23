@@ -142,12 +142,12 @@ const booksOnShelf = () => new Set([...mockFiles.keys()].filter((k) => k.startsW
 const tempLeft = () => [...mockFiles.keys()].filter((k) => k.startsWith('cache/'));
 const settle = () => act(() => new Promise((r) => setTimeout(r, 20)));
 
-beforeAll(() => {
+beforeAll(async () => {
   // The app is up: the root layout has mounted.
-  renderHook(() => useSharedFileNavigation());
+  await renderHook(() => useSharedFileNavigation());
 });
 
-beforeEach(() => {
+beforeEach(async () => {
   mockPush.mockClear();
   alert.mockClear();
 });
@@ -166,7 +166,7 @@ it('a cold start waits for the first screen, then opens the new book', async () 
     const done = fresh.openSharedFile(share(makeEpub('A cold start. '), 'document'));
     await rtl.act(() => new Promise((r) => setTimeout(r, 20)));
     expect(mockPush).not.toHaveBeenCalled(); // the navigator isn't mounted yet
-    rtl.renderHook(() => fresh.useSharedFileNavigation());
+    await rtl.renderHook(() => fresh.useSharedFileNavigation());
     await rtl.act(() => done);
     expect(mockPush).toHaveBeenCalledTimes(1);
     const id = mockPush.mock.calls[0][0].params.id;
@@ -251,15 +251,17 @@ it('a file that can no longer be read says so', async () => {
 });
 
 it('the library knows while a shared file is being added', async () => {
-  const { result } = renderHook(() => useAddingSharedFile());
-  expect(result.current).toBe(false);
-  let done!: Promise<void>;
-  act(() => {
-    done = openSharedFile(share(makeEpub('Busy. '), 'busy.epub'));
+  // Every value the library screen is drawn with (the whole add finishes within one act()).
+  const seen: boolean[] = [];
+  const { result } = await renderHook(() => {
+    const adding = useAddingSharedFile();
+    seen.push(adding);
+    return adding;
   });
-  expect(result.current).toBe(true);
-  await act(() => done);
   expect(result.current).toBe(false);
+  await act(() => openSharedFile(share(makeEpub('Busy. '), 'busy.epub')));
+  expect(seen).toContain(true); // "Adding book…" was shown
+  expect(result.current).toBe(false); // and is gone once it's added
 });
 
 it('the file that started the app, given again (back from recent apps, or opened again later), opens its book', async () => {
@@ -302,7 +304,7 @@ it('a file shared while the app runs keeps the current screen until it is opened
   expect(mockPush).toHaveBeenCalledWith({ pathname: '/reader/[id]', params: { id: expect.any(String) } });
 });
 
-it('only shared files on Android are taken over; app links pass through', () => {
+it('only shared files on Android are taken over; app links pass through', async () => {
   Object.defineProperty(Platform, 'OS', { value: 'ios', configurable: true });
   expect(redirectSystemPath({ path: 'content://x/1', initial: true })).toBe('content://x/1');
   Object.defineProperty(Platform, 'OS', { value: 'android', configurable: true });

@@ -27,18 +27,18 @@ jest.mock('@/lib/library', () => ({
   sourceFile: () => ({}),
 }));
 
-beforeAll(() => {
+beforeAll(async () => {
   require('@/lib/storage').testChunks.set('big/0', JSON.stringify({ b: blocks }));
 });
 beforeEach(() => setSettings({ mode: 'page', indent: false, hyphenate: false }));
 
 it('waits for the saved place instead of overwriting it', async () => {
-  const { unmount } = render(<ReaderScreen />);
+  const { unmount } = await render(<ReaderScreen />);
   await waitFor(() => expect(screen.getByText(/Preparing the book up to where you left off/)).toBeTruthy());
   // Give the reader time to lay out what exists (the measurer falls back after 4 s here).
   await act(() => new Promise((r) => setTimeout(r, 5000)));
   expect(screen.getByText(/Preparing the book up to where you left off/)).toBeTruthy();
-  unmount();
+  await unmount();
   // Leaving saves, but never a position or percent that isn't the saved place.
   for (const [, patch] of mockUpdateBook.mock.calls) {
     expect(patch.position).toBeUndefined();
@@ -49,8 +49,8 @@ it('waits for the saved place instead of overwriting it', async () => {
 it('scroll mode waits too', async () => {
   setSettings({ mode: 'scroll' });
   mockUpdateBook.mockClear();
-  const { unmount } = render(<ReaderScreen />);
+  const { unmount } = await render(<ReaderScreen />);
   await waitFor(() => expect(screen.getByText(/Preparing the book up to where you left off/)).toBeTruthy());
-  unmount();
+  await unmount();
   for (const [, patch] of mockUpdateBook.mock.calls) expect(patch.position).toBeUndefined();
 });

@@ -4,7 +4,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Ionicons from '@expo/vector-icons/Ionicons';
-import { ActivityIndicator, Animated, PanResponder, Pressable, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
+import { ActivityIndicator, Animated, PanResponder, Pressable, StyleSheet, Text, View, type ViewInstance, useWindowDimensions } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import type { Block, Position } from '@/engine/types';
 import type { ReaderSettings, Theme } from '@/lib/settings';
@@ -316,7 +316,7 @@ export function PageReader({ book, settings, theme, start, startKey, version, on
   // Where each item of each visible page sits, for long-press hit testing.
   const itemBoxes = useRef(new Map<string, ItemBox>());
   const viewportTop = useRef(0);
-  const viewportRef = useRef<View>(null);
+  const viewportRef = useRef<ViewInstance>(null);
   /** The block and character under a point within one page column (`column` is that column's key). */
   /**
    * The block and character under a point within one page column. With

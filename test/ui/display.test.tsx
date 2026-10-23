@@ -51,39 +51,39 @@ function Reader({ book, onSlide }: { book: BookData; onSlide: jest.Mock }) {
 describe('display panel', () => {
   beforeEach(() => setSettings({ fontSize: 19, mode: 'page', indent: false }));
 
-  it('the size slider changes the page text while dragging, and saves on release', () => {
+  it('the size slider changes the page text while dragging, and saves on release', async () => {
     const onSlide = jest.fn();
-    render(<Reader book={fakeBook([{ k: 'p', r: [TEXT] }])} onSlide={onSlide} />);
+    await render(<Reader book={fakeBook([{ k: 'p', r: [TEXT] }])} onSlide={onSlide} />);
     const slider = screen.getByTestId('slider-Size');
 
-    fireEvent(slider, 'valueChange', 24.4);
+    await fireEvent(slider, 'valueChange', 24.4);
     expect(onSlide).toHaveBeenLastCalledWith({ fontSize: 24 }, false);
     expect(fontSizeOf(TEXT)).toBe(24); // the page text, live
     expect(screen.getByText('24')).toBeTruthy(); // the value next to the slider
 
-    fireEvent(slider, 'valueChange', 31);
+    await fireEvent(slider, 'valueChange', 31);
     expect(fontSizeOf(TEXT)).toBe(31);
 
-    fireEvent(slider, 'slidingComplete', 31);
+    await fireEvent(slider, 'slidingComplete', 31);
     expect(onSlide).toHaveBeenLastCalledWith({ fontSize: 31 }, true);
     expect(screen.getByText('saved size 31')).toBeTruthy();
   });
 
-  it('ignores slider movement that does not change the value', () => {
+  it('ignores slider movement that does not change the value', async () => {
     const onSlide = jest.fn();
-    render(<Reader book={fakeBook([{ k: 'p', r: [TEXT] }])} onSlide={onSlide} />);
+    await render(<Reader book={fakeBook([{ k: 'p', r: [TEXT] }])} onSlide={onSlide} />);
     const slider = screen.getByTestId('slider-Size');
-    fireEvent(slider, 'valueChange', 20.1);
-    fireEvent(slider, 'valueChange', 20.3);
-    fireEvent(slider, 'valueChange', 19.8);
+    await fireEvent(slider, 'valueChange', 20.1);
+    await fireEvent(slider, 'valueChange', 20.3);
+    await fireEvent(slider, 'valueChange', 19.8);
     expect(onSlide).toHaveBeenCalledTimes(1);
   });
 
-  it('spacing sliders are live too', () => {
+  it('spacing sliders are live too', async () => {
     const onSlide = jest.fn();
-    render(<Reader book={fakeBook([{ k: 'p', r: [TEXT] }])} onSlide={onSlide} />);
-    fireEvent.press(screen.getByText('Spacing'));
-    fireEvent(screen.getByTestId('slider-Line spacing'), 'valueChange', 2.02);
+    await render(<Reader book={fakeBook([{ k: 'p', r: [TEXT] }])} onSlide={onSlide} />);
+    await fireEvent.press(screen.getByText('Spacing'));
+    await fireEvent(screen.getByTestId('slider-Line spacing'), 'valueChange', 2.02);
     expect(onSlide).toHaveBeenLastCalledWith({ lineSpacing: 2 }, false);
     const lh = [screen.getByText(TEXT).props.style].flat().find((s) => s?.lineHeight)?.lineHeight;
     expect(lh).toBe(Math.round(19 * 2));
@@ -91,22 +91,22 @@ describe('display panel', () => {
 });
 
 describe('live preview', () => {
-  it('starts at the reading position, mid-paragraph', () => {
+  it('starts at the reading position, mid-paragraph', async () => {
     setSettings({ indent: false, hyphenate: false });
     const book = fakeBook([{ k: 'p', r: [TEXT] }, { k: 'p', r: ['Next paragraph.'] }]);
-    render(<LivePreview book={book} settings={useSettingsSnapshot()} theme={theme} pos={{ b: 0, o: TEXT.indexOf('it was the worst') }} />);
+    await render(<LivePreview book={book} settings={await useSettingsSnapshot()} theme={theme} pos={{ b: 0, o: TEXT.indexOf('it was the worst') }} />);
     expect(screen.getByText('it was the worst of times.')).toBeTruthy();
     expect(screen.getByText('Next paragraph.')).toBeTruthy();
     expect(screen.queryByText(/best of times/)).toBeNull();
   });
 });
 
-function useSettingsSnapshot(): ReaderSettings {
+async function useSettingsSnapshot(): Promise<ReaderSettings> {
   let s: ReaderSettings | undefined;
   function Grab() {
     s = useSettings();
     return null;
   }
-  render(<Grab />);
+  await render(<Grab />);
   return s!;
 }

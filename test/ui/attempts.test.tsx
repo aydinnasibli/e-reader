@@ -77,7 +77,7 @@ function launch(state: 'active' | 'background' = 'active') {
 const bigBook = { id: 'big', title: 'Big', author: '', fileName: 'big.epub', sourceName: 'source.epub', size: 1, addedAt: 0, openedAt: 0, status: 'processing', progress: 0 };
 const flush = () => new Promise((r) => setTimeout(r, 0));
 
-beforeEach(() => {
+beforeEach(async () => {
   mockDisk.clear();
   mockDisk.set('doc/library.json', JSON.stringify([bigBook]));
 });
@@ -129,7 +129,7 @@ it('crashing in the foreground twice marks the book as failed; Try again starts 
   expect(app.saved().attempts).toBe(1);
 });
 
-it('internal error messages saved by older versions are shown as a plain sentence', () => {
+it('internal error messages saved by older versions are shown as a plain sentence', async () => {
   mockDisk.set('doc/library.json', JSON.stringify([{ ...bigBook, status: 'error', error: "TypeError: Cannot read property 'x' of undefined" }]));
   const app = launch();
   expect(app.book().error).not.toMatch(/TypeError|undefined/);

@@ -15,16 +15,16 @@ jest.mock('@/lib/library', () => ({ deleteBook: jest.fn() }));
 
 const alert = jest.spyOn(Alert, 'alert').mockImplementation(() => {});
 /** Press a button of the last alert shown. */
-const pressAlert = (text: string) => {
+const pressAlert = async (text: string) => {
   const buttons = alert.mock.calls.at(-1)?.[2] as AlertButton[];
-  act(() => buttons.find((b) => b.text === text)?.onPress?.());
+  await act(() => buttons.find((b) => b.text === text)?.onPress?.());
 };
 beforeEach(() => alert.mockClear());
 
 const TEXT = 'The quick brown fox jumps over the lazy dog';
 const block: Block = { k: 'p', r: [TEXT] };
 
-it('removing a book says which highlights, notes and bookmarks go with it', () => {
+it('removing a book says which highlights, notes and bookmarks go with it', async () => {
   expect(annotationsSummary('empty')).toBeNull();
   addHighlight('b1', { b: 0, s: 0, e: 3, color: 'yellow', text: 'The' });
   addHighlight('b1', { b: 0, s: 4, e: 9, color: 'yellow', text: 'quick', note: 'fast' });
@@ -35,40 +35,40 @@ it('removing a book says which highlights, notes and bookmarks go with it', () =
   confirmRemoveBook({ id: 'b1', title: 'Moby-Dick' } as never);
   expect(alert.mock.calls[0][1]).toContain('with its 2 highlights (1 with a note) and 1 bookmark');
   expect(deleteBook).not.toHaveBeenCalled(); // nothing happens until confirmed
-  pressAlert('Remove');
+  await pressAlert('Remove');
   expect(deleteBook).toHaveBeenCalledWith('b1');
 });
 
-it('removing a highlight that has a note asks first; plain highlighting goes at once', () => {
+it('removing a highlight that has a note asks first; plain highlighting goes at once', async () => {
   addHighlight('b2', { b: 0, s: 16, e: 19, color: 'yellow', text: 'fox', note: 'clever' });
   addHighlight('b2', { b: 0, s: 40, e: 43, color: 'green', text: 'dog' });
   const props = { bookId: 'b2', bookTitle: 'Book', theme: THEMES.light, onClose: () => {} };
 
-  const first = render(<SelectionSheet {...props} target={{ b: 0, block, at: TEXT.indexOf('dog') }} />);
-  fireEvent.press(screen.getByLabelText('Remove highlight'));
+  const first = await render(<SelectionSheet {...props} target={{ b: 0, block, at: TEXT.indexOf('dog') }} />);
+  await fireEvent.press(screen.getByLabelText('Remove highlight'));
   expect(alert).not.toHaveBeenCalled();
   expect(getAnnotations('b2').highlights.map((h) => h.text)).toEqual(['fox']);
-  first.unmount();
+  await first.unmount();
 
-  render(<SelectionSheet {...props} target={{ b: 0, block, at: TEXT.indexOf('fox') }} />);
-  fireEvent.press(screen.getByLabelText('Remove highlight'));
+  await render(<SelectionSheet {...props} target={{ b: 0, block, at: TEXT.indexOf('fox') }} />);
+  await fireEvent.press(screen.getByLabelText('Remove highlight'));
   expect(alert.mock.calls[0][0]).toBe('Delete highlight and its note?');
   expect(getAnnotations('b2').highlights).toHaveLength(1);
-  pressAlert('Delete');
+  await pressAlert('Delete');
   expect(getAnnotations('b2').highlights).toHaveLength(0);
 });
 
-it('a field that may be cleared saves empty; others ignore an empty save', () => {
-  render(<DialogHost />);
+it('a field that may be cleared saves empty; others ignore an empty save', async () => {
+  await render(<DialogHost />);
   const save = jest.fn();
-  act(() => showPrompt('Author', { initial: 'Melville', allowEmpty: true, onSubmit: save }));
-  fireEvent.changeText(screen.getByDisplayValue('Melville'), '  ');
-  fireEvent.press(screen.getByText('Save'));
+  await act(() => showPrompt('Author', { initial: 'Melville', allowEmpty: true, onSubmit: save }));
+  await fireEvent.changeText(screen.getByDisplayValue('Melville'), '  ');
+  await fireEvent.press(screen.getByText('Save'));
   expect(save).toHaveBeenCalledWith('');
 
   const title = jest.fn();
-  act(() => showPrompt('Title', { initial: 'Moby-Dick', onSubmit: title }));
-  fireEvent.changeText(screen.getByDisplayValue('Moby-Dick'), '');
-  fireEvent.press(screen.getByText('Save'));
+  await act(() => showPrompt('Title', { initial: 'Moby-Dick', onSubmit: title }));
+  await fireEvent.changeText(screen.getByDisplayValue('Moby-Dick'), '');
+  await fireEvent.press(screen.getByText('Save'));
   expect(title).not.toHaveBeenCalled();
 });
