@@ -80,7 +80,7 @@ describe('copy-protected EPUBs', () => {
     const file = epub(book, { 'META-INF/encryption.xml': ENC(AES, 'OEBPS/a.xhtml'), 'META-INF/rights.xml': '<rights/>' });
     const err = await ingestBytes(file, 'x.epub').catch((e) => e);
     expect(err).toBeInstanceOf(BookError);
-    expect(err.message).toMatch(/copy-protected \(DRM\)/);
+    expect(err.message).toMatch(/^This book is copy-protected \(DRM\).* It uses Adobe DRM\.$/);
   });
 
   it('refuses encrypted content even without rights.xml, and a chapter without a file extension', async () => {
@@ -89,9 +89,19 @@ describe('copy-protected EPUBs', () => {
     await expect(ingestBytes(noExt, 'x.epub')).rejects.toThrow(/DRM/);
   });
 
-  it('refuses Apple FairPlay and Readium LCP books', async () => {
-    await expect(ingestBytes(epub(book, { 'META-INF/sinf.xml': '<fairplay:sinf/>' }), 'x.epub')).rejects.toThrow(/DRM/);
-    await expect(ingestBytes(epub(book, { 'META-INF/license.lcpl': '{}' }), 'x.epub')).rejects.toThrow(/DRM/);
+  it('refuses Apple FairPlay and Readium LCP books, naming the kind of DRM', async () => {
+    const encrypted = { 'META-INF/encryption.xml': ENC(AES, 'OEBPS/a.xhtml') };
+    await expect(ingestBytes(epub(book, { ...encrypted, 'META-INF/sinf.xml': '<fairplay:sinf/>' }), 'x.epub')).rejects.toThrow(
+      'This book is copy-protected (DRM), so it can only be read in the app of the store it came from. It uses Apple FairPlay.',
+    );
+    await expect(ingestBytes(epub(book, { ...encrypted, 'META-INF/license.lcpl': '{}' }), 'x.epub')).rejects.toThrow(/It uses Readium LCP\.$/);
+  });
+
+  it('accepts books that only carry a DRM file over unencrypted text', async () => {
+    for (const marker of ['META-INF/rights.xml', 'META-INF/sinf.xml', 'META-INF/license.lcpl']) {
+      const { blocks } = await ingestBytes(epub(book, { [marker]: '<rights/>' }), 'x.epub');
+      expect(texts(blocks)).toEqual(['Readable']);
+    }
   });
 
   it('accepts books whose fonts are only obfuscated', async () => {

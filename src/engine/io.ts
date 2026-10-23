@@ -44,6 +44,9 @@ export interface BookMeta {
 /** A problem with the book itself, already worded for the reader: shown as is. */
 export class BookError extends Error {}
 
+/** Why a copy-protected book can't be opened, in the same words for every format. */
+export const DRM_MESSAGE = 'This book is copy-protected (DRM), so it can only be read in the app of the store it came from.';
+
 export class CancelledError extends Error {
   constructor() {
     super('cancelled');

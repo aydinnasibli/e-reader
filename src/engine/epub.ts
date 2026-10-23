@@ -4,7 +4,7 @@
 
 import { createDecoder, detectBom, type StreamDecoder, xmlDeclaredEncoding } from './decode';
 import { HtmlToBlocks } from './html';
-import { BookError, type IngestContext } from './io';
+import { BookError, DRM_MESSAGE, type IngestContext } from './io';
 import { type MarkupHandler, MarkupTokenizer } from './markup';
 import type { ImageRef, Manifest, TocEntry } from './types';
 import { BookWriter } from './writer';
@@ -140,7 +140,13 @@ function readPackage(zip: ZipArchive, opfPath: string): Package {
 
 // Font obfuscation (IDPF and Adobe): only embedded fonts are scrambled, the text is readable.
 const FONT_OBFUSCATION = new Set(['http://www.idpf.org/2008/embedding', 'http://ns.adobe.com/pdf/enc#RC']);
-const DRM_MESSAGE = 'This book is copy-protected (DRM), so it can only be read in the app of the store it came from.';
+// Files the common kinds of DRM add. They only tell which kind it is: many
+// stores leave them in books whose text isn't encrypted at all.
+const DRM_KINDS = [
+  ['META-INF/rights.xml', 'Adobe DRM'],
+  ['META-INF/sinf.xml', 'Apple FairPlay'],
+  ['META-INF/license.lcpl', 'Readium LCP'],
+] as const;
 const CONTENT_FILE = /\.(x?html?|xml|opf|ncx)$/i;
 
 /** Files META-INF/encryption.xml lists as really encrypted (not just obfuscated fonts). */
@@ -179,14 +185,11 @@ function encryptedFiles(zip: ZipArchive): string[] {
 
 /**
  * Refuse copy-protected books up front with a clear message, instead of
- * producing pages of scrambled bytes: Adobe ADEPT (rights.xml), Apple
- * FairPlay (sinf.xml), Readium LCP (license.lcpl), or any encryption of the
- * text itself. Books whose only "encryption" is font obfuscation are fine.
+ * producing pages of scrambled bytes: books whose text is encrypted (Adobe
+ * ADEPT, Apple FairPlay, Readium LCP or any other kind). Books whose only
+ * "encryption" is font obfuscation are fine.
  */
 function checkDrm(zip: ZipArchive, encrypted: string[], pkg?: Package) {
-  if (zip.find('META-INF/rights.xml') || zip.find('META-INF/sinf.xml') || zip.find('META-INF/license.lcpl')) {
-    throw new BookError(DRM_MESSAGE);
-  }
   if (!encrypted.length) return;
   const content = new Set<string>();
   if (pkg) {
@@ -195,7 +198,9 @@ function checkDrm(zip: ZipArchive, encrypted: string[], pkg?: Package) {
       if (it) content.add(it.href.toLowerCase());
     }
   }
-  if (encrypted.some((p) => CONTENT_FILE.test(p) || content.has(p.toLowerCase()))) throw new BookError(DRM_MESSAGE);
+  if (!encrypted.some((p) => CONTENT_FILE.test(p) || content.has(p.toLowerCase()))) return;
+  const kind = DRM_KINDS.find(([file]) => zip.find(file))?.[1];
+  throw new BookError(kind ? `${DRM_MESSAGE} It uses ${kind}.` : DRM_MESSAGE);
 }
 
 function readNav(zip: ZipArchive, item: ManifestItem): RawToc[] {
