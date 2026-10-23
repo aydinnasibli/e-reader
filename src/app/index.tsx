@@ -21,6 +21,7 @@ import {
   useShelves,
 } from '@/lib/collections';
 import { type BookEntry, deleteBook, importBooks, reprocessBook, updateBook, useLibrary, useLiveBook } from '@/lib/library';
+import { useAddingSharedFile } from '@/lib/openWith';
 import { Cover } from '@/ui/Cover';
 import { confirmRemoveBook } from '@/ui/confirm';
 import { showActions, showPrompt } from '@/ui/dialogs';
@@ -43,6 +44,7 @@ export default function Library() {
   const [query, setQuery] = useState('');
   const [filter, setFilter] = useState<Filter>({ kind: 'all' });
   const [importing, setImporting] = useState(false);
+  const addingShared = useAddingSharedFile();
   const [statsOpen, setStatsOpen] = useState(false);
   const columns = width >= 700 ? 5 : 3;
   const cellWidth = (width - GAP * (columns + 1)) / columns;
@@ -189,6 +191,12 @@ export default function Library() {
     // The grid's content is inset by half a gap; undo that for the full-width header.
     <View style={{ marginHorizontal: shelves.view === 'grid' ? -GAP / 2 : 0 }}>
       <UpdateBanner />
+      {addingShared ? (
+        <View style={styles.adding}>
+          <ActivityIndicator />
+          <Text style={{ color: c.secondary, fontSize: 14 }}>Adding book…</Text>
+        </View>
+      ) : null}
       <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chips}>
         {chips.map((ch) => (
           <Pressable
@@ -405,6 +413,7 @@ function ListRow({ book, c, onPress, onLongPress }: { book: BookEntry; c: AppCol
 
 const styles = StyleSheet.create({
   headerButtons: { flexDirection: 'row', alignItems: 'center', gap: 18 },
+  adding: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingHorizontal: GAP, paddingBottom: 10 },
   chips: { paddingHorizontal: GAP, paddingTop: 4, paddingBottom: 12, gap: 8 },
   chip: { paddingHorizontal: 14, paddingVertical: 6, minHeight: 34, borderRadius: 17, alignItems: 'center', justifyContent: 'center' },
   continue: {

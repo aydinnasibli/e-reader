@@ -7,6 +7,7 @@ import { Directory, File, Paths } from 'expo-file-system';
 import { useSyncExternalStore } from 'react';
 import { AppState } from 'react-native';
 import {
+  bookExtension,
   bookFileName,
   describeError,
   friendlyStoredError,
@@ -265,11 +266,12 @@ function fingerprintFile(file: File): string | undefined {
 /**
  * The book on the shelf that is this file, if any. Books added by older
  * versions get their fingerprint here, the first time a file of the same
- * size comes in.
+ * size comes in. A book that failed to prepare counts too: adding it again
+ * would only add another failed copy, and the one on the shelf offers to
+ * try again.
  */
 function findDuplicate(fp: string, size: number): BookEntry | undefined {
   for (const b of books) {
-    if (b.status === 'error') continue;
     if (!b.fp && b.size === size) {
       const f = fingerprintFile(sourceFile(b));
       if (f) b.fp = f;
@@ -302,9 +304,7 @@ function addFile(file: File, name: string, size: number): AddOutcome {
   const dir = bookDir(id);
   try {
     ensureDir(dir);
-    const lower = name.toLowerCase();
-    const ext = lower.endsWith('.fb2.zip') ? 'fb2.zip' : (lower.split('.').pop() ?? 'bin');
-    const dest = new File(dir, `source.${ext}`);
+    const dest = new File(dir, `source.${bookExtension(name) ?? 'bin'}`);
     // Already our own copy: moving it is instant even for huge files.
     try {
       file.moveSync(dest);
@@ -357,12 +357,18 @@ export async function importBooks(): Promise<ImportResult> {
   let added = 0;
   try {
     for (const asset of res.assets) {
-      if (!isSupportedName(asset.name)) {
-        skipped.push(asset.name);
-        continue;
-      }
       const picked = new File(asset.uri);
-      const r = addFile(picked, asset.name, asset.size ?? picked.size);
+      let name = asset.name;
+      // No book extension ("document", "book.bin"): recognised from the bytes, like shared files.
+      if (!isSupportedName(name)) {
+        const format = sniffFile(picked);
+        if (!format) {
+          (format === null ? skipped : failed).push(asset.name);
+          continue;
+        }
+        name = bookFileName(name, format);
+      }
+      const r = addFile(picked, name, asset.size ?? picked.size);
       if ('added' in r) added++;
       else if ('duplicate' in r) duplicates.push([asset.name, r.duplicate.title]);
       else failed.push(asset.name);
@@ -388,50 +394,66 @@ export type SharedFileResult =
  */
 export async function importSharedFile(uri: string): Promise<SharedFileResult> {
   loadLibrary();
-  const tmp = new Directory(Paths.cache, 'incoming', newId());
+  const shared = new File(uri);
+  // Recognised in place when the sending app allows it (file managers,
+  // document providers), so that a huge video isn't copied just to be refused.
+  let format = sniffFile(shared);
+  if (format === null) return { unsupported: true };
+  // Copied under a name of our own. Copied into a folder, the file would get
+  // the name the sending app reports, which could be "../../files/library.json".
+  const incoming = new Directory(Paths.cache, 'incoming');
+  const copy = new File(incoming, newId());
   try {
-    let copy: File | undefined;
     try {
-      ensureDir(tmp);
-      // Copied into a folder, the file gets the name the sharing app gives it.
-      await new File(uri).copy(tmp);
-      copy = tmp.list().find((f): f is File => f instanceof File);
+      ensureDir(incoming);
+      await shared.copy(copy);
     } catch {
-      // no permission to read it, or storage full
+      return { failed: true }; // no permission to read it, or storage full
     }
-    if (!copy) return { failed: true };
-    let src: FileSource | undefined;
-    let format: SniffedFormat | null;
-    try {
-      src = new FileSource(copy);
-      format = sniffFormat(src);
-    } catch {
-      return { failed: true };
-    } finally {
-      src?.close();
-    }
-    if (!format) return { unsupported: true };
-    const r = addFile(copy, bookFileName(decodeName(copy.name), format), copy.size);
+    // Chat apps usually only let the file be read from start to end: recognised once copied.
+    if (format === undefined) format = sniffFile(copy);
+    if (format === undefined) return { failed: true };
+    if (format === null) return { unsupported: true };
+    const r = addFile(copy, bookFileName(sharedFileName(shared), format), copy.size);
     finishAdding('added' in r ? 1 : 0);
     if ('added' in r) return { book: r.added, duplicate: false };
     if ('duplicate' in r) return { book: r.duplicate, duplicate: true };
     return { failed: true };
   } finally {
     try {
-      if (tmp.exists) tmp.delete();
+      if (copy.exists) copy.delete();
     } catch {
       // the cache is cleared by the system anyway
     }
   }
 }
 
-/** Names taken from URIs are percent-encoded ("My%20Book.epub"). */
-function decodeName(name: string): string {
+/** What book a file is from its bytes: null if none, undefined if it can't be read where it is. */
+function sniffFile(file: File): SniffedFormat | null | undefined {
+  let src: FileSource | undefined;
   try {
-    return decodeURIComponent(name);
+    src = new FileSource(file);
+    return sniffFormat(src);
   } catch {
-    return name;
+    return undefined;
+  } finally {
+    src?.close();
   }
+}
+
+/**
+ * A name for a shared file to show as its title, from the end of its URI
+ * ("My%20Book.epub"): no folders, control characters or leading dots, and
+ * not endless.
+ */
+function sharedFileName(file: File): string {
+  let name = file.name;
+  try {
+    name = decodeURIComponent(name);
+  } catch {
+    // not percent-encoded after all
+  }
+  return (name.split(/[/\\]/).pop() ?? '').replace(/\p{Cc}/gu, '').replace(/^[.\s]+/, '').slice(0, 120);
 }
 
 /** Edit a book's title and/or author; kept even if the book is converted again. */

@@ -1,14 +1,17 @@
 // Expo Router hands every URL the app is opened with to this function first
 // (see src/lib/openWith.ts). A book file shared from another app isn't a
-// route: show the library while it's added, then the reader opens it.
+// route: it's added, then the reader opens it.
 
 import { Platform } from 'react-native';
-import { isSharedFileUrl, openSharedFile } from '@/lib/openWith';
+import { isRepeatedLaunch, isSharedFileUrl, openSharedFile } from '@/lib/openWith';
 
-export function redirectSystemPath({ path }: { path: string; initial: boolean }): string {
+export function redirectSystemPath({ path, initial }: { path: string; initial: boolean }): string | null {
   if (Platform.OS === 'android' && isSharedFileUrl(path)) {
-    openSharedFile(path).catch(() => {});
-    return '/';
+    if (!initial || !isRepeatedLaunch(path)) openSharedFile(path).catch(() => {});
+    // Starting up: the library is the first screen. Already running: stay on
+    // the current screen (null), so an open book isn't closed for a file
+    // that may turn out not to be a book.
+    return initial ? '/' : null;
   }
   return path;
 }
