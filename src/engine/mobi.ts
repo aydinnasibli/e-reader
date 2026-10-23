@@ -11,7 +11,7 @@
 
 import { createDecoder } from './decode';
 import { HtmlToBlocks } from './html';
-import { BookError, type ByteSource, type IngestContext } from './io';
+import { BookError, type ByteSource, DRM_MESSAGE, type IngestContext } from './io';
 import { MarkupTokenizer } from './markup';
 import type { ImageRef, Manifest } from './types';
 import { BookWriter } from './writer';
@@ -198,7 +198,7 @@ export async function ingestMobi(ctx: IngestContext): Promise<Manifest> {
   const { src } = ctx;
   const pdb = readPdb(src);
   const h = readHeader(src, pdb, 0);
-  if (h.encryption) throw new MobiError('This book is DRM-protected, so it can only be read in the store’s own app.');
+  if (h.encryption) throw new MobiError(DRM_MESSAGE);
   if (h.compression === 17480) throw new MobiError('This Kindle book uses HUFF/CDIC compression, which isn’t supported yet.');
   if (h.compression !== 1 && h.compression !== 2) throw new MobiError(`Unknown Kindle compression (${h.compression}).`);
 

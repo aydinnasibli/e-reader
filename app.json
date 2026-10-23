@@ -37,6 +37,7 @@
             { "mimeType": "application/x-fictionbook" },
             { "mimeType": "application/x-mobipocket-ebook" },
             { "mimeType": "application/vnd.amazon.ebook" },
+            { "mimeType": "application/vnd.amazon.mobi8-ebook" },
             { "mimeType": "text/plain" },
             { "mimeType": "application/zip" },
             { "mimeType": "application/octet-stream" }

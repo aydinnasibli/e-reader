@@ -1,5 +1,6 @@
 /// <reference types="jest" />
-// Adding books: the same file twice is noticed and not added again.
+// Adding books: the same file twice is noticed and not added again, and
+// files without a book extension are recognised from their bytes.
 
 const mockFiles = new Map<string, Uint8Array>();
 const mockPicks: { name: string; uri: string; size?: number }[][] = [];
@@ -78,7 +79,8 @@ jest.mock('@/engine/ingest', () => ({
   ingestBook: () => new Promise(() => {}),
 }));
 
-import { getBook, importBooks } from '@/lib/library';
+import { strToU8, zipSync } from 'fflate';
+import { getBook, importBooks, updateBook } from '@/lib/library';
 
 const bytes = (seed: number, n = 200_000) => Uint8Array.from({ length: n }, (_, i) => (i * 31 + seed) & 255);
 /** The picker hands over a fresh private copy of the chosen file each time. */
@@ -128,4 +130,25 @@ it('books added before fingerprints existed are recognised too', async () => {
   expect(res.added).toBe(0);
   expect(res.duplicates).toHaveLength(1);
   expect(getBook(id)!.fp).toBeTruthy(); // filled in for next time
+});
+
+/** The id of the book on the shelf whose original file is `data`. */
+const shelfId = (data: Uint8Array) => [...mockFiles.keys()].find((k) => k.startsWith('doc/books/') && mockFiles.get(k) === data)!.split('/')[2];
+
+it('a file without a book extension is recognised from its bytes, like a shared one; other files are skipped', async () => {
+  const epub = zipSync({ mimetype: strToU8('application/epub+zip'), 'META-INF/container.xml': strToU8('<container/>') });
+  pick(['document', epub], ['page.html', strToU8('<!DOCTYPE html><html><body>Hi</body></html>')]);
+  const res = await importBooks();
+  expect(res).toMatchObject({ added: 1, skipped: ['page.html'] });
+  expect(getBook(shelfId(epub))).toMatchObject({ fileName: 'document.epub', sourceName: 'source.epub', title: 'document' });
+});
+
+it('a book that failed to prepare is not added again: the one on the shelf offers to try again', async () => {
+  const locked = bytes(11, 3000);
+  pick(['locked.epub', locked]);
+  await importBooks();
+  updateBook(shelfId(locked), { status: 'error', error: 'This book is copy-protected (DRM)…' });
+
+  pick(['locked.epub', locked]);
+  expect(await importBooks()).toMatchObject({ added: 0, duplicates: [['locked.epub', 'locked']] });
 });

@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { DRM_MESSAGE } from '../src/engine/io';
 import { palmdocDecompress, trailingSize } from '../src/engine/mobi';
 import { blockText } from '../src/engine/types';
 import { ingestBytes } from './helpers';
@@ -64,6 +65,7 @@ describe('MOBI books', () => {
 
   it('refuses DRM-protected books with a clear message', async () => {
     const file = buildMobi({ html: '<p>x</p>', title: 'Locked', encryption: 2 });
-    await expect(ingestBytes(file, 'locked.azw')).rejects.toThrow(/DRM/);
+    // The same words as for a copy-protected EPUB.
+    await expect(ingestBytes(file, 'locked.azw')).rejects.toThrow(DRM_MESSAGE);
   });
 });

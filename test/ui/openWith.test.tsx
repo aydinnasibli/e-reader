@@ -1,17 +1,24 @@
 /// <reference types="jest" />
-// "Open with" on Android: a book file shared from another app is copied,
-// recognised from its bytes, added (or found on the shelf) and opened.
+// "Open with" on Android: a book file shared from another app is recognised
+// from its bytes, copied, added (or found on the shelf) and opened.
 
 import { strToU8, zipSync } from 'fflate';
 
 const mockFiles = new Map<string, Uint8Array>();
-/** The names content providers give their files (WhatsApp: often no extension). */
+/** The names content providers report for their files: chosen by the sending app, so anything at all. */
 const mockNames = new Map<string, string>();
+/** Saved JSON (the library, the last launch URL), by file uri. */
+const mockDisk = new Map<string, unknown>();
+/** Every copy made of a shared file: [from, to]. */
+const mockCopies: [string, string][] = [];
 const mockPush = jest.fn();
 
 jest.mock('expo-file-system', () => {
   const join = (...parts: unknown[]) => parts.map((p) => (typeof p === 'string' ? p : (p as { uri: string }).uri)).join('/');
   const under = (dir: string) => [...mockFiles.keys()].filter((k) => k.startsWith(dir + '/'));
+  /** "a/b/../c" -> "a/c", as the file system resolves it. */
+  const resolve = (path: string) =>
+    path.split('/').reduce<string[]>((out, part) => (part === '..' ? out.slice(0, -1) : [...out, part]), []).join('/');
   class File {
     uri: string;
     constructor(...parts: unknown[]) {
@@ -24,13 +31,15 @@ jest.mock('expo-file-system', () => {
       return mockFiles.get(this.uri)?.length ?? 0;
     }
     get name() {
-      return this.uri.split('/').pop();
+      return this.uri.split('/').pop()!;
     }
-    /** Copying into a folder keeps the provider's display name, like the native module. */
+    /** Like the native module: copied into a folder, the file is named by the provider, unchecked. */
     async copy(to: { uri: string }) {
       const data = mockFiles.get(this.uri);
       if (!data) throw new Error('Permission denied');
-      mockFiles.set(`${to.uri}/${encodeURIComponent(mockNames.get(this.uri) ?? this.name!)}`, data);
+      const dest = to instanceof Directory ? resolve(`${to.uri}/${mockNames.get(this.uri) ?? this.name}`) : to.uri;
+      mockCopies.push([this.uri, dest]);
+      mockFiles.set(dest, data);
     }
     moveSync(to: { uri: string }) {
       mockFiles.set(to.uri, mockFiles.get(this.uri)!);
@@ -65,9 +74,9 @@ jest.mock('expo-file-system', () => {
 jest.mock('@/lib/storage', () => {
   const { Directory, File } = require('expo-file-system');
   return {
-    readJson: () => null,
+    readJson: (f: { uri: string }) => mockDisk.get(f.uri) ?? null,
     writeJson: () => {},
-    saveJson: () => true,
+    saveJson: (f: { uri: string }, v: unknown) => mockDisk.set(f.uri, JSON.parse(JSON.stringify(v))),
     bookDir: (id: string) => new Directory(`doc/books/${id}`),
     booksDir: () => new Directory('doc/books'),
     ensureDir: () => {},
@@ -79,7 +88,8 @@ jest.mock('@/lib/storage', () => {
       size: number;
       constructor(f: { uri: string }) {
         const b = mockFiles.get(f.uri);
-        if (!b) throw new Error('no file');
+        // Chat apps' providers can only be read from start to end: no file handle.
+        if (!b || f.uri.startsWith('content://com.whatsapp')) throw new Error('File handle is not supported');
         this.bytes = b;
         this.size = b.length;
       }
@@ -101,55 +111,91 @@ jest.mock('@/engine/ingest', () => ({
 import { act, renderHook } from '@testing-library/react-native';
 import { Alert, Platform } from 'react-native';
 import { redirectSystemPath } from '@/app/+native-intent';
-import { getBook, importSharedFile } from '@/lib/library';
-import { openSharedFile, useSharedFileNavigation } from '@/lib/openWith';
+import { deleteBook, getBook, importSharedFile, updateBook } from '@/lib/library';
+import { openSharedFile, useAddingSharedFile, useSharedFileNavigation } from '@/lib/openWith';
 
 const alert = jest.spyOn(Alert, 'alert').mockImplementation(() => {});
-const epub = zipSync({
-  mimetype: strToU8('application/epub+zip'),
-  'META-INF/container.xml': strToU8('<container/>'),
-  'OEBPS/a.xhtml': strToU8('<p>' + 'Call me Ishmael. '.repeat(50) + '</p>'),
-});
+const makeEpub = (text: string) =>
+  zipSync({
+    mimetype: strToU8('application/epub+zip'),
+    'META-INF/container.xml': strToU8('<container/>'),
+    'OEBPS/a.xhtml': strToU8('<p>' + text.repeat(50) + '</p>'),
+  });
+const epub = makeEpub('Call me Ishmael. ');
+const png = Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 13, 0x49, 0x48, 0x44, 0x52, 0, 0, 1, 0]);
 let shares = 0;
-/** Another app shares a file: a content:// URI and the name its provider reports. */
-function share(data: Uint8Array, name: string) {
-  const uri = `content://com.whatsapp.provider.media/item/${++shares}`;
+/**
+ * Another app shares a file: a content:// URI, ending in `name` (WhatsApp:
+ * often no extension), and the name its provider reports (by default the same).
+ */
+function share(data: Uint8Array, name: string, { from = 'com.whatsapp.provider.media/item', reported = name } = {}) {
+  const uri = `content://${from}/${++shares}/${encodeURIComponent(name)}`;
   mockFiles.set(uri, data);
-  mockNames.set(uri, name);
+  mockNames.set(uri, reported);
   return uri;
 }
+/** A file manager's provider, which can be read in place. */
+const FILES = 'com.android.externalstorage.documents/document';
 const booksOnShelf = () => new Set([...mockFiles.keys()].filter((k) => k.startsWith('doc/books/')).map((k) => k.split('/')[2])).size;
 const tempLeft = () => [...mockFiles.keys()].filter((k) => k.startsWith('cache/'));
+const settle = () => act(() => new Promise((r) => setTimeout(r, 20)));
+
+beforeAll(() => {
+  // The app is up: the root layout has mounted.
+  renderHook(() => useSharedFileNavigation());
+});
 
 beforeEach(() => {
   mockPush.mockClear();
   alert.mockClear();
 });
 
+const platform = Platform.OS;
+afterEach(() => Object.defineProperty(Platform, 'OS', { value: platform, configurable: true }));
+
 it('a cold start waits for the first screen, then opens the new book', async () => {
-  const done = openSharedFile(share(epub, 'document'));
-  await act(() => new Promise((r) => setTimeout(r, 20)));
-  expect(mockPush).not.toHaveBeenCalled(); // the navigator isn't mounted yet
-  renderHook(() => useSharedFileNavigation());
-  await act(() => done);
-  expect(mockPush).toHaveBeenCalledTimes(1);
-  const id = mockPush.mock.calls[0][0].params.id;
-  expect(mockPush.mock.calls[0][0].pathname).toBe('/reader/[id]');
-  // No extension from WhatsApp: recognised as an EPUB from its bytes.
-  expect(getBook(id)).toMatchObject({ fileName: 'document.epub', sourceName: 'source.epub', status: 'processing' });
-  expect(mockFiles.has(`doc/books/${id}/source.epub`)).toBe(true);
-  expect(tempLeft()).toEqual([]);
-  expect(alert).not.toHaveBeenCalled();
+  // A fresh start of the app, whatever ran before.
+  await jest.isolateModulesAsync(async () => {
+    const rtl: typeof import('@testing-library/react-native/pure') = require('@testing-library/react-native/pure');
+    const fresh: typeof import('@/lib/openWith') = require('@/lib/openWith');
+    const { getBook: getFreshBook }: typeof import('@/lib/library') = require('@/lib/library');
+    const freshAlert = jest.spyOn(require('react-native').Alert, 'alert').mockImplementation(() => {});
+
+    const done = fresh.openSharedFile(share(makeEpub('A cold start. '), 'document'));
+    await rtl.act(() => new Promise((r) => setTimeout(r, 20)));
+    expect(mockPush).not.toHaveBeenCalled(); // the navigator isn't mounted yet
+    rtl.renderHook(() => fresh.useSharedFileNavigation());
+    await rtl.act(() => done);
+    expect(mockPush).toHaveBeenCalledTimes(1);
+    const id = mockPush.mock.calls[0][0].params.id;
+    expect(mockPush.mock.calls[0][0].pathname).toBe('/reader/[id]');
+    // No extension from WhatsApp: recognised as an EPUB from its bytes.
+    expect(getFreshBook(id)).toMatchObject({ fileName: 'document.epub', sourceName: 'source.epub', status: 'processing' });
+    expect(mockFiles.has(`doc/books/${id}/source.epub`)).toBe(true);
+    expect(tempLeft()).toEqual([]);
+    expect(freshAlert).not.toHaveBeenCalled();
+    rtl.cleanup();
+  });
 });
 
 it('the same book shared again opens the one on the shelf instead of adding it', async () => {
-  const before = booksOnShelf();
   const res = await importSharedFile(share(epub, 'Moby Dick.epub'));
-  expect(res).toMatchObject({ duplicate: true });
+  const before = booksOnShelf();
   await openSharedFile(share(epub, 'other name'));
   expect(booksOnShelf()).toBe(before);
   expect(mockPush).toHaveBeenCalledWith({ pathname: '/reader/[id]', params: { id: 'book' in res ? res.book.id : '' } });
   expect(tempLeft()).toEqual([]);
+});
+
+it('a book that failed to prepare, shared again, is not added again: its reader page offers to try again', async () => {
+  const bytes = makeEpub('Locked. ');
+  const first = await importSharedFile(share(bytes, 'locked.epub'));
+  const id = 'book' in first ? first.book.id : '';
+  updateBook(id, { status: 'error', error: 'This book is copy-protected (DRM)…' });
+  const before = booksOnShelf();
+  await openSharedFile(share(bytes, 'locked.epub'));
+  expect(booksOnShelf()).toBe(before);
+  expect(mockPush).toHaveBeenCalledWith({ pathname: '/reader/[id]', params: { id } });
 });
 
 it('a text file with a number for a name, and a name with spaces', async () => {
@@ -159,13 +205,37 @@ it('a text file with a number for a name, and a name with spaces', async () => {
   expect('book' in named && named.book).toMatchObject({ fileName: 'War and Peace.fb2.zip', title: 'War and Peace', sourceName: 'source.fb2.zip' });
 });
 
-it('a file that is not a book is refused with a clear message', async () => {
+it('a hostile file name can neither write outside the app’s folder for shared files nor become a path', async () => {
+  const hostile = '../../doc/library.json';
+  const uri = share(makeEpub('Hostile. '), hostile, { reported: '../../../doc/library.json' });
+  const res = await importSharedFile(uri);
+  expect(mockCopies.find(([from]) => from === uri)?.[1]).toMatch(/^cache\/incoming\/[a-z0-9]+$/);
+  expect([...mockFiles.keys()].filter((k) => !k.startsWith('content://') && !k.startsWith('doc/books/'))).toEqual([]);
+  expect('book' in res && res.book).toMatchObject({ fileName: 'library.json.epub', sourceName: 'source.epub' });
+
+  const odd = await importSharedFile(share(makeEpub('Odd. '), '..\\..\\Bad\u0007\nName' + 'x'.repeat(300) + '.epub'));
+  const fileName = 'book' in odd ? odd.book.fileName : '';
+  expect(fileName).toMatch(/^BadNamex+\.epub$/);
+  expect(fileName.length).toBeLessThanOrEqual(125);
+});
+
+it('a file that is not a book is refused with a clear message, without copying it when it can be read in place', async () => {
   const before = booksOnShelf();
-  const png = Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 13, 0x49, 0x48, 0x44, 0x52, 0, 0, 1, 0]);
-  await openSharedFile(share(png, 'IMG-2024.png'));
+  const copies = mockCopies.length;
+  await openSharedFile(share(png, 'IMG-2024.png', { from: FILES }));
+  expect(mockCopies.length).toBe(copies); // a huge video would not be copied either
   expect(alert).toHaveBeenCalledWith('This file isn’t a book the app can open', expect.stringMatching(/EPUB, FB2, MOBI, AZW3 or TXT/));
+  // A chat app's file can only be read by copying it; the copy is removed.
+  await openSharedFile(share(png, 'IMG-2025.png'));
+  expect(alert).toHaveBeenCalledTimes(2);
   expect(mockPush).not.toHaveBeenCalled();
   expect(booksOnShelf()).toBe(before);
+  expect(tempLeft()).toEqual([]);
+});
+
+it('a book from a file manager is recognised in place and added', async () => {
+  const res = await importSharedFile(share(makeEpub('In place. '), 'Emma', { from: FILES }));
+  expect('book' in res && res.book.fileName).toBe('Emma.epub');
   expect(tempLeft()).toEqual([]);
 });
 
@@ -175,12 +245,58 @@ it('a file that can no longer be read says so', async () => {
   expect(mockPush).not.toHaveBeenCalled();
 });
 
+it('the library knows while a shared file is being added', async () => {
+  const { result } = renderHook(() => useAddingSharedFile());
+  expect(result.current).toBe(false);
+  let done!: Promise<void>;
+  act(() => {
+    done = openSharedFile(share(makeEpub('Busy. '), 'busy.epub'));
+  });
+  expect(result.current).toBe(true);
+  await act(() => done);
+  expect(result.current).toBe(false);
+});
+
+it('the share that started the app is not taken again when Android brings the app back', async () => {
+  Object.defineProperty(Platform, 'OS', { value: 'android', configurable: true });
+  const uri = share(makeEpub('Launch. '), 'launch.epub');
+  expect(redirectSystemPath({ path: uri, initial: true })).toBe('/');
+  await settle();
+  expect(mockPush).toHaveBeenCalledTimes(1);
+  const id = mockPush.mock.calls[0][0].params.id;
+  deleteBook(id);
+  const before = booksOnShelf();
+
+  // Killed in the background and reopened from recent apps: the same launch URL again.
+  expect(redirectSystemPath({ path: uri, initial: true })).toBe('/');
+  await settle();
+  expect(mockPush).toHaveBeenCalledTimes(1);
+  expect(booksOnShelf()).toBe(before);
+  expect(getBook(id)).toBeUndefined();
+
+  // Another file starting the app is opened, and so is the first one shared again while the app runs.
+  expect(redirectSystemPath({ path: share(makeEpub('Next. '), 'next.epub'), initial: true })).toBe('/');
+  await settle();
+  expect(mockPush).toHaveBeenCalledTimes(2);
+  expect(redirectSystemPath({ path: uri, initial: false })).toBeNull();
+  await settle();
+  expect(mockPush).toHaveBeenCalledTimes(3);
+});
+
+it('a file shared while the app runs keeps the current screen until it is opened, or refused', async () => {
+  Object.defineProperty(Platform, 'OS', { value: 'android', configurable: true });
+  expect(redirectSystemPath({ path: share(png, 'photo.png'), initial: false })).toBeNull();
+  await settle();
+  expect(alert).toHaveBeenCalledWith('This file isn’t a book the app can open', expect.any(String));
+  expect(mockPush).not.toHaveBeenCalled();
+  expect(redirectSystemPath({ path: share(makeEpub('While reading. '), 'next.epub'), initial: false })).toBeNull();
+  await settle();
+  expect(mockPush).toHaveBeenCalledWith({ pathname: '/reader/[id]', params: { id: expect.any(String) } });
+});
+
 it('only shared files on Android are taken over; app links pass through', () => {
-  const restore = Platform.OS;
   Object.defineProperty(Platform, 'OS', { value: 'ios', configurable: true });
   expect(redirectSystemPath({ path: 'content://x/1', initial: true })).toBe('content://x/1');
   Object.defineProperty(Platform, 'OS', { value: 'android', configurable: true });
   expect(redirectSystemPath({ path: 'necreader://notes', initial: false })).toBe('necreader://notes');
-  expect(redirectSystemPath({ path: 'content://x/2', initial: false })).toBe('/'); // unreadable: an alert follows
-  Object.defineProperty(Platform, 'OS', { value: restore, configurable: true });
 });
