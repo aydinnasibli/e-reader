@@ -4,14 +4,15 @@ import { swipeOutcome, tapZone } from '../src/reader/gestures';
 const W = 390; // an iPhone's width in points
 
 describe('tap zones', () => {
-  it('left 30% back, middle 40% menu, right 30% forward', () => {
+  it('left 25% back, middle 50% menu, right 25% forward', () => {
     expect(tapZone(20, W)).toBe('prev');
-    expect(tapZone(W * 0.29, W)).toBe('prev');
+    expect(tapZone(W * 0.24, W)).toBe('prev');
+    expect(tapZone(W * 0.26, W)).toBe('menu');
     expect(tapZone(W * 0.5, W)).toBe('menu');
-    // "A bit right of the middle" is still the menu.
+    // "A bit right of the middle", and well beyond, is still the menu.
     expect(tapZone(W * 0.6, W)).toBe('menu');
-    expect(tapZone(W * 0.69, W)).toBe('menu');
-    expect(tapZone(W * 0.71, W)).toBe('next');
+    expect(tapZone(W * 0.74, W)).toBe('menu');
+    expect(tapZone(W * 0.76, W)).toBe('next');
   });
 });
 

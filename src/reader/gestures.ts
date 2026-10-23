@@ -1,7 +1,7 @@
 // How taps and swipes on a page are read. Pure, so the rules are tested.
 
 /** Fraction of the screen width at each side that turns pages; the middle opens the menu. */
-export const TAP_EDGE = 0.3;
+export const TAP_EDGE = 0.25;
 
 export type TapZone = 'prev' | 'menu' | 'next';
 
