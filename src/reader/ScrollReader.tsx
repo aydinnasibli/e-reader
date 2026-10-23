@@ -42,6 +42,11 @@ interface Props {
   onAutoEnd?(): void;
 }
 
+/** How far auto-scroll may ask to be ahead of where the list really is, in points. */
+const MAX_LEAD = 120;
+/** Further apart than auto-scroll can be ahead: the content moved under the list; start again from where it is. */
+const RESYNC = MAX_LEAD + 80;
+
 interface Win {
   first: number; // first chunk in the window
   last: number; // last chunk in the window
@@ -219,7 +224,8 @@ export function ScrollReader({ book, settings, theme, start, startKey, version, 
     offset.current = actual.current;
     const step = () => {
       const now = Date.now();
-      if (actual.current > seen + 0.5) {
+      // Any movement counts: trimming text above moves the list up, not down.
+      if (Math.abs(actual.current - seen) > 0.5) {
         seen = actual.current;
         moved = now;
       } else if (endLoaded.current && now - moved > 1500) {
@@ -231,7 +237,7 @@ export function ScrollReader({ book, settings, theme, start, startKey, version, 
       last = now;
       // Never run ahead of the list: at the end of the loaded text it can't
       // move, and new text arriving must not make it jump.
-      offset.current = Math.min(offset.current + autoScroll * dt, actual.current + 120);
+      offset.current = Math.min(offset.current + autoScroll * dt, actual.current + MAX_LEAD);
       list.current?.scrollToOffset({ offset: offset.current, animated: false });
       frame = requestAnimationFrame(step);
     };
@@ -367,7 +373,7 @@ export function ScrollReader({ book, settings, theme, start, startKey, version, 
           onScroll={(e) => {
             actual.current = e.nativeEvent.contentOffset.y;
             // Not auto-scrolling, or the content moved under it (text trimmed above): follow the list.
-            if (!autoScroll || Math.abs(offset.current - actual.current) > 200) offset.current = actual.current;
+            if (!autoScroll || Math.abs(offset.current - actual.current) > RESYNC) offset.current = actual.current;
           }}
           scrollEventThrottle={32}
           onScrollBeginDrag={() => autoScroll && onAutoInterrupt?.()}

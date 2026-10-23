@@ -10,10 +10,11 @@ describe('page numbers', () => {
 
   it('pages count up one by one inside a chunk', () => {
     // 30,000 characters on 20 pages, at 1500 a page.
-    expect(pageNumber(0, 30_000, 0, 20, 1500)).toBe(1);
-    expect(pageNumber(0, 30_000, 19, 20, 1500)).toBe(20);
+    expect(pageNumber(0, 30_000, 0, 1500)).toBe(1);
+    expect(pageNumber(0, 30_000, 1, 1500)).toBe(2);
+    expect(pageNumber(0, 30_000, 19, 1500)).toBe(20);
     // The next chunk starts 30,000 characters in: page 21.
-    expect(pageNumber(30_000, 30_000, 0, 20, 1500)).toBe(21);
+    expect(pageNumber(30_000, 30_000, 0, 1500)).toBe(21);
   });
 
   it('never go backwards from one chunk into the next', () => {
@@ -23,7 +24,9 @@ describe('page numbers', () => {
     let prev = 0;
     for (let c = 0; c < 3; c++) {
       for (let i = 0; i < sizes[c]; i++) {
-        const n = pageNumber(c * 50_000, 50_000, i, sizes[c], cpp);
+        const n = pageNumber(c * 50_000, 50_000, i, cpp);
+        // One by one wherever the chunk has room for its pages.
+        if (i > 0 && c !== 1) expect(n).toBe(prev + 1);
         expect(n).toBeGreaterThanOrEqual(prev);
         prev = n;
       }

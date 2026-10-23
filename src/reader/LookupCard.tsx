@@ -23,8 +23,7 @@ interface Props {
   onSwitch(kind: LookupKind): void;
 }
 
-/** `kind` is what the answer is for: right after switching, the old answer must not be read as the new kind. */
-type State<T> = { status: 'loading' } | { status: 'done'; kind: LookupKind; value: T | null } | { status: 'error'; kind: LookupKind; offline: boolean };
+type State<T> = { status: 'loading' } | { status: 'done'; value: T | null } | { status: 'error'; offline: boolean };
 
 /** The language to translate into: the saved choice, else the phone's. */
 export function translateTarget(saved: string): string {
@@ -33,14 +32,14 @@ export function translateTarget(saved: string): string {
   return LANGUAGES.find((l) => l.code.slice(0, 2) === phone)?.code ?? phone;
 }
 
+/** Show one kind of answer: the parent gives each kind its own card (`key`), so an answer is never read as the other kind. */
 export function LookupCard({ kind, text, lang, theme, onBack, onSwitch }: Props) {
   const settings = useSettings();
   const to = translateTarget(settings.translateTo);
   const [attempt, setAttempt] = useState(0);
-  const [answer, setState] = useState<State<Definition | Translation>>({
+  const [state, setState] = useState<State<Definition | Translation>>({
     status: 'loading',
   });
-  const state: State<Definition | Translation> = answer.status !== 'loading' && answer.kind !== kind ? { status: 'loading' } : answer;
 
   useEffect(() => {
     const ctl = new AbortController();
@@ -48,8 +47,8 @@ export function LookupCard({ kind, text, lang, theme, onBack, onSwitch }: Props)
     const job: Promise<Definition | Translation | null> =
       kind === 'define' ? defineWord(text, lang, ctl.signal) : translateText(text, to, ctl.signal);
     job.then(
-      (value) => !ctl.signal.aborted && setState({ status: 'done', kind, value }),
-      (e: unknown) => !ctl.signal.aborted && setState({ status: 'error', kind, offline: e instanceof LookupError && e.offline }),
+      (value) => !ctl.signal.aborted && setState({ status: 'done', value }),
+      (e: unknown) => !ctl.signal.aborted && setState({ status: 'error', offline: e instanceof LookupError && e.offline }),
     );
     return () => ctl.abort();
   }, [kind, text, lang, to, attempt]);

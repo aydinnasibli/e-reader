@@ -548,8 +548,7 @@ export function PageReader({ book, settings, theme, start, startKey, version, on
     cpp && current && cur.page !== null
       ? (() => {
           const total = pageCount(book.estimatedChars, cpp);
-          const pages = current.laid.pages.length;
-          return { page: Math.min(total, pageNumber(book.chunks[cur.chunk]?.[1] ?? 0, book.chunkChars(cur.chunk), cur.page, pages, cpp)), total, cpp };
+          return { page: Math.min(total, pageNumber(book.chunks[cur.chunk]?.[1] ?? 0, book.chunkChars(cur.chunk), cur.page, cpp)), total, cpp };
         })()
       : null;
   const pageKeyInfo = pageInfo ? `${pageInfo.page}|${pageInfo.total}|${Math.round(pageInfo.cpp)}` : '';

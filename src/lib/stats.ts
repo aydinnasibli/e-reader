@@ -176,6 +176,7 @@ export class ReadingTracker {
     if (this.char !== null && this.at !== null) this.ms += Math.max(0, Math.min(now - this.at, this.cap(0) - this.pending));
     this.pending = 0;
     this.at = now;
+    if (now - this.flushAt > 30_000) this.flush();
   }
 
   /** A jump: the time on the page jumped from counts; start a new stretch here. */
@@ -189,11 +190,7 @@ export class ReadingTracker {
    * but the pace is the machine's, so it isn't a sample of the reader's speed.
    */
   autoTurn(char: number) {
-    this.settle(this.now());
-    this.endRun();
-    this.char = char;
-    this.runChar = char;
-    this.runMs = 0;
+    this.reset(char);
   }
 
   turn(char: number) {

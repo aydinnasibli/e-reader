@@ -155,13 +155,20 @@ export default function ReaderScreen() {
     };
   }, [save, tracker]);
 
+  // Page numbers (page mode only), reported by the page reader.
+  const [pageInfo, setPageInfo] = useState<PageInfo | null>(null);
+  const pageInfoRef = useRef(pageInfo);
+  pageInfoRef.current = pageInfo;
+  useEffect(() => setPageInfo(null), [settings.mode]);
+
   // "Back to where I was": the place before the last jump, until used,
   // dismissed, or read past (about ten page turns on).
   // Opened at a highlight: offer the way back to where reading left off.
-  // `page` is the number the footer showed there, so the chip says the same.
-  const [back, setBack] = useState<{ pos: Position; turns: number; page?: number } | null>(atB !== undefined ? { pos: savedPos, turns: 0 } : null);
+  // `shown` is the page number the footer showed there, so the chip says the
+  // same, as long as the pages are the same size (no font change since).
+  const [back, setBack] = useState<{ pos: Position; turns: number; shown?: PageInfo } | null>(atB !== undefined ? { pos: savedPos, turns: 0 } : null);
   const goTo = useCallback((p: Position, mark?: { s: number; e: number }, remember = true) => {
-    if (remember) setBack({ pos: latest.current, turns: 0, page: pageInfoRef.current?.page });
+    if (remember) setBack({ pos: latest.current, turns: 0, shown: pageInfoRef.current ?? undefined });
     latest.current = p;
     jumped.current = true;
     setSearchMark(mark ? { b: p.b, ...mark } : null);
@@ -220,11 +227,6 @@ export default function ReaderScreen() {
     if (draftTimer.current) clearTimeout(draftTimer.current);
   }, []);
 
-  // Page numbers (page mode only), reported by the page reader.
-  const [pageInfo, setPageInfo] = useState<PageInfo | null>(null);
-  const pageInfoRef = useRef(pageInfo);
-  pageInfoRef.current = pageInfo;
-  useEffect(() => setPageInfo(null), [settings.mode]);
 
   // Highlight tool (bottom menu): while on, dragging over text highlights it.
   const [highlighting, setHighlighting] = useState(false);
@@ -412,7 +414,11 @@ export default function ReaderScreen() {
           theme={theme}
           label={
             pageInfo
-              ? `Back to page ${back.page ?? Math.min(pageInfo.total, Math.floor(book.charOffset(back.pos) / pageInfo.cpp) + 1)}`
+              ? `Back to page ${
+                  back.shown && Math.abs(back.shown.cpp - pageInfo.cpp) < pageInfo.cpp * 0.02
+                    ? back.shown.page
+                    : Math.min(pageInfo.total, Math.floor(book.charOffset(back.pos) / pageInfo.cpp) + 1)
+                }`
               : `Back to ${Math.round(book.fraction(back.pos) * 100)}%`
           }
           onPress={() => {

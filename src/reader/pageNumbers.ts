@@ -1,6 +1,6 @@
-// Page numbers for books far too big to paginate whole. Pages are counted
-// exactly inside the chunks that are laid out; everything else is estimated
-// from how many characters fit on a page there. Pure, so it's tested.
+// Page numbers for books far too big to paginate whole. Where a chunk starts
+// is estimated from how many characters fit on a page in the chunks that are
+// laid out; inside a chunk pages count up one by one. Pure, so it's tested.
 
 /** Average characters per page over the laid-out chunks, or null if none yet. */
 export function charsPerPage(samples: { chars: number; pages: number }[]): number | null {
@@ -16,15 +16,17 @@ export function charsPerPage(samples: { chars: number; pages: number }[]): numbe
 }
 
 /**
- * Number (1-based) of page `index` of the `pages` pages of a chunk that starts
- * `chunkFirstChar` characters in and holds `chunkChars`. The chunk's pages are
- * spread evenly over its characters, so numbers only ever go up as you read,
- * also from one chunk into the next (a chunk with more pages than average
- * can't run into the next chunk's numbers).
+ * Number (1-based) of page `index` of a chunk that starts `chunkFirstChar`
+ * characters in and holds `chunkChars`. Pages count up one by one from the
+ * chunk's first number; a chunk with more pages than its share stops short of
+ * the next chunk's first number (its last pages share a number) rather than
+ * run into it, so numbers never go backwards. One with fewer pages skips
+ * ahead to the next chunk's numbers.
  */
-export function pageNumber(chunkFirstChar: number, chunkChars: number, index: number, pages: number, cpp: number): number {
-  const at = chunkFirstChar + (pages > 0 ? (index * chunkChars) / pages : 0);
-  return Math.floor(at / cpp) + 1;
+export function pageNumber(chunkFirstChar: number, chunkChars: number, index: number, cpp: number): number {
+  const first = Math.floor(chunkFirstChar / cpp) + 1;
+  const next = Math.floor((chunkFirstChar + chunkChars) / cpp) + 1;
+  return Math.min(first + index, Math.max(first, next - 1));
 }
 
 export function pageCount(totalChars: number, cpp: number): number {

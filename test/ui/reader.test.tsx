@@ -217,4 +217,19 @@ describe('page numbers, back after a jump, auto page turn', () => {
     fireEvent.press(screen.getByLabelText('Stop'));
     expect(screen.queryByText(/\d+ wpm/)).toBeNull();
   }, 30000);
+
+  it('auto-scroll stops by itself at the end of the book', async () => {
+    setSettings({ mode: 'scroll' });
+    await openBook();
+    // A tap in scroll mode: touch down and up in place.
+    const root = screen.UNSAFE_root.findAll((n) => typeof n.props.onTouchStart === 'function')[0];
+    const touch = { nativeEvent: { pageX: W / 2, pageY: 300 } };
+    fireEvent(root, 'touchStart', touch);
+    fireEvent(root, 'touchEnd', touch);
+    fireEvent.press(await screen.findByLabelText('Auto-scroll'));
+    expect(screen.getByText(/\d+ wpm/)).toBeTruthy();
+    // The whole (short) book is on screen: the list can't move, so it's the end.
+    await waitFor(() => expect(screen.queryByText(/\d+ wpm/)).toBeNull(), { timeout: 4000 });
+  }, 30000);
 });
+
