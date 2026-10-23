@@ -3,7 +3,7 @@
 
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { useEffect, useState } from 'react';
-import { Platform, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
+import { Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import { Sheet } from './Sheet';
 import { useAppColors } from './theme';
 
@@ -24,10 +24,6 @@ export interface PromptOptions {
   multiline?: boolean;
   /** Saving an empty field is allowed (it clears the value); otherwise it does nothing. */
   allowEmpty?: boolean;
-  /** A keyboard for numbers (and "%"). */
-  numbers?: boolean;
-  /** Checks what was typed: a message shown under the field (the dialog stays open), or null if it's fine. */
-  validate?(text: string): string | null;
   onSubmit(text: string): void;
 }
 
@@ -53,11 +49,9 @@ export function DialogHost() {
   const c = useAppColors();
   const [dialog, setDialog] = useState<Dialog | null>(current);
   const [text, setText] = useState('');
-  const [problem, setProblem] = useState<string | null>(null);
   useEffect(() => {
     listener = (d) => {
       setDialog(d);
-      setProblem(null);
       if (d?.kind === 'prompt') setText(d.initial ?? '');
     };
     return () => {
@@ -68,8 +62,6 @@ export function DialogHost() {
   const submit = () => {
     if (dialog?.kind !== 'prompt') return;
     const value = text.trim();
-    const wrong = dialog.validate?.(value) ?? null;
-    if (wrong) return setProblem(wrong);
     if (value || dialog.allowEmpty) dialog.onSubmit(value);
     close();
   };
@@ -97,20 +89,14 @@ export function DialogHost() {
           <TextInput
             autoFocus
             value={text}
-            onChangeText={(t) => {
-              setText(t);
-              setProblem(null);
-            }}
+            onChangeText={setText}
             placeholder={dialog.placeholder}
             placeholderTextColor={c.secondary}
             multiline={dialog.multiline}
             style={[styles.input, dialog.multiline && styles.multiline, { color: c.text, borderColor: c.border, backgroundColor: c.card }]}
             onSubmitEditing={submit}
-            // iOS has a number keyboard with "%"; Android's number pads don't, so it keeps the full one.
-            keyboardType={dialog.numbers && Platform.OS === 'ios' ? 'numbers-and-punctuation' : 'default'}
             returnKeyType="done"
           />
-          {problem ? <Text style={{ color: c.danger, fontSize: 14 }}>{problem}</Text> : null}
           <View style={styles.buttons}>
             <Pressable onPress={close} style={[styles.btn, { backgroundColor: c.chip }]}>
               <Text style={{ color: c.text, fontSize: 16 }}>Cancel</Text>

@@ -1,7 +1,9 @@
-// Control for auto page turn / auto-scroll: speed, pause/resume, stop.
+// Control for auto page turn / auto-scroll: speed, pause/resume, stop, and
+// (page mode) a line filling up until the next page turns.
 
 import Ionicons from '@expo/vector-icons/Ionicons';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { useEffect, useRef } from 'react';
+import { Animated, Easing, Pressable, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import type { Theme } from '@/lib/settings';
 
@@ -9,14 +11,24 @@ interface Props {
   theme: Theme;
   wpm: number;
   running: boolean;
+  /** How long the current page stays; `n` changes for each page. */
+  pageTimer?: { ms: number; n: number } | null;
   onSlower(): void;
   onFaster(): void;
   onToggle(): void;
   onStop(): void;
 }
 
-export function AutoBar({ theme, wpm, running, onSlower, onFaster, onToggle, onStop }: Props) {
+export function AutoBar({ theme, wpm, running, pageTimer, onSlower, onFaster, onToggle, onStop }: Props) {
   const insets = useSafeAreaInsets();
+  const fill = useRef(new Animated.Value(0)).current;
+  useEffect(() => {
+    if (!pageTimer) return;
+    fill.setValue(0);
+    const anim = Animated.timing(fill, { toValue: 1, duration: pageTimer.ms, easing: Easing.linear, useNativeDriver: true });
+    anim.start();
+    return () => anim.stop();
+  }, [pageTimer?.n]); // eslint-disable-line react-hooks/exhaustive-deps
   const btn = (icon: keyof typeof Ionicons.glyphMap, label: string, onPress: () => void, size = 22) => (
     <Pressable onPress={onPress} hitSlop={8} accessibilityLabel={label} style={({ pressed }) => [styles.btn, pressed && { opacity: 0.5 }]}>
       <Ionicons name={icon} size={size} color={theme.text} />
@@ -31,6 +43,11 @@ export function AutoBar({ theme, wpm, running, onSlower, onFaster, onToggle, onS
       {btn('add', 'Faster', onFaster)}
       {btn(running ? 'pause' : 'play', running ? 'Pause' : 'Resume', onToggle, 24)}
       {btn('close', 'Stop', onStop)}
+      {pageTimer ? (
+        <View style={[styles.track, { backgroundColor: theme.border }]} testID="auto-page-timer">
+          <Animated.View style={[styles.fill, { backgroundColor: theme.accent, transform: [{ scaleX: fill }] }]} />
+        </View>
+      ) : null}
     </View>
   );
 }
@@ -56,4 +73,6 @@ const styles = StyleSheet.create({
   quiet: { opacity: 0.75 },
   btn: { padding: 6 },
   speed: { fontSize: 14, fontWeight: '600', minWidth: 70, textAlign: 'center' },
+  track: { position: 'absolute', left: 22, right: 22, bottom: 3, height: 2, borderRadius: 1, overflow: 'hidden' },
+  fill: { height: 2, transformOrigin: 'left' },
 });

@@ -23,7 +23,8 @@ import { CHARS_PER_WORD, pageDelay, scrollSpeed, stepWpm } from '@/reader/autoRe
 import { BackChip } from '@/reader/BackChip';
 import { backLayer } from '@/reader/backLayer';
 import { finishesBook, storyEnd } from '@/reader/finish';
-import { chapterTarget, parseGoTo } from '@/reader/navigate';
+import { GoToSheet } from '@/reader/GoToSheet';
+import { chapterTarget } from '@/reader/navigate';
 import { DisplayPanel } from '@/reader/DisplayPanel';
 import { HighlightBar } from '@/reader/HighlightBar';
 import { TapZones } from '@/reader/TapZones';
@@ -31,7 +32,6 @@ import { LivePreview } from '@/reader/LivePreview';
 import { NoteSheet } from '@/reader/NoteSheet';
 import { useScreenAwake } from '@/reader/screenAwake';
 import { NavigatorSheet, SearchSheet } from '@/reader/Sheets';
-import { showPrompt } from '@/ui/dialogs';
 import { ErrorScreen } from '@/ui/ErrorScreen';
 import { formatMinutes } from '@/ui/format';
 
@@ -97,7 +97,7 @@ export default function ReaderScreen() {
   const [pos, setPos] = useState<Position>(startPos);
   const [end, setEnd] = useState<Position | undefined>(undefined);
   const [chrome, setChrome] = useState(false);
-  const [sheet, setSheet] = useState<'nav' | 'search' | 'display' | null>(null);
+  const [sheet, setSheet] = useState<'nav' | 'search' | 'display' | 'goto' | null>(null);
   const [selection, setSelection] = useState<{ b: number; block: Block; chapter?: string; at?: number } | null>(null);
   const [searchMark, setSearchMark] = useState<{ b: number; s: number; e: number } | null>(null);
   const [failed, setFailed] = useState<string | null>(null);
@@ -340,11 +340,18 @@ export default function ReaderScreen() {
     return () => sub.remove();
   }, []);
   const [turn, setTurn] = useState<{ dir: 1 | -1; n: number } | undefined>(undefined);
+  // How long the page on screen stays, shown filling up in the auto bar (a
+  // page takes its reading time, up to a minute or more: it must be seen working).
+  const [pageTimer, setPageTimer] = useState<{ ms: number; n: number } | null>(null);
   useEffect(() => {
-    if (!autoActive || settings.mode !== 'page' || !book) return;
+    if (!autoActive || settings.mode !== 'page' || !book) {
+      setPageTimer(null);
+      return;
+    }
     const from = book.charOffset(pos);
     const to = end ? book.charOffset(end) : from + 1500;
     const delay = pageDelay(Math.max(1, to - from), autoWpm);
+    setPageTimer((p) => ({ ms: delay, n: (p?.n ?? 0) + 1 }));
     // The last page: stop when it's read.
     if (book.complete && to >= book.totalChars) {
       const t = setTimeout(() => setAuto(null), delay);
@@ -458,17 +465,6 @@ export default function ReaderScreen() {
       : `${formatMinutes(bookLeft)} left in book`;
 
   const Reader = settings.mode === 'page' ? PageReader : ScrollReader;
-  const goToPrompt = () => {
-    const pages = pageInfo?.total ?? null;
-    showPrompt(pages ? 'Go to page' : 'Go to', {
-      placeholder: pages ? `Page 1–${pages}, or a percentage like 45%` : 'A percentage, like 45%',
-      confirm: 'Go',
-      numbers: true,
-      validate: (text) =>
-        parseGoTo(text, pages) !== null ? null : pages ? `Enter a page from 1 to ${pages}, or a percentage.` : 'Enter a percentage from 0 to 100.',
-      onSubmit: async (text) => goTo(await book.positionAt(parseGoTo(text, pages)!)),
-    });
-  };
   return (
     <View style={{ flex: 1, backgroundColor: theme.bg }}>
       <StatusBar hidden={!chrome && sheet !== 'display'} style={theme.dark ? 'light' : 'dark'} />
@@ -552,7 +548,7 @@ export default function ReaderScreen() {
           setHighlighting(true);
         }}
         onSeek={async (f) => goTo(await book.positionAt(f))}
-        onGoTo={goToPrompt}
+        onGoTo={() => setSheet('goto')}
         onPrevChapter={prevChapter !== null ? () => goTo({ b: prevChapter, o: 0 }) : undefined}
         onNextChapter={nextChapter !== null ? () => goTo({ b: nextChapter, o: 0 }) : undefined}
       />
@@ -564,6 +560,7 @@ export default function ReaderScreen() {
           theme={theme}
           wpm={autoWpm}
           running={auto.running}
+          pageTimer={pageTimer}
           onSlower={() => setSettings({ autoWpm: stepWpm(autoWpm, -1) })}
           onFaster={() => setSettings({ autoWpm: stepWpm(autoWpm, 1) })}
           onToggle={() => setAuto({ running: !auto.running })}
@@ -580,6 +577,14 @@ export default function ReaderScreen() {
       ) : null}
       <NavigatorSheet visible={sheet === 'nav'} onClose={() => setSheet(null)} theme={theme} book={book} currentBlock={pos.b} onGo={goTo} />
       <SearchSheet visible={sheet === 'search'} onClose={() => setSheet(null)} theme={theme} book={book} onGo={goTo} />
+      <GoToSheet
+        visible={sheet === 'goto'}
+        theme={theme}
+        page={pageInfo}
+        fraction={book.fraction(pos)}
+        onClose={() => setSheet(null)}
+        onGo={async (f) => goTo(await book.positionAt(f))}
+      />
       <DisplayPanel
         visible={sheet === 'display'}
         onClose={() => {

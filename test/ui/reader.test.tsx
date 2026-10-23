@@ -9,7 +9,6 @@ import type { Block, Manifest } from '@/engine/types';
 import { getAnnotations } from '@/lib/annotations';
 import { setSettings } from '@/lib/settings';
 import ReaderScreen from '@/app/reader/[id]';
-import { DialogHost } from '@/ui/dialogs';
 
 const P1 = 'Call me Ishmael. Some years ago, never mind how long precisely, having little or no money in my purse.';
 const P2 = 'It is a way I have of driving off the spleen and regulating the circulation.';
@@ -189,9 +188,12 @@ describe('tap zones', () => {
 });
 
 describe('page numbers, back after a jump, auto page turn', () => {
-  it('the footer shows the page number', async () => {
+  it('the footer shows the page number; the top shows the battery with its symbol', async () => {
     await openBook();
     await waitFor(() => expect(screen.getByText(/^1 of 1 · /)).toBeTruthy(), { timeout: 3000 });
+    const battery = await screen.findByLabelText('Battery 82%');
+    expect(screen.getByText('battery-full')).toBeTruthy(); // the icon (drawn as its name in tests)
+    expect(battery).toBeTruthy();
   }, 30000);
 
   it('after jumping from the contents, a chip goes back to where you were', async () => {
@@ -293,26 +295,24 @@ describe('the end of the book', () => {
 });
 
 describe('getting around from the menu', () => {
-  it('Go to page takes a page number or a percentage, and says what to type otherwise', async () => {
-    render(
-      <>
-        <ReaderScreen />
-        <DialogHost />
-      </>,
-    );
-    await waitFor(() => expect(shown(P1).length).toBeGreaterThan(0), { timeout: 9000 });
+  it('Go to page: a page number, or a percentage; out of range says what to type', async () => {
+    await openBook();
     fireEvent.press(shown(P1)[0], { nativeEvent: { pageX: W / 2, pageY: 300 } });
     await waitFor(() => expect(screen.getByText(/^1 of 1 · /)).toBeTruthy(), { timeout: 3000 });
     fireEvent.press(screen.getByLabelText('Go to page'));
-    const field = screen.getByPlaceholderText('Page 1–1, or a percentage like 45%');
+    expect(screen.getByText(/You're on page 1 of 1/)).toBeTruthy();
+    const field = screen.getByLabelText('Page number');
     fireEvent.changeText(field, '7');
-    fireEvent.press(screen.getByText('Go'));
-    // Said right there, and the dialog stays open to fix it.
-    expect(screen.getByText('Enter a page from 1 to 1, or a percentage.')).toBeTruthy();
-    fireEvent.changeText(field, '50%');
-    expect(screen.queryByText('Enter a page from 1 to 1, or a percentage.')).toBeNull();
-    fireEvent.press(screen.getByText('Go'));
-    await waitFor(() => expect(screen.queryByPlaceholderText('Page 1–1, or a percentage like 45%')).toBeNull());
+    fireEvent.press(screen.getByLabelText('Go'));
+    // Said right there, and the window stays open to fix it.
+    expect(screen.getByText('Enter a page from 1 to 1.')).toBeTruthy();
+    // Or by percentage.
+    fireEvent.press(screen.getByLabelText('By percentage'));
+    fireEvent.changeText(screen.getByLabelText('Percentage'), '50');
+    expect(screen.queryByText(/Enter a/)).toBeNull();
+    fireEvent.press(screen.getByLabelText('Go'));
+    // Gone there: the way back to where you were is offered.
+    expect(await screen.findByLabelText(/^Back to page \d+$/)).toBeTruthy();
   }, 30000);
 
   it('chapter buttons: none before the first chapter or after the last', async () => {

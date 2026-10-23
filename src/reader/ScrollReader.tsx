@@ -408,7 +408,7 @@ export function ScrollReader({ book, settings, theme, start, startKey, version, 
       {highlightLayer}
       <View pointerEvents="none" style={[styles.badge, { bottom: insets.bottom + 6, backgroundColor: theme.bg }]}>
         <Text style={{ color: theme.muted, fontSize: 12 }} numberOfLines={1} maxFontSizeMultiplier={1.4}>
-          {settings.showClock ? <ClockBattery /> : null}
+          {settings.showClock ? <ClockBattery color={theme.muted} /> : null}
           {settings.showClock ? ' · ' : ''}
           {pct.toFixed(1)}%{footerRight ? ` · ${footerRight}` : ''}
         </Text>

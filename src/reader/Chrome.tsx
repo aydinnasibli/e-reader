@@ -114,12 +114,18 @@ export function Chrome(p: Props) {
           thumbTintColor={theme.accent}
         />
         <View style={styles.infoRow}>
-          <Pressable onPress={p.onGoTo} hitSlop={8} accessibilityLabel="Go to page" style={styles.goTo}>
-            <Text style={[styles.small, { color: theme.accent }]}>
+          {/* Where you are, as a button: tap to type a page to go to. */}
+          <Pressable
+            onPress={p.onGoTo}
+            hitSlop={6}
+            accessibilityRole="button"
+            accessibilityLabel="Go to page"
+            style={({ pressed }) => [styles.goTo, { borderColor: theme.accent, opacity: pressed ? 0.5 : 1 }]}>
+            <Ionicons name="keypad-outline" size={14} color={theme.accent} />
+            <Text numberOfLines={1} maxFontSizeMultiplier={LABEL_SCALE} style={[styles.small, styles.goToText, { color: theme.text }]}>
               {p.pageLabel ? `${p.pageLabel(shown)} · ` : ''}
               {(shown * 100).toFixed(1)}%
             </Text>
-            <Ionicons name="chevron-forward" size={12} color={theme.accent} />
           </Pressable>
           <Text numberOfLines={1} style={[styles.small, styles.info, { color: theme.muted }]}>
             {p.info ?? ''}
@@ -165,9 +171,10 @@ const styles = StyleSheet.create({
   chapterRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   chapterBtn: { padding: 4 },
   chapter: { flex: 1, fontSize: 14, fontWeight: '600', textAlign: 'center' },
-  goTo: { flexDirection: 'row', alignItems: 'center', gap: 2, flexShrink: 1 },
+  goTo: { flexDirection: 'row', alignItems: 'center', gap: 6, borderWidth: 1, borderRadius: 14, paddingHorizontal: 10, paddingVertical: 5 },
+  goToText: { fontWeight: '600' },
   slider: { alignSelf: 'stretch', height: 40 },
-  infoRow: { flexDirection: 'row', justifyContent: 'space-between' },
+  infoRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
   small: { fontSize: 12 },
   info: { flexShrink: 1, textAlign: 'right', marginLeft: 12 },
 });

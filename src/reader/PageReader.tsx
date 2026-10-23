@@ -582,7 +582,7 @@ export function PageReader({ book, settings, theme, start, startKey, version, on
         </Text>
         {settings.showClock ? (
           <View style={[styles.side, styles.sideRight]}>
-            <Battery maxScale={META_SCALE} style={[styles.meta, { color: theme.muted }]} />
+            <Battery maxScale={META_SCALE} color={theme.muted} style={[styles.meta, { color: theme.muted }]} />
           </View>
         ) : null}
         {bookmarked ? <Ionicons name="bookmark" size={20} color={theme.accent} style={styles.ribbon} /> : null}
