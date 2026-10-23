@@ -105,7 +105,7 @@ Every "Fixed" row has a test that **fails on the old code and passes on the new*
 | P1-2 | **Fixed (logic) — device NOT VERIFIED** | Page = `adjustable` with increment/decrement/next/previous/activate actions, page number as its value; neighbour pages hidden from screen readers (`src/reader/PageReader.tsx`). | `test/ui/a11y.test.tsx`. Real VoiceOver/TalkBack behaviour needs a device. |
 | P1-3 | **Open — needs owner** | Recommend `@sentry/react-native` (Expo config plugin, EAS source maps). Needs a Sentry project/DSN and is a new dependency. | — |
 | P1-4 | **Open — proposed** | RTL needs per-paragraph direction, mirrored hit testing and page order; too large to do blind. | — |
-| P1-5 | **Fixed — see CI result below** | `.github/workflows/ci.yml`: every non-main push and PR runs tsc, lint, all tests, `expo export`, Android release (sideload APK + store AAB) and iOS Release (simulator, unsigned). Publishes nothing. | CI run on this branch |
+| P1-5 | **Fixed** | `.github/workflows/ci.yml`: every non-main push and PR runs tsc, lint, all tests, `expo export`, Android release (sideload APK + store AAB) and iOS Release (simulator, unsigned). Publishes nothing. | CI run on this branch |
 | P2-1 | **Fixed** | `ios.privacyManifests` (no tracking, no collected data, UserDefaults CA92.1, FileTimestamp C617.1, SystemBootTime 35F9.1) + `ITSAppUsesNonExemptEncryption: false`. | `test/storeBuild.test.ts`; `expo prebuild -p ios` output checked; App Store upload validation **NOT VERIFIED** |
 | P2-2 | **Fixed** | `Tap` defaults to `accessibilityRole="button"`. | `test/ui/a11y.test.tsx` |
 | P2-3 | **Fixed (first run)** | First-run book text size = 19 × system font scale (19–40). | `test/settings.test.ts` |
@@ -127,6 +127,24 @@ Every "Fixed" row has a test that **fails on the old code and passes on the new*
 | jest (`test/ui/*.test.tsx`) | ✅ 83/83 (was 80) |
 | `expo export` android + ios (Hermes bytecode) | ✅ locally |
 | `expo prebuild` android (store) + ios | ✅ locally; manifests inspected |
-| Android release build | CI_ANDROID |
-| iOS release build | CI_IOS |
+| Android release build | ✅ CI run 40036428137 on `3515e12`: `assembleRelease` (signed sideload APK) and `STORE_BUILD=1 bundleRelease` (AAB, `BUILD SUCCESSFUL in 11m 16s`). Merged release manifest: `android:targetSdkVersion="36"`; store build has no `REQUEST_INSTALL_PACKAGES`. Play Console upload/pre-launch report **NOT VERIFIED**. |
+| iOS release build | ✅ same run, Xcode 26.6: `xcodebuild -configuration Release -sdk iphonesimulator` → `** BUILD SUCCEEDED **`; `PrivacyInfo.xcprivacy` present in the `.app` with the declared reasons. A **signed device archive / App Store Connect validation is NOT VERIFIED** (no signing identity). |
 | Device E2E, memory over 20 open/close cycles, cold start, page-turn FPS, screen readers on device, dark-mode flash | **NOT VERIFIED** — no device or emulator available in this environment (Android SDK download host is blocked; no macOS) |
+
+## 4. Verdict
+
+**Sideloaded Android APK (today's distribution): ship** — on one condition: the owner accepts P0-1 (public signing key) as a known risk, or decides to rotate it. Everything this pass changed is covered by tests that fail on the old code; CI builds both release flavours.
+
+**Google Play / App Store: don't ship yet.** The store-specific blockers that code can fix are fixed (P0-2 via `STORE_BUILD=1`, the iOS privacy manifest, target SDK 36). What's still missing: a signing key that isn't public (Play App Signing), crash reporting (P1-3), store listing disclosures for look-up/translate (P2-7), and at least one run on real devices (all the **NOT VERIFIED** rows).
+
+### Remaining risks, most serious first
+
+1. **P0-1 public signing key.** Anyone can make an APK that installs as an update and gets this app's data. This needs an owner decision.
+2. **No crash reporting (P1-3).** Production crashes stay invisible. Needs a Sentry (or similar) account.
+3. **Nothing has been run on a device.** Not checked: the screen-reader page turning, the Maestro flow, memory over 20 open/close cycles, cold start, page-turn smoothness, the dark-mode flash, and the Hermes timings for 1000+ books.
+4. **RTL books (P1-4)** display and select incorrectly.
+5. **No backup or export of the library (P2-9).** Reinstalling or moving to a new phone loses books, highlights and notes.
+6. **The Google Translate endpoint is unofficial (P2-7)** and can stop working at any time.
+7. **Storage format has no schema version (P2-10).** A future change to how books are converted can shift highlights to the wrong place in existing books.
+8. **iOS can't receive books from other apps (P2-11).** Only the Add button works.
+9. **`npm audit` reports 5 high issues (P2-8).** All are in build tooling, not in the app; they go away with the next Expo 58 patch.
