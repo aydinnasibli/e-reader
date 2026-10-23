@@ -1,6 +1,7 @@
 import Ionicons from '@expo/vector-icons/Ionicons';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { StyleSheet, Text, View } from 'react-native';
 import { useAppColors } from './theme';
+import { Tap } from '@/ui/Tap';
 
 interface Action {
   label: string;
@@ -22,12 +23,12 @@ export function ErrorScreen({ title, message, actions }: { title: string; messag
       ) : null}
       <View style={styles.actions}>
         {actions.map((a) => (
-          <Pressable
+          <Tap
             key={a.label}
             onPress={a.onPress}
-            style={({ pressed }) => [styles.btn, { backgroundColor: a.primary ? c.accent : c.chip, opacity: pressed ? 0.7 : 1 }]}>
+            style={[styles.btn, { backgroundColor: a.primary ? c.accent : c.chip }]}>
             <Text style={{ color: a.primary ? c.accentText : c.text, fontSize: 16, fontWeight: '600' }}>{a.label}</Text>
-          </Pressable>
+          </Tap>
         ))}
       </View>
     </View>

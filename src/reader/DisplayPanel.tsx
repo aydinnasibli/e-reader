@@ -5,8 +5,9 @@
 
 import Ionicons from '@expo/vector-icons/Ionicons';
 import Slider from '@react-native-community/slider';
-import { type ReactNode, useEffect, useRef, useState } from 'react';
-import { Animated, Pressable, ScrollView, StyleSheet, Switch, Text, View, useWindowDimensions } from 'react-native';
+import * as Haptics from 'expo-haptics';
+import { type ReactNode, createContext, useContext, useEffect, useRef, useState } from 'react';
+import { Animated, Platform, Pressable, ScrollView, StyleSheet, Switch, Text, View, useWindowDimensions } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { FONTS, ensureFont, fontFace, isFontLoaded } from '@/lib/fonts';
 import {
@@ -25,6 +26,8 @@ import {
   resetSettings,
   setSettings,
 } from '@/lib/settings';
+import { Segmented } from '@/ui/Segmented';
+import { Tap } from '@/ui/Tap';
 
 type Tab = 'text' | 'spacing' | 'colors' | 'page';
 const TABS: { key: Tab; label: string }[] = [
@@ -33,6 +36,9 @@ const TABS: { key: Tab; label: string }[] = [
   { key: 'colors', label: 'Colours' },
   { key: 'page', label: 'Page' },
 ];
+
+/** A slider being dragged stops the panel scrolling, which would otherwise take the gesture. */
+const Sliding = createContext<(active: boolean) => void>(() => {});
 
 /** A slider moved (`done` false) or was released (`done` true). */
 export type SlideHandler = (patch: Partial<ReaderSettings>, done: boolean) => void;
@@ -52,6 +58,7 @@ export function DisplayPanel({ visible, onClose, settings, theme, onSlide }: Pro
   const slide = useRef(new Animated.Value(visible ? 0 : 1)).current;
   const [mounted, setMounted] = useState(visible);
   const [tab, setTab] = useState<Tab>('text');
+  const [sliding, setSliding] = useState(false);
 
   useEffect(() => {
     if (visible) setMounted(true);
@@ -90,23 +97,28 @@ export function DisplayPanel({ visible, onClose, settings, theme, onSlide }: Pro
           },
         ]}>
         <View style={styles.header}>
-          <View style={[styles.tabs, { backgroundColor: c.bg }]}>
-            {TABS.map((t) => (
-              <Pressable key={t.key} onPress={() => setTab(t.key)} style={[styles.tab, tab === t.key && { backgroundColor: c.chrome }]}>
-                <Text style={{ color: c.text, fontSize: 14, fontWeight: tab === t.key ? '700' : '500' }}>{t.label}</Text>
-              </Pressable>
-            ))}
-          </View>
-          <Pressable onPress={onClose} hitSlop={10} accessibilityLabel="Close">
-            <Ionicons name="chevron-down" size={24} color={c.muted} />
-          </Pressable>
+          <Segmented<Tab>
+            fill
+            style={styles.tabs}
+            track={c.bg}
+            thumb={c.chrome}
+            value={tab}
+            options={TABS.map((t) => t.key)}
+            render={(k, on) => <Text style={{ color: c.text, fontSize: 14, fontWeight: on ? '700' : '500' }}>{TABS.find((t) => t.key === k)!.label}</Text>}
+            onPick={setTab}
+          />
+          <Tap onPress={onClose} hitSlop={10} accessibilityLabel="Close" style={[styles.close, { backgroundColor: c.bg }]}>
+            <Ionicons name="chevron-down" size={20} color={c.text} />
+          </Tap>
         </View>
-        <ScrollView contentContainerStyle={styles.body} showsVerticalScrollIndicator={false}>
-          {tab === 'text' && <TextTab s={settings} c={c} slide={onSlide} />}
-          {tab === 'spacing' && <SpacingTab s={settings} c={c} slide={onSlide} />}
-          {tab === 'colors' && <ColorsTab s={settings} c={c} />}
-          {tab === 'page' && <PageTab s={settings} c={c} />}
-        </ScrollView>
+        <Sliding.Provider value={setSliding}>
+          <ScrollView contentContainerStyle={styles.body} showsVerticalScrollIndicator={false} scrollEnabled={!sliding}>
+            {tab === 'text' && <TextTab s={settings} c={c} slide={onSlide} />}
+            {tab === 'spacing' && <SpacingTab s={settings} c={c} slide={onSlide} />}
+            {tab === 'colors' && <ColorsTab s={settings} c={c} />}
+            {tab === 'page' && <PageTab s={settings} c={c} />}
+          </ScrollView>
+        </Sliding.Provider>
       </Animated.View>
     </>
   );
@@ -121,8 +133,10 @@ function TextTab({ s, c, slide }: { s: ReaderSettings; c: Theme; slide: SlideHan
         {FONTS.map((f) => {
           const active = s.font === f.id;
           return (
-            <Pressable
+            <Tap
               key={f.id}
+              haptic="select"
+              accessibilityState={{ selected: active }}
               onPress={() => ensureFont(f.id).then(() => setSettings({ font: f.id }), () => setSettings({ font: f.id }))}
               style={[styles.fontCard, { backgroundColor: c.bg, borderColor: active ? c.accent : c.border }]}>
               <Text style={[fontFace(f.id, 'regular', false, false), { color: c.text, fontSize: 26 }]}>Aa</Text>
@@ -130,7 +144,7 @@ function TextTab({ s, c, slide }: { s: ReaderSettings; c: Theme; slide: SlideHan
                 {f.label}
               </Text>
               {f.note ? <Text style={{ color: c.muted, fontSize: 10 }}>{f.note}</Text> : null}
-            </Pressable>
+            </Tap>
           );
         })}
       </ScrollView>
@@ -161,10 +175,10 @@ function TextTab({ s, c, slide }: { s: ReaderSettings; c: Theme; slide: SlideHan
         />
       </Row>
       <Row c={c} label="Indent paragraphs">
-        <Switch value={s.indent} onValueChange={(indent) => setSettings({ indent })} />
+        <Toggle c={c} value={s.indent} onChange={(indent) => setSettings({ indent })} />
       </Row>
       <Row c={c} label="Hyphenation">
-        <Switch value={s.hyphenate} onValueChange={(hyphenate) => setSettings({ hyphenate })} />
+        <Toggle c={c} value={s.hyphenate} onChange={(hyphenate) => setSettings({ hyphenate })} />
       </Row>
     </>
   );
@@ -177,9 +191,9 @@ function SpacingTab({ s, c, slide }: { s: ReaderSettings; c: Theme; slide: Slide
       <SliderRow c={c} label="Letter spacing" value={s.letterSpacing} min={LETTER_SPACING.min} max={LETTER_SPACING.max} step={0.1} format={(v) => v.toFixed(1)} onChange={(letterSpacing, done) => slide({ letterSpacing }, done)} />
       <SliderRow c={c} label="Paragraph spacing" value={s.paraSpacing} min={PARA_SPACING.min} max={PARA_SPACING.max} step={0.05} format={(v) => `${v.toFixed(2)} lines`} onChange={(paraSpacing, done) => slide({ paraSpacing }, done)} />
       <SliderRow c={c} label="Margins" value={s.margin} min={MARGIN.min} max={MARGIN.max} step={2} format={(v) => `${v}`} onChange={(margin, done) => slide({ margin }, done)} />
-      <Pressable onPress={resetSettings} style={[styles.reset, { borderColor: c.border }]}>
-        <Text style={{ color: c.text, fontSize: 15 }}>Reset text and spacing</Text>
-      </Pressable>
+      <Tap onPress={resetSettings} haptic="light" style={[styles.reset, { borderColor: c.border, backgroundColor: c.bg }]}>
+        <Text style={{ color: c.text, fontSize: 15, fontWeight: '500' }}>Reset text and spacing</Text>
+      </Tap>
     </>
   );
 }
@@ -188,13 +202,16 @@ const PRESETS = Object.keys(THEMES) as Exclude<ThemeName, 'custom'>[];
 
 function ColorsTab({ s, c }: { s: ReaderSettings; c: Theme }) {
   const swatch = (name: ThemeName, t: Theme, label: string) => (
-    <Pressable
+    <Tap
       key={name}
+      haptic="select"
+      accessibilityLabel={`${label} theme`}
+      accessibilityState={{ selected: s.theme === name }}
       onPress={() => setSettings({ theme: name })}
       style={[styles.themeSwatch, { backgroundColor: t.bg, borderColor: s.theme === name ? c.accent : c.border }]}>
       <Text style={{ color: t.text, fontSize: 16, fontWeight: '600' }}>Aa</Text>
       <Text style={{ color: t.muted, fontSize: 10, marginTop: 2 }}>{label}</Text>
-    </Pressable>
+    </Tap>
   );
   return (
     <>
@@ -207,7 +224,7 @@ function ColorsTab({ s, c }: { s: ReaderSettings; c: Theme }) {
       <Text style={[styles.section, { color: c.muted }]}>CUSTOM TEXT</Text>
       <Swatches c={c} colors={TEXT_SWATCHES} value={s.theme === 'custom' ? s.customText : ''} onPick={(customText) => setSettings({ customText, theme: 'custom' })} />
       <Row c={c} label="Dark theme when phone is in dark mode">
-        <Switch value={s.autoNight} onValueChange={(autoNight) => setSettings({ autoNight })} />
+        <Toggle c={c} value={s.autoNight} onChange={(autoNight) => setSettings({ autoNight })} />
       </Row>
       {s.autoNight && (
         <Row c={c} label="Night theme">
@@ -266,10 +283,10 @@ function PageTab({ s, c }: { s: ReaderSettings; c: Theme }) {
         </Text>
       </View>
       <Row c={c} label="Time and battery while reading">
-        <Switch value={s.showClock} onValueChange={(showClock) => setSettings({ showClock })} />
+        <Toggle c={c} value={s.showClock} onChange={(showClock) => setSettings({ showClock })} />
       </Row>
       <Row c={c} label="Tap left side to go forward">
-        <Switch value={s.tapForward} onValueChange={(tapForward) => setSettings({ tapForward })} />
+        <Toggle c={c} value={s.tapForward} onChange={(tapForward) => setSettings({ tapForward })} />
       </Row>
       <Text style={[styles.hint, { color: c.muted }]}>
         Tap the right side of a page (or swipe) to turn it. With the switch on, both sides go forward — handy for one-handed reading; swipe right to go back.
@@ -291,13 +308,15 @@ function Row({ c, label, children }: { c: Theme; label: string; children: ReactN
 
 function Segment<T extends string>({ c, value, options, render, onPick }: { c: Theme; value: T; options: readonly T[]; render(v: T): string; onPick(v: T): void }) {
   return (
-    <View style={[styles.segment, { backgroundColor: c.bg }]}>
-      {options.map((o) => (
-        <Pressable key={o} onPress={() => onPick(o)} style={[styles.segItem, o === value && { backgroundColor: c.accent }]}>
-          <Text style={{ color: o === value ? '#fff' : c.text, fontSize: 13, fontWeight: '500' }}>{render(o)}</Text>
-        </Pressable>
-      ))}
-    </View>
+    <Segmented
+      track={c.bg}
+      thumb={c.accent}
+      value={value}
+      options={options}
+      itemStyle={styles.segItem}
+      render={(o, on) => <Text style={{ color: on ? '#fff' : c.text, fontSize: 14, fontWeight: on ? '600' : '500' }}>{render(o)}</Text>}
+      onPick={onPick}
+    />
   );
 }
 
@@ -312,28 +331,52 @@ function IconSegment<T extends string>({
   options: { v: T; icon: keyof typeof Ionicons.glyphMap; label: string }[];
   onPick(v: T): void;
 }) {
+  const byValue = (v: T) => options.find((o) => o.v === v)!;
   return (
-    <View style={[styles.segment, { backgroundColor: c.bg }]}>
-      {options.map((o) => (
-        <Pressable key={o.v} onPress={() => onPick(o.v)} accessibilityLabel={o.label} style={[styles.segIcon, o.v === value && { backgroundColor: c.accent }]}>
-          <Ionicons name={o.icon} size={20} color={o.v === value ? '#fff' : c.text} />
-        </Pressable>
-      ))}
-    </View>
+    <Segmented
+      track={c.bg}
+      thumb={c.accent}
+      value={value}
+      options={options.map((o) => o.v)}
+      itemStyle={styles.segIcon}
+      label={(v) => byValue(v).label}
+      render={(v, on) => <Ionicons name={byValue(v).icon} size={20} color={on ? '#fff' : c.text} />}
+      onPick={onPick}
+    />
+  );
+}
+
+function Toggle({ c, value, onChange }: { c: Theme; value: boolean; onChange(v: boolean): void }) {
+  return (
+    <Switch
+      value={value}
+      onValueChange={(v) => {
+        Haptics.selectionAsync().catch(() => {});
+        onChange(v);
+      }}
+      trackColor={{ true: c.accent, false: c.border }}
+      ios_backgroundColor={c.border}
+      thumbColor={Platform.OS === 'android' ? (value ? '#fff' : '#f4f4f4') : undefined}
+    />
   );
 }
 
 function Swatches({ c, colors, value, onPick }: { c: Theme; colors: string[]; value: string; onPick(v: string): void }) {
   return (
     <View style={styles.swatches}>
-      {colors.map((col) => (
-        <Pressable
-          key={col}
-          onPress={() => onPick(col)}
-          accessibilityLabel={col}
-          style={[styles.colorDot, { backgroundColor: col, borderColor: value.toLowerCase() === col.toLowerCase() ? c.accent : c.border }]}
-        />
-      ))}
+      {colors.map((col) => {
+        const on = value.toLowerCase() === col.toLowerCase();
+        return (
+          <Tap
+            key={col}
+            haptic="select"
+            onPress={() => onPick(col)}
+            accessibilityLabel={col}
+            accessibilityState={{ selected: on }}
+            style={[styles.colorDot, { backgroundColor: col, borderColor: on ? c.accent : c.border, borderWidth: on ? 3 : 2 }]}
+          />
+        );
+      })}
     </View>
   );
 }
@@ -363,19 +406,22 @@ function SliderRow({
   right?: ReactNode;
 }) {
   const [live, setLive] = useState<number | null>(null);
+  const setSliding = useContext(Sliding);
   const shown = live ?? value;
   const snap = (v: number) => Math.round(Math.round(v / step) * step * 1000) / 1000;
   return (
     <View style={styles.sliderBlock}>
       <View style={styles.sliderHead}>
         <Text style={[styles.label, { color: c.text }]}>{label}</Text>
-        <Text style={{ color: c.muted, fontSize: 14 }}>{format(shown)}</Text>
+        <Text style={{ color: live === null ? c.muted : c.accent, fontSize: 15, fontWeight: '600', fontVariant: ['tabular-nums'] }}>{format(shown)}</Text>
       </View>
       <View style={styles.sliderRow}>
         {left}
         <Slider
           testID={`slider-${label}`}
-          style={{ flex: 1, height: 36 }}
+          style={styles.slider}
+          // Tap anywhere on the bar to jump there, not only on the knob (iPhone).
+          tapToSeek
           minimumValue={min}
           maximumValue={max}
           step={step}
@@ -383,17 +429,21 @@ function SliderRow({
           onValueChange={(v) => {
             const n = snap(v);
             // Sliders report every pixel; only pass on real changes.
-            if (n === live) return;
+            if (n === (live ?? value)) return;
+            Haptics.selectionAsync().catch(() => {});
             setLive(n);
             onChange(n, false);
           }}
+          onSlidingStart={() => setSliding(true)}
           onSlidingComplete={(v) => {
+            setSliding(false);
             setLive(null);
             onChange(snap(v), true);
           }}
           minimumTrackTintColor={c.accent}
           maximumTrackTintColor={c.border}
-          thumbTintColor={c.accent}
+          // The iPhone's own white knob, with its shadow, is bigger and easier to see than a coloured one.
+          thumbTintColor={Platform.OS === 'android' ? c.accent : undefined}
         />
         {right}
       </View>
@@ -417,24 +467,24 @@ const styles = StyleSheet.create({
     elevation: 12,
   },
   header: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingHorizontal: 16, paddingTop: 12, paddingBottom: 6 },
-  tabs: { flex: 1, flexDirection: 'row', borderRadius: 10, padding: 3 },
-  tab: { flex: 1, alignItems: 'center', paddingVertical: 7, borderRadius: 8 },
+  tabs: { flex: 1 },
+  close: { width: 34, height: 34, borderRadius: 17, alignItems: 'center', justifyContent: 'center' },
   body: { paddingHorizontal: 18, paddingBottom: 18 },
   fonts: { gap: 10, paddingVertical: 10 },
   fontCard: { width: 112, height: 82, borderRadius: 12, borderWidth: 2, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 6 },
   row: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', minHeight: 50, gap: 12 },
   stack: { paddingVertical: 8, gap: 8, alignItems: 'flex-start' },
-  label: { fontSize: 15, flexShrink: 1 },
-  segment: { flexDirection: 'row', borderRadius: 9, padding: 2 },
-  segItem: { paddingHorizontal: 10, paddingVertical: 7, borderRadius: 7 },
-  segIcon: { paddingHorizontal: 14, paddingVertical: 6, borderRadius: 7 },
+  label: { fontSize: 16, fontWeight: '500', flexShrink: 1 },
+  segItem: { paddingHorizontal: 11, paddingVertical: 7 },
+  segIcon: { paddingHorizontal: 15, paddingVertical: 6 },
+  slider: { flex: 1, height: 48 },
   sliderBlock: { paddingTop: 10 },
   sliderHead: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'baseline' },
   sliderRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
   reset: { alignSelf: 'center', marginTop: 18, borderWidth: StyleSheet.hairlineWidth, borderRadius: 10, paddingHorizontal: 16, paddingVertical: 9 },
   themeGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 10, paddingVertical: 10 },
   themeSwatch: { width: 60, height: 56, borderRadius: 12, borderWidth: 2, alignItems: 'center', justifyContent: 'center' },
-  section: { fontSize: 11, fontWeight: '700', letterSpacing: 0.6, marginTop: 10, marginBottom: 6 },
+  section: { fontSize: 12, fontWeight: '700', letterSpacing: 0.6, marginTop: 12, marginBottom: 8 },
   swatches: { flexDirection: 'row', flexWrap: 'wrap', gap: 10 },
   colorDot: { width: 34, height: 34, borderRadius: 17, borderWidth: 2 },
   hint: { fontSize: 13, lineHeight: 18, marginTop: 6 },

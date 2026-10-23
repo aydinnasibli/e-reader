@@ -3,7 +3,7 @@ import * as ScreenOrientation from 'expo-screen-orientation';
 import { type ErrorBoundaryProps, router, useLocalSearchParams } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react';
-import { ActivityIndicator, AppState, BackHandler, Pressable, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
+import { ActivityIndicator, AppState, BackHandler, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
 import { type Position, blockText } from '@/engine/types';
 import { addBookmark, highlightsByBlock, removeBookmark, useAnnotations } from '@/lib/annotations';
 import { getBook, loadManifest, reprocessBook, updateBook, useBookStatus, useLiveBook } from '@/lib/library';
@@ -40,6 +40,7 @@ import { NavigatorSheet, SearchSheet } from '@/reader/Sheets';
 import { ErrorScreen } from '@/ui/ErrorScreen';
 import { formatMinutes } from '@/ui/format';
 import { highlightColor } from '@/ui/theme';
+import { Tap } from '@/ui/Tap';
 
 const before = (a: Position, b: Position) => a.b < b.b || (a.b === b.b && a.o <= b.o);
 const strictlyBefore = (a: Position, b: Position) => a.b < b.b || (a.b === b.b && a.o < b.o);
@@ -450,9 +451,9 @@ export default function ReaderScreen() {
         <Text style={{ color: theme.muted, marginTop: 12 }}>
           {book.chunkCount === 0 ? `Preparing book… ${Math.round((live?.progress ?? 0) * 100)}%` : 'Loading font…'}
         </Text>
-        <Pressable onPress={() => router.back()} style={{ marginTop: 24 }}>
+        <Tap onPress={() => router.back()} style={{ marginTop: 24 }}>
           <Text style={{ color: theme.accent, fontSize: 16 }}>Back to library</Text>
-        </Pressable>
+        </Tap>
       </View>
     );
   }

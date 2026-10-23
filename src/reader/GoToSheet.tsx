@@ -1,10 +1,11 @@
 // "Go to page": type a page number (or a percentage) and go there.
 
 import { useState } from 'react';
-import { Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
+import { StyleSheet, Text, TextInput, View } from 'react-native';
 import type { Theme } from '@/lib/settings';
 import { Sheet } from '@/ui/Sheet';
 import { parseGoTo } from './navigate';
+import { Tap } from '@/ui/Tap';
 
 interface Props {
   visible: boolean;
@@ -57,8 +58,9 @@ export function GoToSheet({ visible, theme, page, fraction, onClose, onGo }: Pro
         {page ? (
           <View style={[styles.segment, { backgroundColor: theme.bg }]}>
             {(['page', 'percent'] as const).map((u) => (
-              <Pressable
+              <Tap
                 key={u}
+                haptic="select"
                 onPress={() => {
                   setUnit(u);
                   reset();
@@ -67,7 +69,7 @@ export function GoToSheet({ visible, theme, page, fraction, onClose, onGo }: Pro
                 accessibilityState={{ selected: by === u }}
                 style={[styles.segItem, by === u && { backgroundColor: theme.accent }]}>
                 <Text style={{ color: by === u ? '#fff' : theme.text, fontSize: 14, fontWeight: '600' }}>{u === 'page' ? 'Page' : 'Percent'}</Text>
-              </Pressable>
+              </Tap>
             ))}
           </View>
         ) : null}
@@ -92,12 +94,12 @@ export function GoToSheet({ visible, theme, page, fraction, onClose, onGo }: Pro
         </View>
         {problem ? <Text style={styles.problem}>{problem}</Text> : null}
         <View style={styles.buttons}>
-          <Pressable onPress={close} style={[styles.btn, { backgroundColor: theme.bg }]}>
+          <Tap onPress={close} style={[styles.btn, { backgroundColor: theme.bg }]}>
             <Text style={{ color: theme.text, fontSize: 16 }}>Cancel</Text>
-          </Pressable>
-          <Pressable onPress={go} style={[styles.btn, { backgroundColor: theme.accent }]} accessibilityLabel="Go">
+          </Tap>
+          <Tap onPress={go} style={[styles.btn, { backgroundColor: theme.accent }]} accessibilityLabel="Go">
             <Text style={{ color: '#fff', fontSize: 16, fontWeight: '700' }}>Go</Text>
-          </Pressable>
+          </Tap>
         </View>
       </View>
     </Sheet>

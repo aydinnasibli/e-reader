@@ -3,10 +3,11 @@
 // highlight it, or add a note, copy it or remove its highlighting.
 
 import Ionicons from '@expo/vector-icons/Ionicons';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import type { Theme } from '@/lib/settings';
 import { HIGHLIGHT_COLORS, type HighlightColor, highlightColor } from '@/ui/theme';
+import { Tap } from '@/ui/Tap';
 
 interface Props {
   theme: Theme;
@@ -28,18 +29,18 @@ interface Props {
 export function HighlightBar({ theme, color, selected, hasNote, canRemove, onColor, onNote, onCopy, onRemove, onDone }: Props) {
   const insets = useSafeAreaInsets();
   const action = (icon: keyof typeof Ionicons.glyphMap, label: string, onPress: () => void) => (
-    <Pressable onPress={onPress} hitSlop={6} accessibilityRole="button" accessibilityLabel={label} style={({ pressed }) => [styles.action, pressed && { opacity: 0.5 }]}>
+    <Tap onPress={onPress} hitSlop={6} accessibilityRole="button" accessibilityLabel={label} style={styles.action}>
       <Ionicons name={icon} size={20} color={theme.text} />
       <Text style={[styles.actionLabel, { color: theme.text }]} numberOfLines={1} maxFontSizeMultiplier={1.3}>
         {label}
       </Text>
-    </Pressable>
+    </Tap>
   );
   return (
     <View style={[styles.panel, { bottom: insets.bottom + 12, backgroundColor: theme.chrome, borderColor: theme.border }]}>
       <View style={styles.row}>
         {(Object.keys(HIGHLIGHT_COLORS) as HighlightColor[]).map((c) => (
-          <Pressable
+          <Tap
             key={c}
             onPress={() => onColor(c)}
             hitSlop={6}
@@ -48,9 +49,9 @@ export function HighlightBar({ theme, color, selected, hasNote, canRemove, onCol
             style={[styles.dot, { backgroundColor: highlightColor(c, theme.dark), borderColor: c === color ? theme.text : 'transparent' }]}
           />
         ))}
-        <Pressable onPress={onDone} hitSlop={8} style={[styles.done, { backgroundColor: theme.accent }]} accessibilityLabel="Done highlighting">
+        <Tap onPress={onDone} hitSlop={8} style={[styles.done, { backgroundColor: theme.accent }]} accessibilityLabel="Done highlighting">
           <Text style={styles.doneText}>Done</Text>
-        </Pressable>
+        </Tap>
       </View>
       {selected ? (
         <View style={[styles.row, styles.actions, { borderColor: theme.border }]}>

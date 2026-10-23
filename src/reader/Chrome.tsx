@@ -3,9 +3,10 @@
 import Ionicons from '@expo/vector-icons/Ionicons';
 import Slider from '@react-native-community/slider';
 import { useEffect, useRef, useState } from 'react';
-import { Animated, Pressable, StyleSheet, Text, View } from 'react-native';
+import { Animated, Platform, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import type { Theme } from '@/lib/settings';
+import { Tap } from '@/ui/Tap';
 
 /** The tool labels share one row: they grow with the phone's text size only this far. */
 const LABEL_SCALE = 1.3;
@@ -57,22 +58,22 @@ export function Chrome(p: Props) {
   const shown = drag ?? p.fraction;
   const bar = { backgroundColor: theme.chrome, borderColor: theme.border };
   const tool = (name: keyof typeof Ionicons.glyphMap, onPress: () => void, label: string, color = theme.text) => (
-    <Pressable onPress={onPress} hitSlop={6} style={({ pressed }) => [styles.tool, pressed && { opacity: 0.5 }]} accessibilityLabel={label}>
+    <Tap onPress={onPress} hitSlop={6} style={styles.tool} accessibilityLabel={label}>
       <Ionicons name={name} size={24} color={color} />
       <Text numberOfLines={1} maxFontSizeMultiplier={LABEL_SCALE} style={[styles.toolLabel, { color }]}>
         {label}
       </Text>
-    </Pressable>
+    </Tap>
   );
   const chapterButton = (dir: 'prev' | 'next', onPress?: () => void) => (
-    <Pressable
+    <Tap
       onPress={onPress}
       disabled={!onPress}
       hitSlop={10}
-      style={({ pressed }) => [styles.chapterBtn, { opacity: !onPress ? 0.3 : pressed ? 0.5 : 1 }]}
+      style={[styles.chapterBtn, { opacity: onPress ? 1 : 0.3 }]}
       accessibilityLabel={dir === 'prev' ? 'Previous chapter' : 'Next chapter'}>
       <Ionicons name={dir === 'prev' ? 'play-skip-back-outline' : 'play-skip-forward-outline'} size={20} color={theme.text} />
-    </Pressable>
+    </Tap>
   );
   // Clear of a landscape notch or camera cutout on either side.
   const sides = (pad: number) => ({ paddingLeft: pad + insets.left, paddingRight: pad + insets.right });
@@ -82,15 +83,15 @@ export function Chrome(p: Props) {
       <Animated.View
         pointerEvents={p.visible ? 'auto' : 'none'}
         style={[styles.top, bar, sides(8), { paddingTop: insets.top + 4, opacity: fade, transform: [{ translateY: fade.interpolate({ inputRange: [0, 1], outputRange: [-12, 0] }) }] }]}>
-        <Pressable onPress={p.onBack} hitSlop={8} style={styles.back} accessibilityLabel="Back to library">
+        <Tap onPress={p.onBack} hitSlop={8} style={styles.back} accessibilityLabel="Back to library">
           <Ionicons name="chevron-back" size={24} color={theme.text} />
-        </Pressable>
+        </Tap>
         <Text numberOfLines={1} style={[styles.title, { color: theme.text }]}>
           {p.title}
         </Text>
-        <Pressable onPress={p.onAuto} hitSlop={8} style={styles.back} accessibilityLabel={p.autoLabel}>
+        <Tap onPress={p.onAuto} hitSlop={8} style={styles.back} accessibilityLabel={p.autoLabel}>
           <Ionicons name="play-circle-outline" size={26} color={theme.text} />
-        </Pressable>
+        </Tap>
       </Animated.View>
       <Animated.View
         pointerEvents={p.visible ? 'auto' : 'none'}
@@ -109,24 +110,26 @@ export function Chrome(p: Props) {
           value={p.fraction}
           onValueChange={setDrag}
           onSlidingComplete={(v) => p.onSeek(v)}
+          tapToSeek
           minimumTrackTintColor={theme.accent}
           maximumTrackTintColor={theme.border}
-          thumbTintColor={theme.accent}
+          // The iPhone's own white knob is bigger and easier to see than a coloured one.
+          thumbTintColor={Platform.OS === 'android' ? theme.accent : undefined}
         />
         <View style={styles.infoRow}>
           {/* Where you are, as a button: tap to type a page to go to. */}
-          <Pressable
+          <Tap
             onPress={p.onGoTo}
             hitSlop={6}
             accessibilityRole="button"
             accessibilityLabel="Go to page"
-            style={({ pressed }) => [styles.goTo, { borderColor: theme.accent, opacity: pressed ? 0.5 : 1 }]}>
+            style={[styles.goTo, { borderColor: theme.accent }]}>
             <Ionicons name="keypad-outline" size={14} color={theme.accent} />
             <Text numberOfLines={1} maxFontSizeMultiplier={LABEL_SCALE} style={[styles.small, styles.goToText, { color: theme.text }]}>
               {p.pageLabel ? `${p.pageLabel(shown)} · ` : ''}
               {(shown * 100).toFixed(1)}%
             </Text>
-          </Pressable>
+          </Tap>
           <Text numberOfLines={1} style={[styles.small, styles.info, { color: theme.muted }]}>
             {p.info ?? ''}
           </Text>

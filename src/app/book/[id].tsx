@@ -4,7 +4,7 @@
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { Stack, router, useLocalSearchParams } from 'expo-router';
 import { useMemo } from 'react';
-import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useAnnotations } from '@/lib/annotations';
 import { isFinished, useShelves } from '@/lib/collections';
@@ -15,6 +15,7 @@ import { confirmRemoveBook } from '@/ui/confirm';
 import { showPrompt } from '@/ui/dialogs';
 import { formatBytes, formatMinutes } from '@/ui/format';
 import { useAppColors } from '@/ui/theme';
+import { Tap } from '@/ui/Tap';
 
 const FORMAT_NAMES: Record<string, string> = { epub: 'EPUB', fb2: 'FB2', txt: 'Plain text', mobi: 'MOBI', azw3: 'AZW3 (Kindle)' };
 const date = (ms: number) => (ms ? new Date(ms).toLocaleDateString(undefined, { day: 'numeric', month: 'long', year: 'numeric' }) : '—');
@@ -76,28 +77,28 @@ export default function BookDetails() {
       <View style={styles.top}>
         <Cover book={book} width={110} radius={8} />
         <View style={styles.names}>
-          <Pressable onPress={editTitle} accessibilityLabel="Edit title" style={styles.editable}>
+          <Tap onPress={editTitle} accessibilityLabel="Edit title" style={styles.editable}>
             <Text style={[styles.title, { color: c.text }]}>{book.title}</Text>
             <Ionicons name="pencil" size={15} color={c.secondary} />
-          </Pressable>
-          <Pressable onPress={editAuthor} accessibilityLabel="Edit author" style={styles.editable}>
+          </Tap>
+          <Tap onPress={editAuthor} accessibilityLabel="Edit author" style={styles.editable}>
             <Text style={{ color: book.author ? c.text : c.secondary, fontSize: 16 }}>{book.author || 'Add author'}</Text>
             <Ionicons name="pencil" size={13} color={c.secondary} />
-          </Pressable>
+          </Tap>
           {book.titleEdited ? (
-            <Pressable onPress={() => restoreBookTitle(id)} hitSlop={6}>
+            <Tap onPress={() => restoreBookTitle(id)} hitSlop={6}>
               <Text style={{ color: c.accent, fontSize: 13 }}>Use the book’s own title</Text>
-            </Pressable>
+            </Tap>
           ) : null}
         </View>
       </View>
 
-      <Pressable
+      <Tap
         onPress={() => router.push({ pathname: '/reader/[id]', params: { id } })}
-        style={({ pressed }) => [styles.open, { backgroundColor: c.accent, opacity: pressed ? 0.8 : 1 }]}
+        style={[styles.open, { backgroundColor: c.accent }]}
         accessibilityLabel={percent > 0 ? 'Continue reading' : 'Start reading'}>
         <Text style={{ color: c.accentText, fontSize: 16, fontWeight: '600' }}>{percent > 0 && !finished ? `Continue reading · ${Math.round(percent * 100)}%` : 'Read'}</Text>
-      </Pressable>
+      </Tap>
 
       <Text style={[styles.heading, { color: c.secondary }]}>READING</Text>
       <View style={[styles.card, { backgroundColor: c.card }]}>
@@ -122,10 +123,10 @@ export default function BookDetails() {
         {book.status === 'error' ? row('Status', 'Could not be opened') : null}
       </View>
 
-      <Pressable onPress={remove} style={styles.remove} accessibilityLabel="Remove from library">
+      <Tap onPress={remove} style={styles.remove} accessibilityLabel="Remove from library">
         <Ionicons name="trash-outline" size={18} color={c.danger} />
         <Text style={{ color: c.danger, fontSize: 16 }}>Remove from library</Text>
-      </Pressable>
+      </Tap>
     </ScrollView>
   );
 }

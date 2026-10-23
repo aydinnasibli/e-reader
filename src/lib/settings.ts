@@ -64,14 +64,14 @@ export interface Theme {
 }
 
 export const THEMES: Record<Exclude<ThemeName, 'custom'>, Theme> = {
-  light: { bg: '#FFFFFF', text: '#1B1B1B', muted: '#8A8A8E', chrome: '#F7F7F7', border: '#E2E2E2', accent: '#2F6FEB', dark: false },
-  paper: { bg: '#FAF7F0', text: '#2B2A27', muted: '#948F84', chrome: '#F2EEE4', border: '#E1DBCD', accent: '#3A6FD8', dark: false },
-  sepia: { bg: '#F5EDDC', text: '#4A3B2A', muted: '#9C8B73', chrome: '#EDE3CD', border: '#DCCFB3', accent: '#A0522D', dark: false },
-  mint: { bg: '#E9F3EA', text: '#1F3324', muted: '#7E9584', chrome: '#DFEBE1', border: '#C9DCCD', accent: '#2E7D4F', dark: false },
-  gray: { bg: '#3A3A3D', text: '#E6E6E6', muted: '#A0A0A5', chrome: '#444448', border: '#525257', accent: '#7FB2FF', dark: true },
-  night: { bg: '#0F1A2A', text: '#C9D3E0', muted: '#71819A', chrome: '#162336', border: '#22324A', accent: '#6EA8FE', dark: true },
-  dark: { bg: '#1E1E20', text: '#D8D8D8', muted: '#8E8E93', chrome: '#2A2A2D', border: '#3A3A3D', accent: '#6EA8FE', dark: true },
-  black: { bg: '#000000', text: '#B9B9B9', muted: '#6E6E73', chrome: '#121212', border: '#262626', accent: '#6EA8FE', dark: true },
+  light: { bg: '#FFFFFF', text: '#1B1B1B', muted: '#6E6E73', chrome: '#F2F2F7', border: '#D1D1D6', accent: '#2F6FEB', dark: false },
+  paper: { bg: '#FAF7F0', text: '#2B2A27', muted: '#7A7468', chrome: '#EEE8DA', border: '#D5CCB8', accent: '#3A6FD8', dark: false },
+  sepia: { bg: '#F5EDDC', text: '#4A3B2A', muted: '#836F55', chrome: '#EADCBF', border: '#CFBD98', accent: '#A0522D', dark: false },
+  mint: { bg: '#E9F3EA', text: '#1F3324', muted: '#647D6A', chrome: '#DAE8DD', border: '#B7CEBD', accent: '#2E7D4F', dark: false },
+  gray: { bg: '#3A3A3D', text: '#E6E6E6', muted: '#B0B0B5', chrome: '#48484C', border: '#606066', accent: '#7FB2FF', dark: true },
+  night: { bg: '#0F1A2A', text: '#C9D3E0', muted: '#8696B0', chrome: '#1A2A40', border: '#2C4160', accent: '#6EA8FE', dark: true },
+  dark: { bg: '#1E1E20', text: '#D8D8D8', muted: '#9C9CA1', chrome: '#2C2C2F', border: '#48484C', accent: '#6EA8FE', dark: true },
+  black: { bg: '#000000', text: '#B9B9B9', muted: '#8A8A8F', chrome: '#1C1C1E', border: '#38383A', accent: '#6EA8FE', dark: true },
 };
 
 export const BG_SWATCHES = ['#FFFFFF', '#FAF7F0', '#F5EDDC', '#EFE6D2', '#E9F3EA', '#E6EEF7', '#F3E8EE', '#3A3A3D', '#2B2B2E', '#0F1A2A', '#1E2A22', '#000000'];
@@ -184,9 +184,9 @@ export function customTheme(bg: string, text: string): Theme {
   return {
     bg,
     text,
-    muted: mix(text, bg, 0.45),
-    chrome: mix(bg, text, 0.05),
-    border: mix(bg, text, 0.15),
+    muted: mix(text, bg, 0.38),
+    chrome: mix(bg, text, 0.07),
+    border: mix(bg, text, 0.2),
     accent: dark ? '#6EA8FE' : '#2F6FEB',
     dark,
   };

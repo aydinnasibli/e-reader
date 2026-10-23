@@ -1,9 +1,10 @@
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { useEffect } from 'react';
-import { ActivityIndicator, AppState, Pressable, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, AppState, StyleSheet, Text, View } from 'react-native';
 import { canSelfUpdate, checkForUpdate, cleanOldDownloads, dismissUpdateError, installUpdate, snoozeUpdate, useUpdateState } from '@/lib/appUpdate';
 import { formatBytes } from './format';
 import { useAppColors } from './theme';
+import { Tap } from '@/ui/Tap';
 
 /** "New version available" bar at the top of the library (Android APK only). */
 export function UpdateBanner() {
@@ -41,9 +42,9 @@ export function UpdateBanner() {
             {s.message}
           </Text>
         </View>
-        <Pressable onPress={dismissUpdateError} hitSlop={10}>
+        <Tap onPress={dismissUpdateError} hitSlop={10}>
           <Text style={{ color: c.accent, fontWeight: '600' }}>OK</Text>
-        </Pressable>
+        </Tap>
       </View>
     );
   }
@@ -74,12 +75,12 @@ export function UpdateBanner() {
       </View>
       {!busy && (
         <View style={styles.actions}>
-          <Pressable onPress={() => installUpdate(update)} style={[styles.btn, { backgroundColor: c.accent }]}>
+          <Tap onPress={() => installUpdate(update)} style={[styles.btn, { backgroundColor: c.accent }]}>
             <Text style={{ color: c.accentText, fontWeight: '700' }}>Update</Text>
-          </Pressable>
-          <Pressable onPress={snoozeUpdate} hitSlop={8} accessibilityLabel="Not now">
+          </Tap>
+          <Tap onPress={snoozeUpdate} hitSlop={8} accessibilityLabel="Not now">
             <Text style={{ color: c.secondary, fontSize: 13 }}>Not now</Text>
-          </Pressable>
+          </Tap>
         </View>
       )}
     </View>

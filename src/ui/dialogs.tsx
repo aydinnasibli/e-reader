@@ -6,6 +6,7 @@ import { useEffect, useState } from 'react';
 import { Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import { Sheet } from './Sheet';
 import { useAppColors } from './theme';
+import { Tap } from '@/ui/Tap';
 
 export interface Action {
   label: string;
@@ -98,14 +99,14 @@ export function DialogHost() {
             returnKeyType="done"
           />
           <View style={styles.buttons}>
-            <Pressable onPress={close} style={[styles.btn, { backgroundColor: c.chip }]}>
+            <Tap onPress={close} style={[styles.btn, { backgroundColor: c.chip }]}>
               <Text style={{ color: c.text, fontSize: 16 }}>Cancel</Text>
-            </Pressable>
-            <Pressable
+            </Tap>
+            <Tap
               onPress={submit}
               style={[styles.btn, { backgroundColor: c.accent }]}>
               <Text style={{ color: c.accentText, fontSize: 16, fontWeight: '600' }}>{dialog.confirm ?? 'Save'}</Text>
-            </Pressable>
+            </Tap>
           </View>
         </View>
       )}

@@ -2,9 +2,10 @@
 // to return to where you were reading. Also "Finished" at the end of a book.
 
 import Ionicons from '@expo/vector-icons/Ionicons';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import type { Theme } from '@/lib/settings';
+import { Tap } from '@/ui/Tap';
 
 interface Props {
   label: string;
@@ -18,13 +19,13 @@ export function BackChip({ label, icon = 'arrow-undo', theme, onPress, onDismiss
   const insets = useSafeAreaInsets();
   return (
     <View style={[styles.chip, { bottom: insets.bottom + 40, left: 16 + insets.left, backgroundColor: theme.chrome, borderColor: theme.border }]}>
-      <Pressable onPress={onPress} style={styles.main} hitSlop={6} accessibilityLabel={label}>
+      <Tap onPress={onPress} style={styles.main} hitSlop={6} accessibilityLabel={label}>
         <Ionicons name={icon} size={16} color={theme.accent} />
         <Text style={{ color: theme.text, fontSize: 14, fontWeight: '600' }}>{label}</Text>
-      </Pressable>
-      <Pressable onPress={onDismiss} hitSlop={10} style={styles.close} accessibilityLabel="Dismiss">
+      </Tap>
+      <Tap onPress={onDismiss} hitSlop={10} style={styles.close} accessibilityLabel="Dismiss">
         <Ionicons name="close" size={16} color={theme.muted} />
-      </Pressable>
+      </Tap>
     </View>
   );
 }

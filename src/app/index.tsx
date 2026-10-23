@@ -30,6 +30,7 @@ import { StatsSheet } from '@/ui/StatsSheet';
 import { UpdateBanner } from '@/ui/UpdateBanner';
 import { CURRENT_BUILD, canSelfUpdate, checkForUpdate } from '@/lib/appUpdate';
 import { type AppColors, useAppColors } from '@/ui/theme';
+import { Tap } from '@/ui/Tap';
 
 const GAP = 16;
 
@@ -199,17 +200,18 @@ export default function Library() {
       ) : null}
       <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chips}>
         {chips.map((ch) => (
-          <Pressable
+          <Tap
             key={ch.key}
+            haptic="select"
             onPress={() => setFilter(ch.f)}
             onLongPress={ch.onLong}
             style={[styles.chip, { backgroundColor: active(ch.f) ? c.text : c.chip }]}>
             <Text style={{ color: active(ch.f) ? c.bg : c.text, fontSize: 14, fontWeight: '600' }}>{ch.label}</Text>
-          </Pressable>
+          </Tap>
         ))}
-        <Pressable onPress={() => newCollection()} style={[styles.chip, { backgroundColor: c.chip }]} accessibilityLabel="New collection">
+        <Tap onPress={() => newCollection()} style={[styles.chip, { backgroundColor: c.chip }]} accessibilityLabel="New collection">
           <Ionicons name="add" size={18} color={c.text} />
-        </Pressable>
+        </Tap>
       </ScrollView>
       {current ? <ContinueCard book={current} c={c} onPress={() => open(current)} /> : null}
       {current && visible.length ? <Text style={[styles.section, { color: c.text }]}>All books</Text> : null}
@@ -224,9 +226,9 @@ export default function Library() {
         {books.length ? 'No books match this filter or search.' : 'Add EPUB, FB2, MOBI, AZW3 or TXT books from Files. Huge ones are fine.'}
       </Text>
       {!books.length && (
-        <Pressable onPress={add} style={[styles.emptyBtn, { backgroundColor: c.accent }]}>
+        <Tap onPress={add} style={[styles.emptyBtn, { backgroundColor: c.accent }]}>
           <Text style={{ color: c.accentText, fontSize: 16, fontWeight: '600' }}>Add books</Text>
-        </Pressable>
+        </Tap>
       )}
     </View>
   );
@@ -250,21 +252,21 @@ export default function Library() {
           },
           headerRight: () => (
             <View style={styles.headerButtons}>
-              <Pressable onPress={() => router.push('/notes')} hitSlop={10} accessibilityLabel="Highlights and notes">
+              <Tap onPress={() => router.push('/notes')} hitSlop={10} accessibilityLabel="Highlights and notes">
                 <Ionicons name="color-wand-outline" size={22} color={c.text} />
-              </Pressable>
-              <Pressable onPress={() => setStatsOpen(true)} hitSlop={10} accessibilityLabel="Reading stats">
+              </Tap>
+              <Tap onPress={() => setStatsOpen(true)} hitSlop={10} accessibilityLabel="Reading stats">
                 <Ionicons name="stats-chart-outline" size={22} color={c.text} />
-              </Pressable>
-              <Pressable onPress={viewMenu} hitSlop={10} accessibilityLabel="View options">
+              </Tap>
+              <Tap onPress={viewMenu} hitSlop={10} accessibilityLabel="View options">
                 <Ionicons name="options-outline" size={24} color={c.text} />
-              </Pressable>
+              </Tap>
               {importing ? (
                 <ActivityIndicator />
               ) : (
-                <Pressable onPress={add} hitSlop={10} accessibilityLabel="Add books">
+                <Tap onPress={add} hitSlop={10} accessibilityLabel="Add books">
                   <Ionicons name="add" size={28} color={c.accent} />
-                </Pressable>
+                </Tap>
               )}
             </View>
           ),
@@ -321,7 +323,7 @@ function Progress({ value, c }: { value: number; c: AppColors }) {
 function ContinueCard({ book, c, onPress }: { book: BookEntry; c: AppColors; onPress(): void }) {
   const pct = book.percent ?? 0;
   return (
-    <Pressable onPress={onPress} style={({ pressed }) => [styles.continue, { backgroundColor: c.card, opacity: pressed ? 0.85 : 1 }]}>
+    <Tap feedback="card" onPress={onPress} style={[styles.continue, { backgroundColor: c.card }]}>
       <Cover book={book} width={78} />
       <View style={styles.continueBody}>
         <Text style={[styles.kicker, { color: c.secondary }]}>CONTINUE READING</Text>
@@ -340,7 +342,7 @@ function ContinueCard({ book, c, onPress }: { book: BookEntry; c: AppColors; onP
           <Text style={{ color: c.secondary, fontSize: 13 }}>{Math.round(pct * 100)}%</Text>
         </View>
       </View>
-    </Pressable>
+    </Tap>
   );
 }
 
@@ -349,37 +351,35 @@ function GridCell({ book, width, c, onPress, onLongPress }: { book: BookEntry; w
   const pct = book.percent ?? 0;
   const finished = isFinished(book);
   return (
-    <Pressable onPress={onPress} onLongPress={onLongPress} delayLongPress={350} style={{ width, margin: GAP / 2 }}>
-      {({ pressed }) => (
-        <View style={{ opacity: pressed ? 0.8 : 1 }}>
-          <View>
-            <Cover book={book} width={width} />
-            {status ? (
-              <View style={[styles.badge, book.status === 'error' && { backgroundColor: c.danger }]}>
-                <Text style={styles.badgeText}>{status}</Text>
-              </View>
-            ) : null}
-          </View>
-          <Text numberOfLines={2} style={[styles.cellTitle, { color: c.text }]}>
-            {book.title}
-          </Text>
-          <View style={styles.cellMeta}>
-            {finished ? (
-              <Text style={{ color: c.secondary, fontSize: 12 }}>Finished</Text>
-            ) : pct > 0 ? (
-              <>
-                <View style={{ flex: 1 }}>
-                  <Progress value={pct} c={c} />
-                </View>
-                <Text style={{ color: c.secondary, fontSize: 11 }}>{Math.round(pct * 100)}%</Text>
-              </>
-            ) : (
-              <Text style={{ color: c.accent, fontSize: 12, fontWeight: '600' }}>New</Text>
-            )}
-          </View>
+    <Tap feedback="card" onPress={onPress} onLongPress={onLongPress} delayLongPress={350} style={{ width, margin: GAP / 2 }}>
+      <View>
+        <View>
+          <Cover book={book} width={width} />
+          {status ? (
+            <View style={[styles.badge, book.status === 'error' && { backgroundColor: c.danger }]}>
+              <Text style={styles.badgeText}>{status}</Text>
+            </View>
+          ) : null}
         </View>
-      )}
-    </Pressable>
+        <Text numberOfLines={2} style={[styles.cellTitle, { color: c.text }]}>
+          {book.title}
+        </Text>
+        <View style={styles.cellMeta}>
+          {finished ? (
+            <Text style={{ color: c.secondary, fontSize: 12 }}>Finished</Text>
+          ) : pct > 0 ? (
+            <>
+              <View style={{ flex: 1 }}>
+                <Progress value={pct} c={c} />
+              </View>
+              <Text style={{ color: c.secondary, fontSize: 11 }}>{Math.round(pct * 100)}%</Text>
+            </>
+          ) : (
+            <Text style={{ color: c.accent, fontSize: 12, fontWeight: '600' }}>New</Text>
+          )}
+        </View>
+      </View>
+    </Tap>
   );
 }
 

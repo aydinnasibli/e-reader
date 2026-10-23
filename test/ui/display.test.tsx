@@ -1,5 +1,6 @@
 /// <reference types="jest" />
 import { fireEvent, render, screen } from '@testing-library/react-native';
+import * as Haptics from 'expo-haptics';
 import { type ReactNode, useState } from 'react';
 import { Text } from 'react-native';
 import type { Block } from '@/engine/types';
@@ -7,6 +8,7 @@ import { type ReaderSettings, THEMES, setSettings, useSettings } from '@/lib/set
 import { BookData } from '@/reader/book';
 import { DisplayPanel } from '@/reader/DisplayPanel';
 import { LivePreview } from '@/reader/LivePreview';
+import { Tap } from '@/ui/Tap';
 
 const theme = THEMES.light;
 const TEXT = 'It was the best of times, it was the worst of times.';
@@ -110,3 +112,59 @@ async function useSettingsSnapshot(): Promise<ReaderSettings> {
   await render(<Grab />);
   return s!;
 }
+
+describe('controls answer the finger', () => {
+  beforeEach(() => setSettings({ fontSize: 19, mode: 'page', indent: false }));
+  const scrollEnabled = () => screen.container.queryAll((n) => n.props.scrollEnabled !== undefined && n.props.showsVerticalScrollIndicator === false)[0].props.scrollEnabled;
+
+  it('while a slider is dragged the panel does not scroll; each step ticks', async () => {
+    const tick = jest.spyOn(Haptics, 'selectionAsync');
+    await render(<Reader book={fakeBook([{ k: 'p', r: [TEXT] }])} onSlide={jest.fn()} />);
+    const slider = screen.getByTestId('slider-Size');
+    expect(slider.props.tapToSeek).toBe(true);
+    await fireEvent(slider, 'slidingStart', 19);
+    expect(scrollEnabled()).toBe(false);
+    await fireEvent(slider, 'valueChange', 20.2);
+    await fireEvent(slider, 'valueChange', 20.4); // same step: no second tick
+    expect(tick).toHaveBeenCalledTimes(1);
+    await fireEvent(slider, 'slidingComplete', 20.4);
+    expect(scrollEnabled()).toBe(true);
+    tick.mockRestore();
+  });
+
+  it('options tick when picked, not when the chosen one is tapped again', async () => {
+    const tick = jest.spyOn(Haptics, 'selectionAsync');
+    await render(<Reader book={fakeBook([{ k: 'p', r: [TEXT] }])} onSlide={jest.fn()} />);
+    await fireEvent.press(screen.getByText('Page'));
+    await fireEvent.press(screen.getByText('Scroll'));
+    expect(tick).toHaveBeenCalledTimes(2); // the tab, then the mode
+    expect(screen.getByText('Scroll').props.style.color).toBe('#fff');
+    await fireEvent.press(screen.getByText('Scroll'));
+    expect(tick).toHaveBeenCalledTimes(2);
+    tick.mockRestore();
+  });
+});
+
+describe('Tap', () => {
+  it('a faded (disabled) button fades further from where it is, and haptics are per kind', async () => {
+    const tick = jest.spyOn(Haptics, 'selectionAsync');
+    const tap = jest.spyOn(Haptics, 'impactAsync');
+    const onPress = jest.fn();
+    await render(
+      <>
+        <Tap accessibilityLabel="pick" haptic="select" onPress={onPress} />
+        <Tap accessibilityLabel="act" haptic="light" onPress={onPress} />
+        <Tap accessibilityLabel="plain" onPress={onPress} style={{ opacity: 0.3 }} />
+      </>,
+    );
+    await fireEvent.press(screen.getByLabelText('pick'));
+    await fireEvent.press(screen.getByLabelText('act'));
+    await fireEvent.press(screen.getByLabelText('plain'));
+    expect(onPress).toHaveBeenCalledTimes(3);
+    expect(tick).toHaveBeenCalledTimes(1);
+    expect(tap).toHaveBeenCalledTimes(1);
+    expect([screen.getByLabelText('plain').props.style].flat().find((s) => s && 'opacity' in s)?.opacity).toBe(0.3);
+    tick.mockRestore();
+    tap.mockRestore();
+  });
+});

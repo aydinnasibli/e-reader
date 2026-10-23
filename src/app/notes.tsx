@@ -5,7 +5,7 @@ import Ionicons from '@expo/vector-icons/Ionicons';
 import * as Clipboard from 'expo-clipboard';
 import { Stack, router } from 'expo-router';
 import { useMemo, useState } from 'react';
-import { Pressable, SectionList, Share, StyleSheet, Text, TextInput, View } from 'react-native';
+import { SectionList, Share, StyleSheet, Text, TextInput, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { type Highlight, getAnnotations, removeHighlight, useAnnotationsVersion } from '@/lib/annotations';
 import { exportFileName, notesMarkdown } from '@/lib/exportNotes';
@@ -14,6 +14,7 @@ import { shareTextFile } from '@/lib/shareText';
 import { confirmDeleteHighlight, hasNote } from '@/ui/confirm';
 import { showActions } from '@/ui/dialogs';
 import { highlightColor, useAppColors } from '@/ui/theme';
+import { Tap } from '@/ui/Tap';
 
 interface Section {
   book: BookEntry;
@@ -79,9 +80,9 @@ export default function NotesScreen() {
           headerShadowVisible: false,
           headerRight: () =>
             count ? (
-              <Pressable onPress={exportAll} hitSlop={10} accessibilityLabel="Export highlights">
+              <Tap onPress={exportAll} hitSlop={10} accessibilityLabel="Export highlights">
                 <Ionicons name="share-outline" size={24} color={c.accent} />
-              </Pressable>
+              </Tap>
             ) : null,
         }}
       />
@@ -99,12 +100,13 @@ export default function NotesScreen() {
               autoCorrect={false}
             />
           </View>
-          <Pressable
+          <Tap
+            haptic="select"
             onPress={() => setNotesOnly((v) => !v)}
             style={[styles.chip, { backgroundColor: notesOnly ? c.accent : c.chip }]}
             accessibilityState={{ selected: notesOnly }}>
             <Text style={{ color: notesOnly ? c.accentText : c.text, fontSize: 13, fontWeight: '600' }}>With notes</Text>
-          </Pressable>
+          </Tap>
         </View>
       ) : null}
       <SectionList
@@ -122,19 +124,20 @@ export default function NotesScreen() {
                 {section.data.length} {section.data.length === 1 ? 'highlight' : 'highlights'}
               </Text>
             </View>
-            <Pressable
+            <Tap
               onPress={() => void shareTextFile(exportFileName(section.book.title), notesMarkdown(exportBooks([section])))}
               hitSlop={10}
               accessibilityLabel={`Export ${section.book.title}`}>
               <Ionicons name="share-outline" size={20} color={c.secondary} />
-            </Pressable>
+            </Tap>
           </View>
         )}
         renderItem={({ item: h, section }) => (
-          <Pressable
+          <Tap
+            feedback="card"
             onPress={() => open(section.book, h)}
             onLongPress={() => menu(section.book, h)}
-            style={({ pressed }) => [styles.row, { backgroundColor: c.card, opacity: pressed ? 0.7 : 1 }]}>
+            style={[styles.row, { backgroundColor: c.card }]}>
             <View style={[styles.swatch, { backgroundColor: highlightColor(h.color, c.dark) }]} />
             <View style={{ flex: 1 }}>
               <Text numberOfLines={4} style={[styles.quote, { color: c.text }]}>
@@ -149,7 +152,7 @@ export default function NotesScreen() {
                 {[h.chapter, new Date(h.createdAt).toLocaleDateString()].filter(Boolean).join(' · ')}
               </Text>
             </View>
-          </Pressable>
+          </Tap>
         )}
         ListEmptyComponent={
           <View style={styles.empty}>

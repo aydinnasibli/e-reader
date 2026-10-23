@@ -2,7 +2,7 @@
 
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { type ReactNode, useEffect, useRef, useState } from 'react';
-import { ActivityIndicator, FlatList, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
+import { ActivityIndicator, FlatList, StyleSheet, Text, TextInput, View } from 'react-native';
 import type { Position, TocEntry } from '@/engine/types';
 import { type Bookmark, type Highlight, removeBookmark, removeHighlight, useAnnotations } from '@/lib/annotations';
 import type { Theme } from '@/lib/settings';
@@ -11,6 +11,8 @@ import { Sheet } from '@/ui/Sheet';
 import { highlightColor } from '@/ui/theme';
 import type { BookData } from './book';
 import { type Hit, MAX_HITS, type SearchProgress, searchBook } from './search';
+import { Segmented } from '@/ui/Segmented';
+import { Tap } from '@/ui/Tap';
 
 const sheetColors = (t: Theme) => ({ bg: t.chrome, text: t.text, border: t.border });
 
@@ -42,16 +44,24 @@ export function NavigatorSheet({
   ];
   return (
     <Sheet visible={visible} onClose={onClose} colors={sheetColors(theme)} height={0.8}>
-      <View style={[styles.tabs, { backgroundColor: theme.bg }]}>
-        {tabs.map((t) => (
-          <Pressable key={t.key} onPress={() => setTab(t.key)} style={[styles.tab, tab === t.key && { backgroundColor: theme.chrome }]}>
-            <Text style={{ color: theme.text, fontWeight: tab === t.key ? '700' : '500', fontSize: 14 }}>
+      <Segmented<Tab>
+        fill
+        style={styles.tabs}
+        track={theme.bg}
+        thumb={theme.chrome}
+        value={tab}
+        options={tabs.map((t) => t.key)}
+        render={(k, on) => {
+          const t = tabs.find((x) => x.key === k)!;
+          return (
+            <Text style={{ color: theme.text, fontWeight: on ? '700' : '500', fontSize: 14 }}>
               {t.label}
               {t.count ? ` ${t.count}` : ''}
             </Text>
-          </Pressable>
-        ))}
-      </View>
+          );
+        }}
+        onPick={setTab}
+      />
       {tab === 'contents' && <TocList book={book} theme={theme} currentBlock={currentBlock} visible={visible} onGo={onGo} />}
       {tab === 'bookmarks' && (
         <AnnotationList
@@ -134,7 +144,7 @@ function TocList({ book, theme, currentBlock, visible, onGo }: { book: BookData;
       getItemLayout={(_, i) => ({ length: 50, offset: 50 * i, index: i })}
       onScrollToIndexFailed={() => {}}
       renderItem={({ item, index }) => (
-        <Pressable onPress={() => onGo({ b: item.b, o: 0 })} style={[styles.tocRow, { paddingLeft: 20 + Math.min(item.l, 4) * 18 }]}>
+        <Tap feedback="dim" onPress={() => onGo({ b: item.b, o: 0 })} style={[styles.tocRow, { paddingLeft: 20 + Math.min(item.l, 4) * 18 }]}>
           {/* Rows have a fixed height (to jump straight to the current chapter in long contents): text grows only so far. */}
           <Text
             numberOfLines={1}
@@ -143,7 +153,7 @@ function TocList({ book, theme, currentBlock, visible, onGo }: { book: BookData;
             {item.t}
           </Text>
           <Text maxFontSizeMultiplier={1.4} style={{ color: theme.muted, fontSize: 13 }}>{book.totalChars ? `${Math.round((book.chunks[book.chunkOf(item.b)]?.[1] / book.estimatedChars) * 100)}%` : ''}</Text>
-        </Pressable>
+        </Tap>
       )}
     />
   );
@@ -171,12 +181,12 @@ function AnnotationList<T extends { id: string }>({
       keyExtractor={(x) => x.id}
       ItemSeparatorComponent={() => <View style={[styles.sep, { backgroundColor: theme.border }]} />}
       renderItem={({ item }) => (
-        <Pressable onPress={() => onPress(item)} style={({ pressed }) => [styles.annRow, pressed && { opacity: 0.6 }]}>
+        <Tap feedback="dim" onPress={() => onPress(item)} style={styles.annRow}>
           {render(item)}
-          <Pressable onPress={() => onDelete(item)} hitSlop={10} accessibilityLabel="Delete">
+          <Tap onPress={() => onDelete(item)} hitSlop={10} accessibilityLabel="Delete">
             <Ionicons name="trash-outline" size={19} color={theme.muted} />
-          </Pressable>
-        </Pressable>
+          </Tap>
+        </Tap>
       )}
     />
   );
@@ -227,7 +237,7 @@ export function SearchSheet({
           style={[styles.searchInput, { color: theme.text }]}
         />
         {query ? (
-          <Pressable
+          <Tap
             onPress={() => {
               setQuery('');
               cancel.current?.();
@@ -235,7 +245,7 @@ export function SearchSheet({
             }}
             hitSlop={10}>
             <Ionicons name="close-circle" size={18} color={theme.muted} />
-          </Pressable>
+          </Tap>
         ) : null}
       </View>
       {result && (
@@ -256,14 +266,14 @@ export function SearchSheet({
         keyExtractor={(h, i) => `${h.b}:${h.o}:${i}`}
         ItemSeparatorComponent={() => <View style={[styles.sep, { backgroundColor: theme.border }]} />}
         renderItem={({ item }: { item: Hit }) => (
-          <Pressable onPress={() => onGo({ b: item.b, o: item.o }, { s: item.o, e: item.o + item.len })} style={styles.hit}>
+          <Tap feedback="dim" onPress={() => onGo({ b: item.b, o: item.o }, { s: item.o, e: item.o + item.len })} style={styles.hit}>
             <Text numberOfLines={3} style={{ color: theme.text, fontSize: 15, lineHeight: 21 }}>
               {item.before}
               <Text style={{ backgroundColor: theme.accent + '44', fontWeight: '700' }}>{item.match}</Text>
               {item.after}
             </Text>
             <Text style={[styles.meta, { color: theme.muted }]}>{book.chapterAt(item.b)?.t ?? ''}</Text>
-          </Pressable>
+          </Tap>
         )}
       />
     </Sheet>
@@ -271,8 +281,7 @@ export function SearchSheet({
 }
 
 const styles = StyleSheet.create({
-  tabs: { flexDirection: 'row', marginHorizontal: 16, marginBottom: 8, borderRadius: 10, padding: 3 },
-  tab: { flex: 1, alignItems: 'center', paddingVertical: 8, borderRadius: 8 },
+  tabs: { marginHorizontal: 16, marginBottom: 8 },
   empty: { paddingHorizontal: 24, paddingVertical: 28, fontSize: 15, lineHeight: 22, textAlign: 'center' },
   tocRow: { height: 50, flexDirection: 'row', alignItems: 'center', paddingRight: 20, gap: 12 },
   annRow: { flexDirection: 'row', alignItems: 'flex-start', paddingHorizontal: 20, paddingVertical: 14, gap: 12 },

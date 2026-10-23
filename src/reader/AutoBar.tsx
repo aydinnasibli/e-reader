@@ -3,9 +3,10 @@
 
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { useEffect, useRef } from 'react';
-import { Animated, Easing, Pressable, StyleSheet, Text, View } from 'react-native';
+import { Animated, Easing, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import type { Theme } from '@/lib/settings';
+import { Tap } from '@/ui/Tap';
 
 interface Props {
   theme: Theme;
@@ -30,9 +31,9 @@ export function AutoBar({ theme, wpm, running, pageTimer, onSlower, onFaster, on
     return () => anim.stop();
   }, [pageTimer?.n]); // eslint-disable-line react-hooks/exhaustive-deps
   const btn = (icon: keyof typeof Ionicons.glyphMap, label: string, onPress: () => void, size = 22) => (
-    <Pressable onPress={onPress} hitSlop={8} accessibilityLabel={label} style={({ pressed }) => [styles.btn, pressed && { opacity: 0.5 }]}>
+    <Tap onPress={onPress} hitSlop={8} accessibilityLabel={label} style={styles.btn}>
       <Ionicons name={icon} size={size} color={theme.text} />
-    </Pressable>
+    </Tap>
   );
   return (
     <View style={[styles.bar, { bottom: insets.bottom + 12, backgroundColor: theme.chrome, borderColor: theme.border }, running && styles.quiet]}>

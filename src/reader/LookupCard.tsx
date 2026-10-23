@@ -6,9 +6,10 @@ import * as Clipboard from 'expo-clipboard';
 import * as Haptics from 'expo-haptics';
 import { getLocales } from 'expo-localization';
 import { useEffect, useState } from 'react';
-import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { type Definition, LANGUAGES, LookupError, type Translation, defineWord, languageName, translateText } from '@/lib/lookup';
 import { setSettings, type Theme, useSettings } from '@/lib/settings';
+import { Tap } from '@/ui/Tap';
 
 export type LookupKind = 'define' | 'translate';
 
@@ -64,9 +65,9 @@ export function LookupCard({ kind, text, lang, theme, onBack, onSwitch }: Props)
             {kind === 'define' ? 'Couldn’t reach the dictionary.' : 'Couldn’t translate right now.'}{' '}
             {state.offline ? 'Check the internet connection.' : 'The service didn’t answer; try again in a moment.'}
           </Text>
-          <Pressable onPress={() => setAttempt((a) => a + 1)} style={[styles.btn, { borderColor: theme.border }]} accessibilityLabel="Try again">
+          <Tap onPress={() => setAttempt((a) => a + 1)} style={[styles.btn, { borderColor: theme.border }]} accessibilityLabel="Try again">
             <Text style={{ color: theme.accent, fontWeight: '600' }}>Try again</Text>
-          </Pressable>
+          </Tap>
         </View>
       );
     if (kind === 'define') {
@@ -75,12 +76,12 @@ export function LookupCard({ kind, text, lang, theme, onBack, onSwitch }: Props)
         return (
           <View style={styles.pad}>
             <Text style={[styles.msg, muted]}>No dictionary entry for “{text}”.</Text>
-            <Pressable
+            <Tap
               onPress={() => onSwitch('translate')}
               style={[styles.btn, { borderColor: theme.border }]}
               accessibilityLabel="Translate instead">
               <Text style={{ color: theme.accent, fontWeight: '600' }}>Translate instead</Text>
-            </Pressable>
+            </Tap>
           </View>
         );
       return (
@@ -120,7 +121,7 @@ export function LookupCard({ kind, text, lang, theme, onBack, onSwitch }: Props)
           ) : (
             <Text style={[styles.source, muted]}>Google Translate</Text>
           )}
-          <Pressable
+          <Tap
             onPress={() => {
               Clipboard.setStringAsync(t.text).catch(() => {});
               Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
@@ -128,7 +129,7 @@ export function LookupCard({ kind, text, lang, theme, onBack, onSwitch }: Props)
             hitSlop={10}
             accessibilityLabel="Copy translation">
             <Ionicons name="copy-outline" size={20} color={theme.muted} />
-          </Pressable>
+          </Tap>
         </View>
       </>
     );
@@ -137,24 +138,25 @@ export function LookupCard({ kind, text, lang, theme, onBack, onSwitch }: Props)
   return (
     <View>
       <View style={styles.header}>
-        <Pressable onPress={onBack} hitSlop={12} accessibilityLabel={kind === 'define' ? 'Close dictionary' : 'Close translation'} style={styles.back}>
+        <Tap onPress={onBack} hitSlop={12} accessibilityLabel={kind === 'define' ? 'Close dictionary' : 'Close translation'} style={styles.back}>
           <Ionicons name="close" size={22} color={theme.text} />
-        </Pressable>
+        </Tap>
         <Text style={[styles.title, { color: theme.text }]}>{kind === 'define' ? 'Dictionary' : 'Translation'}</Text>
-        <Pressable
+        <Tap
           onPress={() => onSwitch(kind === 'define' ? 'translate' : 'define')}
           hitSlop={10}
           accessibilityLabel={kind === 'define' ? 'Show translation' : 'Show definition'}>
           <Ionicons name={kind === 'define' ? 'language-outline' : 'book-outline'} size={22} color={theme.accent} />
-        </Pressable>
+        </Tap>
       </View>
       {kind === 'translate' ? (
         <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.langs} keyboardShouldPersistTaps="handled">
           {LANGUAGES.map((l) => {
             const on = l.code === to;
             return (
-              <Pressable
+              <Tap
                 key={l.code}
+                haptic="select"
                 onPress={() => setSettings({ translateTo: l.code })}
                 accessibilityLabel={`Translate into ${l.name}`}
                 accessibilityState={{ selected: on }}
@@ -172,7 +174,7 @@ export function LookupCard({ kind, text, lang, theme, onBack, onSwitch }: Props)
                   }}>
                   {l.name}
                 </Text>
-              </Pressable>
+              </Tap>
             );
           })}
         </ScrollView>

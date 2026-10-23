@@ -1,13 +1,14 @@
 // Footnote popup: shows the note a reference points to, without leaving the page.
 
 import { useEffect, useState } from 'react';
-import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, ScrollView, StyleSheet, Text, View } from 'react-native';
 import type { Block, Position } from '@/engine/types';
 import type { ReaderSettings, Theme } from '@/lib/settings';
 import { Sheet } from '@/ui/Sheet';
 import type { BookData } from './book';
 import { BlockText, Spacer } from './BlockText';
 import { lookOf } from './look';
+import { Tap } from '@/ui/Tap';
 
 /** Most notes are a paragraph or two; never pull in more than this. */
 const MAX_BLOCKS = 12;
@@ -81,9 +82,9 @@ export function NoteSheet({
             )}
           </ScrollView>
           <View style={[styles.footer, { borderColor: theme.border }]}>
-            <Pressable onPress={() => onGo({ b: state.start, o: 0 })} hitSlop={8}>
+            <Tap onPress={() => onGo({ b: state.start, o: 0 })} hitSlop={8}>
               <Text style={{ color: theme.accent, fontSize: 15, fontWeight: '600' }}>Go to note</Text>
-            </Pressable>
+            </Tap>
           </View>
         </>
       )}
