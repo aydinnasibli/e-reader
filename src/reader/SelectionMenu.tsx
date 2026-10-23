@@ -54,33 +54,33 @@ export function SelectionMenu({ start, end, canLookUp, onCopy, onLookUp, onTrans
   items.push(['Translate', onTranslate], ['Share', onShare]);
 
   return (
-    <View
-      pointerEvents="box-none"
-      style={[styles.wrap, { top, left, opacity: menuWidth ? 1 : 0 }]}
-      onLayout={(e) => setMenuWidth(e.nativeEvent.layout.width)}>
-      <View style={styles.menu}>
-        {items.map(([label, onPress], i) => (
-          <Pressable
-            key={label}
-            onPress={onPress}
-            accessibilityRole="button"
-            accessibilityLabel={label}
-            style={({ pressed }) => [styles.item, i === 0 && styles.first, i === items.length - 1 && styles.last, pressed && styles.pressed]}>
-            {i > 0 ? <View style={styles.divider} /> : null}
-            <Text style={styles.label} maxFontSizeMultiplier={1.2}>
-              {label}
-            </Text>
-          </Pressable>
-        ))}
+    // Full width, so the menu's own width is never squeezed by where it sits.
+    <View pointerEvents="box-none" style={[styles.wrap, { top }]}>
+      <View style={{ marginLeft: left, opacity: menuWidth ? 1 : 0 }} onLayout={(e) => setMenuWidth(e.nativeEvent.layout.width)}>
+        <View style={styles.menu}>
+          {items.map(([label, onPress], i) => (
+            <Pressable
+              key={label}
+              onPress={onPress}
+              accessibilityRole="button"
+              accessibilityLabel={label}
+              style={({ pressed }) => [styles.item, i === 0 && styles.first, i === items.length - 1 && styles.last, pressed && styles.pressed]}>
+              {i > 0 ? <View style={styles.divider} /> : null}
+              <Text style={styles.label} numberOfLines={1} maxFontSizeMultiplier={1.2}>
+                {label}
+              </Text>
+            </Pressable>
+          ))}
+        </View>
+        {/* Half hidden behind the bar: the arrow. */}
+        <View style={[styles.arrow, { top: above ? HEIGHT - SIDE / 2 : -SIDE / 2, left: arrowX - SIDE / 2 }]} />
       </View>
-      {/* Half hidden behind the bar: the arrow. */}
-      <View style={[styles.arrow, { top: above ? HEIGHT - SIDE / 2 : -SIDE / 2, left: arrowX - SIDE / 2 }]} />
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  wrap: { position: 'absolute' },
+  wrap: { position: 'absolute', left: 0, right: 0, flexDirection: 'row' },
   menu: {
     flexDirection: 'row',
     height: HEIGHT,

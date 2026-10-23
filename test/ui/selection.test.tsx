@@ -207,13 +207,17 @@ describe('the menu over selected text', () => {
   const placed = async () => {
     const box = screen.container.queryAll((n) => typeof n.props.onLayout === 'function')[0];
     await fireEvent(box, 'layout', { nativeEvent: { layout: { x: 0, y: 0, width: 200, height: 38 } } });
-    return [screen.container.queryAll((n) => typeof n.props.onLayout === 'function')[0].props.style].flat().reduce((a, b) => ({ ...a, ...b }), {});
+    const flat = (n: { props: { style?: unknown } }) => Object.assign({}, ...[n.props.style].flat()) as Record<string, number>;
+    // The full-width row (at the menu's height) and the menu in it (at its place along it).
+    const row = screen.container.queryAll((n) => n.props.pointerEvents === 'box-none')[0];
+    const menuBox = screen.container.queryAll((n) => typeof n.props.onLayout === 'function')[0];
+    return { ...flat(row), ...flat(menuBox) };
   };
 
   it('sits over the middle of a one-line selection, above it', async () => {
     await menu({ x: 150, y: 300, h: 24 }, { x: 250, y: 300, h: 24 });
     const st = await placed();
-    expect(st.left).toBe(100); // centred on x 200
+    expect(st.marginLeft).toBe(100); // centred on x 200
     expect(st.top).toBeLessThan(300);
     expect(st.opacity).toBe(1);
   });
@@ -221,7 +225,7 @@ describe('the menu over selected text', () => {
   it('stays on screen at the edge, and goes below the text near the top', async () => {
     await menu({ x: 4, y: 10, h: 24 }, { x: 40, y: 10, h: 24 });
     const st = await placed();
-    expect(st.left).toBeGreaterThanOrEqual(8);
+    expect(st.marginLeft).toBeGreaterThanOrEqual(8);
     expect(st.top).toBeGreaterThan(10 + 24);
   });
 });
