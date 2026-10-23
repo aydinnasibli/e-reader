@@ -1,43 +1,77 @@
-// Which character of a paragraph sits under a finger. React Native has no
-// API for that, so it is worked out from the measured lines: the line from
-// the height, the character from the position along the line, weighting
-// letters by their usual width. Good to a word; the selection sheet lets the
-// reader adjust from there.
+// Which character of a paragraph sits under a finger, and where a character
+// is drawn. React Native has no API for either, so both are worked out from
+// the measured lines (where they break, how high and wide they are) and the
+// width of each character (see charWidths): the line from the height, the
+// character from the widths along it.
 
+import { estimate } from './charWidths';
 import type { Line } from './paginate';
 
-function weight(ch: string): number {
-  if (ch === '­') return 0; // soft hyphen: invisible unless the line breaks there
-  if (ch === ' ') return 0.28;
-  if (/[iljtfrI1.,;:'!|()[\]"`·]/.test(ch)) return 0.3;
-  if (/[mwMW@%—]/.test(ch)) return 0.85;
-  if (ch >= 'A' && ch <= 'Z') return 0.66;
-  if (/[А-ЯЁ]/.test(ch)) return 0.68;
-  return 0.52;
+/** How a paragraph's characters are laid along its lines. */
+export interface Metrics {
+  /** Width of drawn character i on its own (before justification; a soft hyphen is 0). */
+  advance(i: number): number;
+  /** Width of the hyphen drawn where a line breaks at a soft hyphen. */
+  hyphen: number;
+  align: 'left' | 'center' | 'right' | 'justify';
 }
 
-/** Index in text[start, end) found at fraction `frac` (0..1) of the line's width. */
-export function charAtFraction(text: string, start: number, end: number, frac: number): number {
-  let total = 0;
-  for (let i = start; i < end; i++) total += weight(text[i]);
-  if (end <= start || total <= 0) return start;
-  const target = Math.max(0, Math.min(1, frac)) * total;
-  let acc = 0;
-  for (let i = start; i < end; i++) {
-    acc += weight(text[i]);
-    if (acc >= target) return i;
-  }
-  return end - 1;
+/** Metrics from usual letter widths, for one font size (tests, and before anything is measured). */
+export function estimatedMetrics(text: string, fontSize: number, align: Metrics['align']): Metrics {
+  return { advance: (i) => estimate(text[i] ?? '') * fontSize, hyphen: 0.33 * fontSize, align };
 }
 
 /**
- * Drawn-text offset under the point (x, y), measured from the top-left of the
- * text of a paragraph showing drawn range [from, to) (a page may show part of
- * a paragraph). `width` is the width lines are broken at; justified lines
- * (all but the paragraph's last) fill it.
+ * Where the caret sits before each character of a line, and after the last:
+ * x positions from the left of the text, `line.end - line.start + 1` of them.
+ * Justified lines (all but a paragraph's last, or one before a line break)
+ * stretch their spaces to fill `width`; other lines take their measured width.
  */
-export function hitText(text: string, lines: Line[], from: number, to: number, x: number, y: number, width: number, justified: boolean): number {
-  const shown = lines.filter((l) => l.start >= from && l.start < to);
+export function lineCarets(text: string, lines: Line[], line: Line, width: number, m: Metrics): number[] {
+  const { start, end } = line;
+  let ink = end; // without the spaces (and line break) it ends with
+  while (ink > start && /\s/.test(text[ink - 1])) ink--;
+  const hyphen = ink === end && end < text.length && text[end - 1] === '­' ? m.hyphen : 0;
+  let natural = hyphen;
+  let spaces = 0;
+  for (let k = start; k < ink; k++) {
+    natural += m.advance(k);
+    if (text[k] === ' ') spaces++;
+  }
+  const last = line === lines[lines.length - 1] || text[end - 1] === '\n';
+  let scale = 1;
+  let stretch = 0;
+  let left = 0;
+  if (m.align === 'justify' && !last && natural > 0) {
+    if (spaces) stretch = Math.max(0, width - natural) / spaces;
+    else scale = width / natural;
+  } else {
+    // The text engine's width corrects small differences (kerning); a big one means it measured something else.
+    const used = line.w;
+    if (used && natural > 0 && Math.abs(used / natural - 1) < 0.12) scale = used / natural;
+    const drawnWidth = natural * scale;
+    if (m.align === 'center') left = Math.max(0, (width - drawnWidth) / 2);
+    else if (m.align === 'right') left = Math.max(0, width - drawnWidth);
+  }
+  const xs = [left];
+  let x = left;
+  for (let k = start; k < end; k++) {
+    x += m.advance(k) * scale + (stretch && text[k] === ' ' && k < ink ? stretch : 0);
+    xs.push(x);
+  }
+  return xs;
+}
+
+/** The lines of a paragraph shown for its drawn range [from, to) (a page may show part of it). */
+const shownLines = (lines: Line[], from: number, to: number) => lines.filter((l) => l.start >= from && l.start < to);
+
+/**
+ * Drawn-text offset under the point (x, y), measured from the top-left of the
+ * text of a paragraph showing drawn range [from, to). `width` is the width
+ * lines are broken at.
+ */
+export function hitText(text: string, lines: Line[], from: number, to: number, x: number, y: number, width: number, m: Metrics): number {
+  const shown = shownLines(lines, from, to);
   if (!shown.length) return from;
   let top = 0;
   let line = shown[shown.length - 1];
@@ -48,9 +82,10 @@ export function hitText(text: string, lines: Line[], from: number, to: number, x
     }
     top += l.height;
   }
-  const lastOfParagraph = line === lines[lines.length - 1];
-  const lineWidth = justified && !lastOfParagraph ? width : (line.w ?? width);
-  return charAtFraction(text, line.start, line.end, lineWidth > 0 ? x / lineWidth : 0);
+  if (line.end <= line.start) return line.start;
+  const xs = lineCarets(text, lines, line, width, m);
+  for (let k = line.start; k < line.end; k++) if (x < xs[k - line.start + 1]) return k;
+  return line.end - 1;
 }
 
 /** Where a caret sits in a paragraph's text: from its top-left, with the line's height. */
@@ -63,8 +98,8 @@ export interface Caret {
 /**
  * The reverse of hitText: where the caret before drawn character `i` sits
  * (`edge` 'end': after character i - 1, so a selection's end stays on its
- * last line), measured the same way, for the part [from, to) of a paragraph
- * shown. Null if that character isn't shown.
+ * last line), for the part [from, to) of a paragraph shown. Null if that
+ * character isn't shown.
  */
 export function caretInText(
   text: string,
@@ -74,24 +109,17 @@ export function caretInText(
   i: number,
   edge: 'start' | 'end',
   width: number,
-  justified: boolean,
+  m: Metrics,
 ): Caret | null {
-  const shown = lines.filter((l) => l.start >= from && l.start < to);
+  const shown = shownLines(lines, from, to);
   const at = edge === 'end' ? Math.max(i - 1, 0) : i;
   let top = 0;
   for (const line of shown) {
     if (at >= line.start && (at < line.end || line === shown[shown.length - 1])) {
       if (at >= line.end && line !== lines[lines.length - 1]) return null;
-      let total = 0;
-      let before = 0;
-      for (let k = line.start; k < line.end; k++) {
-        const w = weight(text[k]);
-        total += w;
-        if (k < at || (edge === 'end' && k === at)) before += w;
-      }
-      const lastOfParagraph = line === lines[lines.length - 1];
-      const lineWidth = justified && !lastOfParagraph ? width : (line.w ?? width);
-      return { x: total > 0 ? (before / total) * lineWidth : 0, y: top, h: line.height };
+      const xs = lineCarets(text, lines, line, width, m);
+      const k = Math.min(at + (edge === 'end' ? 1 : 0), line.end) - line.start;
+      return { x: xs[k], y: top, h: line.height };
     }
     top += line.height;
   }

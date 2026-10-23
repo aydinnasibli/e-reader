@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { cutRange } from '../src/lib/highlightRanges';
-import { caretInText, charAtFraction, hitText } from '../src/reader/hitTest';
+import { PROBE_SIZE, charWidth, estimate, recordWidths, resetWidths, wantedWidths } from '../src/reader/charWidths';
+import { type Metrics, caretInText, hitText } from '../src/reader/hitTest';
 import type { Line } from '../src/reader/paginate';
 import { dragRanges, selectBetween, selectionRanges, selectionText, tapWord, tokenize, tokensFor, wordAt } from '../src/reader/selection';
 
@@ -69,43 +70,62 @@ describe('highlight ranges', () => {
 });
 
 describe('hit testing', () => {
-  // Two lines of a paragraph: "The quick brown " / "fox jumps over"
+  // Two lines of a paragraph: "The quick brown " / "fox jumps over", every letter 10 wide.
   const text = 'The quick brown fox jumps over';
   const lines: Line[] = [
     { start: 0, end: 16, height: 20, w: 150 },
-    { start: 16, end: 30, height: 20, w: 120 },
+    { start: 16, end: 30, height: 20, w: 140 },
   ];
+  const ten = (align: Metrics['align'] = 'left'): Metrics => ({ advance: () => 10, hyphen: 10, align });
 
   it('picks the line by height and the character along it', () => {
-    expect(text[hitText(text, lines, 0, 30, 2, 5, 200, false)]).toBe('T');
-    // Right edge of the first line, left-aligned: inside "brown".
-    expect('brown'.includes(text[hitText(text, lines, 0, 30, 140, 5, 200, false)])).toBe(true);
+    expect(text[hitText(text, lines, 0, 30, 2, 5, 200, ten())]).toBe('T');
+    expect(text[hitText(text, lines, 0, 30, 145, 5, 200, ten())]).toBe('n');
     // Second line, start.
-    expect(text[hitText(text, lines, 0, 30, 1, 25, 200, false)]).toBe('f');
+    expect(text[hitText(text, lines, 0, 30, 1, 25, 200, ten())]).toBe('f');
     // Below the text: last line.
-    expect(hitText(text, lines, 0, 30, 1, 500, 200, false)).toBeGreaterThanOrEqual(16);
+    expect(hitText(text, lines, 0, 30, 1, 500, 200, ten())).toBeGreaterThanOrEqual(16);
   });
 
-  it('justified lines span the full width', () => {
-    // At 75% of the full width a justified first line is in "brown"; measured
-    // against its natural width (150) it would be past the end.
-    const i = hitText(text, lines, 0, 30, 150, 5, 200, true);
-    expect(text.slice(0, 16).trim().split(' ').pop()).toBe('brown');
-    expect(i).toBeLessThan(16);
-    expect(i).toBeGreaterThanOrEqual(10);
+  it('justified lines fill the width by widening the spaces between words, not the letters', () => {
+    // "The quick brown" is 150 wide; its two spaces take the other 50 of 200.
+    expect(text[hitText(text, lines, 0, 30, 155, 5, 200, ten('justify'))]).toBe('b');
+    expect(text[hitText(text, lines, 0, 30, 145, 5, 200, ten('justify'))]).toBe(' ');
+    expect(text[hitText(text, lines, 0, 30, 195, 5, 200, ten('justify'))]).toBe('n');
+    // A paragraph's last line isn't stretched.
+    expect(text[hitText(text, lines, 0, 30, 45, 25, 200, ten('justify'))]).toBe('j');
   });
 
   it('only considers the lines shown on this page', () => {
     // The page shows the paragraph from the second line on.
-    expect(text[hitText(text, lines, 16, 30, 1, 5, 200, false)]).toBe('f');
+    expect(text[hitText(text, lines, 16, 30, 1, 5, 200, ten())]).toBe('f');
   });
 
-  it('weights letters by width', () => {
-    // "iiii" is narrow, "MMMM" wide: halfway along "iiiiMMMM" is in the M's... early.
+  it("uses each character's own width", () => {
     const t = 'iiiiMMMM';
-    const mid = charAtFraction(t, 0, t.length, 0.5);
-    expect(t[mid]).toBe('M');
-    expect(mid).toBeLessThanOrEqual(5);
+    const m: Metrics = { advance: (i) => (t[i] === 'i' ? 3 : 12), hyphen: 4, align: 'left' };
+    const one: Line[] = [{ start: 0, end: 8, height: 20, w: 60 }];
+    expect(hitText(t, one, 0, 8, 11, 5, 200, m)).toBe(3); // the i's take 12
+    expect(hitText(t, one, 0, 8, 20, 5, 200, m)).toBe(4);
+    expect(hitText(t, one, 0, 8, 59, 5, 200, m)).toBe(7);
+  });
+
+  it('centred lines (headings) start where the text engine put them', () => {
+    const one: Line[] = [{ start: 0, end: 5, height: 30, w: 50 }];
+    expect(caretInText('Title', one, 0, 5, 0, 'start', 200, ten('center'))!.x).toBe(75);
+  });
+
+  it('measured widths stand in for estimates once the phone has measured them', () => {
+    const face = { fontFamily: 'Serif' };
+    resetWidths();
+    // Not measured yet: an estimate, and it's asked for.
+    expect(charWidth(face, 'W', 20)).toBeCloseTo(estimate('W') * 20);
+    const asked = wantedWidths();
+    expect(asked.map((w) => w.chars)).toEqual([['W']]);
+    // The probe's lines: the bars, then the bars around WWWW.
+    recordWidths(asked[0].key, ['W'], [10, 10 + 4 * 40]);
+    expect(charWidth(face, 'W', PROBE_SIZE / 2)).toBe(20);
+    expect(wantedWidths()).toEqual([]);
   });
 });
 
@@ -140,32 +160,33 @@ describe('where a character is on screen (for selection handles)', () => {
   const text = 'The quick brown fox jumps over';
   const lines: Line[] = [
     { start: 0, end: 16, height: 20, w: 150 },
-    { start: 16, end: 30, height: 20, w: 120 },
+    { start: 16, end: 30, height: 20, w: 140 },
   ];
+  const m: Metrics = { advance: () => 10, hyphen: 10, align: 'left' };
 
   it('the start of a line is at its left, on that line', () => {
-    expect(caretInText(text, lines, 0, 30, 0, 'start', 200, false)).toEqual({ x: 0, y: 0, h: 20 });
-    expect(caretInText(text, lines, 0, 30, 16, 'start', 200, false)).toEqual({ x: 0, y: 20, h: 20 });
+    expect(caretInText(text, lines, 0, 30, 0, 'start', 200, m)).toEqual({ x: 0, y: 0, h: 20 });
+    expect(caretInText(text, lines, 0, 30, 16, 'start', 200, m)).toEqual({ x: 0, y: 20, h: 20 });
   });
 
   it("a selection's end stays after its last character, on that line", () => {
-    // After "brown " (the end of line 1), not at the start of line 2.
-    const c = caretInText(text, lines, 0, 30, 16, 'end', 200, false)!;
-    expect(c.y).toBe(0);
-    expect(c.x).toBeCloseTo(150);
+    // After "brown" (the end of line 1), not at the start of line 2.
+    const c = caretInText(text, lines, 0, 30, 15, 'end', 200, m)!;
+    expect(c).toEqual({ x: 150, y: 0, h: 20 });
+    expect(caretInText(text, lines, 0, 30, 16, 'end', 200, m)!.y).toBe(0);
   });
 
   it('agrees with hit testing: the character found at a caret is that character', () => {
     for (const i of [4, 10, 20, 26]) {
-      const c = caretInText(text, lines, 0, 30, i, 'start', 200, false)!;
+      const c = caretInText(text, lines, 0, 30, i, 'start', 200, m)!;
       // Just right of the caret is character i.
-      expect(hitText(text, lines, 0, 30, c.x + 1, c.y + 5, 200, false)).toBe(i);
+      expect(hitText(text, lines, 0, 30, c.x + 1, c.y + 5, 200, m)).toBe(i);
     }
   });
 
   it('only the lines shown on this page count', () => {
-    expect(caretInText(text, lines, 16, 30, 20, 'start', 200, false)!.y).toBe(0);
-    expect(caretInText(text, lines, 16, 30, 4, 'start', 200, false)).toBeNull();
+    expect(caretInText(text, lines, 16, 30, 20, 'start', 200, m)!.y).toBe(0);
+    expect(caretInText(text, lines, 16, 30, 4, 'start', 200, m)).toBeNull();
   });
 });
 

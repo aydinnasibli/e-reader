@@ -19,6 +19,7 @@ import { ScrollReader } from '@/reader/ScrollReader';
 import type { ReaderGeometry } from '@/reader/geometry';
 import { LookupSheet } from '@/reader/LookupSheet';
 import { type TextPoint, selectionRanges } from '@/reader/selection';
+import { CharProbe } from '@/reader/CharProbe';
 import { SelectionHandles, selectionCarets } from '@/reader/SelectionHandles';
 import { SelectionMenu } from '@/reader/SelectionMenu';
 import { useSelection } from '@/reader/useSelection';
@@ -597,6 +598,7 @@ export default function ReaderScreen() {
           }}
         />
       ) : null}
+      <CharProbe onMeasured={redrawHandles} />
       {sel ? <SelectionHandles sel={sel} geometry={geometry} textOf={textOf} theme={theme} onChange={setSel} /> : null}
       {sel && !highlighting ? (
         <SelectionMenu

@@ -14,6 +14,18 @@ import type { HighlightColor } from '@/ui/theme';
 import type { LookupKind } from './LookupCard';
 import { type TextPoint, type TextSel, selectBetween, selectionRanges, selectionText } from './selection';
 
+/** A point between words means the closer of the two words. */
+export function nearestWord(text: string, o: number): number {
+  if (o >= text.length || !/\s/.test(text[o])) return o;
+  let l = o;
+  while (l >= 0 && /\s/.test(text[l])) l--;
+  let r = o;
+  while (r < text.length && /\s/.test(text[r])) r++;
+  if (l < 0) return r < text.length ? r : o;
+  if (r >= text.length) return l;
+  return o - l <= r - o ? l : r;
+}
+
 interface Options {
   bookId: string;
   bookTitle: string;
@@ -42,7 +54,9 @@ export function useSelection({ bookId, bookTitle, textOf, chapterOf, color }: Op
   /** Select the word at a point, or the highlight there (with the highlight tool). */
   const selectAt = (p: TextPoint, preferHighlight: boolean) => {
     const h = preferHighlight ? highlights.find((x) => x.b === p.b && x.s <= p.o && p.o < x.e) : undefined;
-    const next = h ? { a: { b: h.b, o: h.s }, z: { b: h.b, o: h.e - 1 } } : selectBetween(p, p, textOf);
+    const w = nearestWord(textOf(p.b) ?? '', p.o);
+    const at = { b: p.b, o: w };
+    const next = h ? { a: { b: h.b, o: h.s }, z: { b: h.b, o: h.e - 1 } } : selectBetween(at, at, textOf);
     if (next) Haptics.selectionAsync().catch(() => {});
     setSel(next);
   };

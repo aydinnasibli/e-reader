@@ -14,6 +14,7 @@ import { Measurer } from './Measurer';
 import { swipeOutcome, tapZone } from './gestures';
 import type { ReaderGeometry } from './geometry';
 import { type Caret, caretInText, hitText } from './hitTest';
+import { metricsOf, prepareBlock } from './metrics';
 import { Battery, Clock } from './StatusInfo';
 import { charsPerPage, pageCount, pageNumber } from './pageNumbers';
 import { type Look, drawn, layoutKeyOf, toBlock, toDrawn } from './look';
@@ -354,7 +355,7 @@ export function PageReader({ book, settings, theme, start, startKey, version, on
     const top = it.top || it.s > 0 ? 0 : look.marginTop;
     const left = textLeft + (column.endsWith(':R') ? width + settings.margin : 0) + look.paddingLeft;
     const d = drawn(blk, look);
-    const at = hitText(d.text, m.lines, it.s, it.e, pageX - left, y - best.y - top, width - look.paddingLeft, look.textAlign === 'justify');
+    const at = hitText(d.text, m.lines, it.s, it.e, pageX - left, y - best.y - top, width - look.paddingLeft, metricsOf(blk, look));
     return { b: it.b, o: toBlock(d, at) };
   };
   const longPress = (pageX: number, pageY: number, column: string) => {
@@ -472,7 +473,10 @@ export function PageReader({ book, settings, theme, start, startKey, version, on
       return (
         <View
           key={`${it.b}:${it.s}`}
-          onLayout={(e) => itemBoxes.current.set(boxKey, { y: e.nativeEvent.layout.y, h: e.nativeEvent.layout.height, it, laid: l })}>
+          onLayout={(e) => {
+            itemBoxes.current.set(boxKey, { y: e.nativeEvent.layout.y, h: e.nativeEvent.layout.height, it, laid: l });
+            prepareBlock(blk, l.looks[k]);
+          }}>
           {content}
         </View>
       );
@@ -525,7 +529,7 @@ export function PageReader({ book, settings, theme, start, startKey, version, on
       const look = l.looks[i];
       if (!blk || m?.kind !== 'text') continue;
       const d = drawn(blk, look);
-      const c = caretInText(d.text, m.lines, it.s, it.e, toDrawn(d, p.o), edge, width - look.paddingLeft, look.textAlign === 'justify');
+      const c = caretInText(d.text, m.lines, it.s, it.e, toDrawn(d, p.o), edge, width - look.paddingLeft, metricsOf(blk, look));
       if (!c) continue; // on the other column of a spread, or another page
       const top = it.top || it.s > 0 ? 0 : look.marginTop;
       const left = textLeft + (k.split('|')[0].endsWith(':R') ? width + settings.margin : 0) + look.paddingLeft;

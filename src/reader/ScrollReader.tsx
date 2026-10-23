@@ -12,6 +12,7 @@ import { ClockBattery } from './StatusInfo';
 import { BlockImage, BlockText, Spacer } from './BlockText';
 import type { ReaderGeometry } from './geometry';
 import { type Caret, caretInText, hitText } from './hitTest';
+import { metricsOf, prepareBlock } from './metrics';
 import { drawn, lookOf, toBlock, toDrawn } from './look';
 import type { Mark } from './marks';
 import { type Line, lineRanges } from './paginate';
@@ -198,7 +199,11 @@ export function ScrollReader({ book, settings, theme, start, startKey, version, 
   const layoutFn = (b: number, blk: Block) => {
     let f = onLayoutFns.get(b);
     if (!f) {
-      f = (e) => lines.set(b, lineRanges(drawn(blk, lookOf(blk, settingsRef.current, book.manifest?.lang)).text, e.nativeEvent.lines));
+      f = (e) => {
+        const look = lookOf(blk, settingsRef.current, book.manifest?.lang);
+        lines.set(b, lineRanges(drawn(blk, look).text, e.nativeEvent.lines));
+        prepareBlock(blk, look);
+      };
       onLayoutFns.set(b, f);
     }
     return f;
@@ -210,7 +215,7 @@ export function ScrollReader({ book, settings, theme, start, startKey, version, 
     if (!blk.r || !ls || !view) return onLongPressBlock?.(b);
     view.measureInWindow((x, y) => {
       const d = drawn(blk, look);
-      const at = hitText(d.text, ls, 0, d.text.length, pageX - x - padLeft - look.paddingLeft, pageY - y - look.marginTop, width - look.paddingLeft, look.textAlign === 'justify');
+      const at = hitText(d.text, ls, 0, d.text.length, pageX - x - padLeft - look.paddingLeft, pageY - y - look.marginTop, width - look.paddingLeft, metricsOf(blk, look));
       onLongPressBlock?.(b, toBlock(d, at));
     });
   };
@@ -294,7 +299,7 @@ export function ScrollReader({ book, settings, theme, start, startKey, version, 
     if (!blk || !r || !ls || (!nearest && bestDist > 0)) return null;
     const look = lookOf(blk, settings, book.manifest?.lang);
     const d = drawn(blk, look);
-    const at = hitText(d.text, ls, 0, d.text.length, pageX - r.x - padLeft - look.paddingLeft, pageY - r.y - look.marginTop, width - look.paddingLeft, look.textAlign === 'justify');
+    const at = hitText(d.text, ls, 0, d.text.length, pageX - r.x - padLeft - look.paddingLeft, pageY - r.y - look.marginTop, width - look.paddingLeft, metricsOf(blk, look));
     return { b: best, o: toBlock(d, at) };
   };
   const stroke = useRef<{ x: number; y: number; from: TextPoint | null; moved: boolean }>({ x: 0, y: 0, from: null, moved: false });
@@ -306,7 +311,7 @@ export function ScrollReader({ book, settings, theme, start, startKey, version, 
     if (!blk || !r || !ls) return null;
     const look = lookOf(blk, settings, book.manifest?.lang);
     const d = drawn(blk, look);
-    const c = caretInText(d.text, ls, 0, d.text.length, toDrawn(d, p.o), edge, width - look.paddingLeft, look.textAlign === 'justify');
+    const c = caretInText(d.text, ls, 0, d.text.length, toDrawn(d, p.o), edge, width - look.paddingLeft, metricsOf(blk, look));
     return c && { x: r.x + padLeft + look.paddingLeft + c.x, y: r.y + look.marginTop + c.y, h: c.h };
   };
   if (geometry) geometry.current = { pointAt: (x, y) => textPoint(x, y, true), caretAt };

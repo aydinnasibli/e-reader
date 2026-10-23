@@ -9,9 +9,12 @@ import { Alert, Share } from 'react-native';
 import { addHighlight, getAnnotations } from '@/lib/annotations';
 import { THEMES } from '@/lib/settings';
 import type { LookupKind } from '@/reader/LookupCard';
+import { CharProbe } from '@/reader/CharProbe';
+import { PROBE_SIZE, charWidth, resetWidths } from '@/reader/charWidths';
 import { LookupSheet } from '@/reader/LookupSheet';
+import { SelectionMenu } from '@/reader/SelectionMenu';
 import { selectionText } from '@/reader/selection';
-import { useSelection } from '@/reader/useSelection';
+import { nearestWord, useSelection } from '@/reader/useSelection';
 import * as dialogs from '@/ui/dialogs';
 
 const TEXT = 'The quick brown fox jumps over the lazy dog';
@@ -194,4 +197,57 @@ describe('look up and translate stay in the app', () => {
     await open('translate', 'fox');
     expect(await screen.findByText(/service didn’t answer/)).toBeTruthy();
   });
+});
+
+describe('the menu over selected text', () => {
+  const noop = () => {};
+  const menu = (start: { x: number; y: number; h: number }, end: { x: number; y: number; h: number }) =>
+    render(<SelectionMenu start={start} end={end} canLookUp onCopy={noop} onLookUp={noop} onTranslate={noop} onShare={noop} />);
+  /** The menu box, laid out at 200 wide; its position. */
+  const placed = async () => {
+    const box = screen.container.queryAll((n) => typeof n.props.onLayout === 'function')[0];
+    await fireEvent(box, 'layout', { nativeEvent: { layout: { x: 0, y: 0, width: 200, height: 38 } } });
+    return [screen.container.queryAll((n) => typeof n.props.onLayout === 'function')[0].props.style].flat().reduce((a, b) => ({ ...a, ...b }), {});
+  };
+
+  it('sits over the middle of a one-line selection, above it', async () => {
+    await menu({ x: 150, y: 300, h: 24 }, { x: 250, y: 300, h: 24 });
+    const st = await placed();
+    expect(st.left).toBe(100); // centred on x 200
+    expect(st.top).toBeLessThan(300);
+    expect(st.opacity).toBe(1);
+  });
+
+  it('stays on screen at the edge, and goes below the text near the top', async () => {
+    await menu({ x: 4, y: 10, h: 24 }, { x: 40, y: 10, h: 24 });
+    const st = await placed();
+    expect(st.left).toBeGreaterThanOrEqual(8);
+    expect(st.top).toBeGreaterThan(10 + 24);
+  });
+});
+
+it('a touch between two words selects the closer one', async () => {
+  expect(nearestWord(TEXT, 3)).toBe(2); // the space after "The"
+  expect(nearestWord('a     word', 5)).toBe(6);
+  expect(nearestWord('   a', 0)).toBe(3);
+  const { get, run } = await selecting('s8');
+  await run((s) => s.selectAt({ b: 0, o: TEXT.indexOf(' fox') }, false));
+  expect(selectionText(get().sel!, textOf)).toBe('brown');
+});
+
+it('the phone measures the letters asked for, and they are used from then on', async () => {
+  resetWidths();
+  const face = { fontFamily: 'Georgia' };
+  const onMeasured = jest.fn();
+  await render(<CharProbe onMeasured={onMeasured} />);
+  await act(async () => {
+    charWidth(face, 'a', 16); // not known yet: asked for
+    await new Promise((r) => setTimeout(r, 10));
+  });
+  const probe = screen.container.queryAll((n) => typeof n.props.onTextLayout === 'function')[0];
+  expect(probe.props.children).toBe('||\n|aaaa|');
+  await fireEvent(probe, 'textLayout', { nativeEvent: { lines: [{ width: 8 }, { width: 8 + 4 * 30 }] } });
+  await act(() => new Promise((r) => setTimeout(r, 10)));
+  expect(charWidth(face, 'a', PROBE_SIZE)).toBe(30);
+  expect(onMeasured).toHaveBeenCalled();
 });

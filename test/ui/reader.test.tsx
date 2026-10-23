@@ -108,7 +108,7 @@ it('touch and hold selects the word with handles at both ends, and a menu to cop
   expect(screen.getByTestId('selection-handle-start')).toBeTruthy();
   expect(screen.getByTestId('selection-handle-end')).toBeTruthy();
   expect(marked('Call')).toBe(true);
-  for (const label of ['Copy', 'Look up', 'Translate', 'Share']) expect(screen.getByLabelText(label)).toBeTruthy();
+  for (const label of ['Copy', 'Look Up', 'Translate', 'Share']) expect(screen.getByLabelText(label)).toBeTruthy();
   // No highlighting here: that's the highlight tool's.
   expect(screen.queryByLabelText(/Highlight colour/)).toBeNull();
   await fireEvent.press(screen.getByLabelText('Copy'));
