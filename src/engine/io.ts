@@ -41,6 +41,9 @@ export interface BookMeta {
   coverFile?: string;
 }
 
+/** A problem with the book itself, already worded for the reader: shown as is. */
+export class BookError extends Error {}
+
 export class CancelledError extends Error {
   constructor() {
     super('cancelled');

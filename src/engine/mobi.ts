@@ -11,7 +11,7 @@
 
 import { createDecoder } from './decode';
 import { HtmlToBlocks } from './html';
-import type { ByteSource, IngestContext } from './io';
+import { BookError, type ByteSource, type IngestContext } from './io';
 import { MarkupTokenizer } from './markup';
 import type { ImageRef, Manifest } from './types';
 import { BookWriter } from './writer';
@@ -21,7 +21,7 @@ const u32 = (b: Uint8Array, o: number) => ((b[o] << 24) >>> 0) + ((b[o + 1] << 1
 
 const NO_INDEX = 0xffffffff;
 
-export class MobiError extends Error {}
+export class MobiError extends BookError {}
 
 interface Pdb {
   /** Start offset of each record, plus the file size as a final entry. */

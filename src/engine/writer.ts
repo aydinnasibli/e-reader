@@ -49,6 +49,11 @@ export class BookWriter {
     return this.totalBlocks;
   }
 
+  /** The block being built has text in it already. */
+  get inBlock() {
+    return this.curLen > 0;
+  }
+
   /** Kind used for text that follows. Ends the current block if the kind changes. */
   setKind(kind: BlockKind, level = 0) {
     if (kind !== this.kind || level !== this.level) {

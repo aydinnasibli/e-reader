@@ -5,7 +5,17 @@
 import * as DocumentPicker from 'expo-document-picker';
 import { Directory, File, Paths } from 'expo-file-system';
 import { useSyncExternalStore } from 'react';
-import { ingestBook, isSupportedName, titleFromFileName } from '@/engine/ingest';
+import { AppState } from 'react-native';
+import {
+  bookFileName,
+  describeError,
+  friendlyStoredError,
+  ingestBook,
+  isSupportedName,
+  type SniffedFormat,
+  sniffFormat,
+  titleFromFileName,
+} from '@/engine/ingest';
 import type { BookFormat, Manifest, Position } from '@/engine/types';
 import { forgetAnnotations } from './annotations';
 import { fingerprintOf } from './fingerprint';
@@ -102,6 +112,7 @@ export function loadLibrary() {
   ensureDir(booksDir());
   books = readJson<BookEntry[]>(libraryFile()) ?? [];
   for (const b of books) {
+    if (b.status === 'error') b.error = friendlyStoredError(b.error);
     if (b.status !== 'processing') continue;
     // Interrupted mid-conversion (app closed) starts over, unless converting
     // it is what keeps closing the app.
@@ -112,6 +123,10 @@ export function loadLibrary() {
     }
   }
   recoverOrphans();
+  AppState.addEventListener('change', (s) => {
+    if (s === 'active') countAttempt(true);
+    else if (s === 'background') countAttempt(false);
+  });
   emit();
   void runQueue();
 }
@@ -264,6 +279,74 @@ function findDuplicate(fp: string, size: number): BookEntry | undefined {
   return undefined;
 }
 
+type AddOutcome = { added: BookEntry } | { duplicate: BookEntry } | { failed: true };
+
+/**
+ * Put one file on the shelf by moving it into the book's folder; a file
+ * that is already on the shelf is dropped instead. `file` must be the app's
+ * own copy (the picker's, or one made of a shared file). The caller saves
+ * and starts conversion with finishAdding().
+ */
+function addFile(file: File, name: string, size: number): AddOutcome {
+  const fp = fingerprintFile(file);
+  const dup = fp ? findDuplicate(fp, size) : undefined;
+  if (dup) {
+    try {
+      file.delete();
+    } catch {
+      // the cache is cleared by the system anyway
+    }
+    return { duplicate: dup };
+  }
+  const id = newId();
+  const dir = bookDir(id);
+  try {
+    ensureDir(dir);
+    const lower = name.toLowerCase();
+    const ext = lower.endsWith('.fb2.zip') ? 'fb2.zip' : (lower.split('.').pop() ?? 'bin');
+    const dest = new File(dir, `source.${ext}`);
+    // Already our own copy: moving it is instant even for huge files.
+    try {
+      file.moveSync(dest);
+    } catch {
+      file.copySync(dest);
+    }
+    const now = Date.now();
+    const book: BookEntry = {
+      id,
+      title: titleFromFileName(name),
+      author: '',
+      fileName: name,
+      sourceName: dest.name,
+      size: dest.size,
+      addedAt: now,
+      openedAt: now,
+      status: 'processing',
+      progress: 0,
+      ...(fp ? { fp } : {}),
+    };
+    books.unshift(book);
+    return { added: book };
+  } catch {
+    // Usually storage full. Don't leave a half-copied book behind.
+    try {
+      if (dir.exists) dir.delete();
+    } catch {
+      // recoverOrphans() tidies it next launch
+    }
+    return { failed: true };
+  }
+}
+
+/** Save what addFile() did and start converting the new books. */
+function finishAdding(added: number) {
+  if (added) {
+    emit();
+    flushLibrary();
+    void runQueue();
+  } else scheduleSave(); // fingerprints filled in by findDuplicate()
+}
+
 /** Let the user pick files and add them to the shelf. */
 export async function importBooks(): Promise<ImportResult> {
   const res = await DocumentPicker.getDocumentAsync({ type: '*/*', multiple: true, copyToCacheDirectory: true });
@@ -271,7 +354,6 @@ export async function importBooks(): Promise<ImportResult> {
   const skipped: string[] = [];
   const failed: string[] = [];
   const duplicates: [string, string][] = [];
-  let backfilled = false;
   let added = 0;
   try {
     for (const asset of res.assets) {
@@ -280,68 +362,76 @@ export async function importBooks(): Promise<ImportResult> {
         continue;
       }
       const picked = new File(asset.uri);
-      const size = asset.size ?? picked.size;
-      const fp = fingerprintFile(picked);
-      if (fp) {
-        const known = books.some((b) => !b.fp && b.size === size);
-        const dup = findDuplicate(fp, size);
-        backfilled ||= known;
-        if (dup) {
-          duplicates.push([asset.name, dup.title]);
-          try {
-            picked.delete(); // the picker's private copy
-          } catch {
-            // the cache is cleared by the system anyway
-          }
-          continue;
-        }
-      }
-      const id = newId();
-      const dir = bookDir(id);
-      try {
-        ensureDir(dir);
-        const lower = asset.name.toLowerCase();
-        const ext = lower.endsWith('.fb2.zip') ? 'fb2.zip' : (lower.split('.').pop() ?? 'bin');
-        const dest = new File(dir, `source.${ext}`);
-        // The picker already made a private copy; moving it is instant even for huge files.
-        try {
-          picked.moveSync(dest);
-        } catch {
-          picked.copySync(dest);
-        }
-        const now = Date.now();
-        books.unshift({
-          id,
-          title: titleFromFileName(asset.name),
-          author: '',
-          fileName: asset.name,
-          sourceName: dest.name,
-          size: dest.size,
-          addedAt: now,
-          openedAt: now,
-          status: 'processing',
-          progress: 0,
-          ...(fp ? { fp } : {}),
-        });
-        added++;
-      } catch {
-        // Usually storage full. Don't leave a half-copied book behind.
-        failed.push(asset.name);
-        try {
-          if (dir.exists) dir.delete();
-        } catch {
-          // recoverOrphans() tidies it next launch
-        }
-      }
+      const r = addFile(picked, asset.name, asset.size ?? picked.size);
+      if ('added' in r) added++;
+      else if ('duplicate' in r) duplicates.push([asset.name, r.duplicate.title]);
+      else failed.push(asset.name);
     }
   } finally {
-    if (added) {
-      emit();
-      flushLibrary();
-      void runQueue();
-    } else if (backfilled) scheduleSave();
+    finishAdding(added);
   }
   return { added, skipped, failed, duplicates };
+}
+
+export type SharedFileResult =
+  | { book: BookEntry; duplicate: boolean }
+  /** Not a book this app reads. */
+  | { unsupported: true }
+  /** Couldn't be read or copied (no permission, storage full). */
+  | { failed: true };
+
+/**
+ * Add a file another app handed over ("Open with" on Android). Its
+ * content:// or file:// URI is only readable for a short while, so it's
+ * copied right away. Shared files often come without a usable name
+ * ("document", a number), so the format is recognised from the bytes.
+ */
+export async function importSharedFile(uri: string): Promise<SharedFileResult> {
+  loadLibrary();
+  const tmp = new Directory(Paths.cache, 'incoming', newId());
+  try {
+    let copy: File | undefined;
+    try {
+      ensureDir(tmp);
+      // Copied into a folder, the file gets the name the sharing app gives it.
+      await new File(uri).copy(tmp);
+      copy = tmp.list().find((f): f is File => f instanceof File);
+    } catch {
+      // no permission to read it, or storage full
+    }
+    if (!copy) return { failed: true };
+    let src: FileSource | undefined;
+    let format: SniffedFormat | null;
+    try {
+      src = new FileSource(copy);
+      format = sniffFormat(src);
+    } catch {
+      return { failed: true };
+    } finally {
+      src?.close();
+    }
+    if (!format) return { unsupported: true };
+    const r = addFile(copy, bookFileName(decodeName(copy.name), format), copy.size);
+    finishAdding('added' in r ? 1 : 0);
+    if ('added' in r) return { book: r.added, duplicate: false };
+    if ('duplicate' in r) return { book: r.duplicate, duplicate: true };
+    return { failed: true };
+  } finally {
+    try {
+      if (tmp.exists) tmp.delete();
+    } catch {
+      // the cache is cleared by the system anyway
+    }
+  }
+}
+
+/** Names taken from URIs are percent-encoded ("My%20Book.epub"). */
+function decodeName(name: string): string {
+  try {
+    return decodeURIComponent(name);
+  } catch {
+    return name;
+  }
 }
 
 /** Edit a book's title and/or author; kept even if the book is converted again. */
@@ -382,6 +472,22 @@ export function deleteBook(id: string) {
 // ---------- background conversion ----------
 
 let running = false;
+
+// A conversion that kills the app must not be retried forever, so each one
+// is counted on disk while it runs (attempts; see loadLibrary). Android also
+// kills apps in the background whenever it needs memory, which says nothing
+// about the book: the attempt is taken back while the app is in the
+// background and counted again when it comes back.
+let converting: string | null = null;
+let counted = false;
+
+function countAttempt(on: boolean) {
+  const b = converting ? getBook(converting) : undefined;
+  if (!b || counted === on) return;
+  counted = on;
+  updateBook(b.id, { attempts: Math.max(0, (b.attempts ?? 0) + (on ? 1 : -1)) });
+  flushLibrary();
+}
 
 async function runQueue() {
   if (running) return;
@@ -426,10 +532,9 @@ async function convert(book: BookEntry) {
     // ignore
   }
 
-  // Count the attempt on disk before starting, so a book whose conversion
-  // kills the app isn't retried forever (see loadLibrary).
-  updateBook(id, { attempts: (book.attempts ?? 0) + 1 });
-  flushLibrary();
+  converting = id;
+  counted = false;
+  if (AppState.currentState !== 'background') countAttempt(true);
 
   const state: LiveBook = { chunks: [], totalBlocks: 0, totalChars: 0, progress: 0 };
   live.set(id, state);
@@ -487,8 +592,9 @@ async function convert(book: BookEntry) {
       coverFile: coverRef && 'file' in coverRef ? coverRef.file : getBook(id)?.coverFile,
     });
   } catch (e) {
-    updateBook(id, { status: 'error', error: e instanceof Error ? e.message : String(e), attempts: undefined });
+    updateBook(id, { status: 'error', error: describeError(e), attempts: undefined });
   } finally {
+    converting = null;
     src?.close();
     live.delete(id);
     emitLive();
