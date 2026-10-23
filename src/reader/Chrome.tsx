@@ -7,6 +7,9 @@ import { Animated, Pressable, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import type { Theme } from '@/lib/settings';
 
+/** The tool labels share one row: they grow with the phone's text size only this far. */
+const LABEL_SCALE = 1.3;
+
 interface Props {
   visible: boolean;
   theme: Theme;
@@ -15,14 +18,24 @@ interface Props {
   fraction: number;
   /** e.g. "2 h 10 min left in book" */
   info?: string;
+  /** "Page 412 of 830" for a slider position, in page mode. */
+  pageLabel?(fraction: number): string;
   bookmarked: boolean;
   onBack(): void;
+  /** Start auto page turn (page mode) or auto-scroll (scroll mode). */
+  onAuto(): void;
+  autoLabel: string;
   onSearch(): void;
   onBookmark(): void;
   onContents(): void;
   onDisplay(): void;
   onHighlight(): void;
   onSeek(fraction: number): void;
+  /** Type a page number or percentage to go to. */
+  onGoTo(): void;
+  /** Previous / next chapter; missing when there is none that way. */
+  onPrevChapter?(): void;
+  onNextChapter?(): void;
 }
 
 export function Chrome(p: Props) {
@@ -46,29 +59,49 @@ export function Chrome(p: Props) {
   const tool = (name: keyof typeof Ionicons.glyphMap, onPress: () => void, label: string, color = theme.text) => (
     <Pressable onPress={onPress} hitSlop={6} style={({ pressed }) => [styles.tool, pressed && { opacity: 0.5 }]} accessibilityLabel={label}>
       <Ionicons name={name} size={24} color={color} />
-      <Text style={[styles.toolLabel, { color }]}>{label}</Text>
+      <Text numberOfLines={1} maxFontSizeMultiplier={LABEL_SCALE} style={[styles.toolLabel, { color }]}>
+        {label}
+      </Text>
     </Pressable>
   );
+  const chapterButton = (dir: 'prev' | 'next', onPress?: () => void) => (
+    <Pressable
+      onPress={onPress}
+      disabled={!onPress}
+      hitSlop={10}
+      style={({ pressed }) => [styles.chapterBtn, { opacity: !onPress ? 0.3 : pressed ? 0.5 : 1 }]}
+      accessibilityLabel={dir === 'prev' ? 'Previous chapter' : 'Next chapter'}>
+      <Ionicons name={dir === 'prev' ? 'play-skip-back-outline' : 'play-skip-forward-outline'} size={20} color={theme.text} />
+    </Pressable>
+  );
+  // Clear of a landscape notch or camera cutout on either side.
+  const sides = (pad: number) => ({ paddingLeft: pad + insets.left, paddingRight: pad + insets.right });
 
   return (
     <>
       <Animated.View
         pointerEvents={p.visible ? 'auto' : 'none'}
-        style={[styles.top, bar, { paddingTop: insets.top + 4, opacity: fade, transform: [{ translateY: fade.interpolate({ inputRange: [0, 1], outputRange: [-12, 0] }) }] }]}>
+        style={[styles.top, bar, sides(8), { paddingTop: insets.top + 4, opacity: fade, transform: [{ translateY: fade.interpolate({ inputRange: [0, 1], outputRange: [-12, 0] }) }] }]}>
         <Pressable onPress={p.onBack} hitSlop={8} style={styles.back} accessibilityLabel="Back to library">
           <Ionicons name="chevron-back" size={24} color={theme.text} />
         </Pressable>
         <Text numberOfLines={1} style={[styles.title, { color: theme.text }]}>
           {p.title}
         </Text>
-        <View style={styles.back} />
+        <Pressable onPress={p.onAuto} hitSlop={8} style={styles.back} accessibilityLabel={p.autoLabel}>
+          <Ionicons name="play-circle-outline" size={26} color={theme.text} />
+        </Pressable>
       </Animated.View>
       <Animated.View
         pointerEvents={p.visible ? 'auto' : 'none'}
-        style={[styles.bottom, bar, { paddingBottom: insets.bottom + 8, opacity: fade, transform: [{ translateY: fade.interpolate({ inputRange: [0, 1], outputRange: [12, 0] }) }] }]}>
-        <Text numberOfLines={1} style={[styles.chapter, { color: theme.text }]}>
-          {p.chapter ?? ' '}
-        </Text>
+        style={[styles.bottom, bar, sides(18), { paddingBottom: insets.bottom + 8, opacity: fade, transform: [{ translateY: fade.interpolate({ inputRange: [0, 1], outputRange: [12, 0] }) }] }]}>
+        <View style={styles.chapterRow}>
+          {chapterButton('prev', p.onPrevChapter)}
+          <Text numberOfLines={1} style={[styles.chapter, { color: theme.text }]}>
+            {p.chapter ?? ' '}
+          </Text>
+          {chapterButton('next', p.onNextChapter)}
+        </View>
         <Slider
           style={styles.slider}
           minimumValue={0}
@@ -81,8 +114,16 @@ export function Chrome(p: Props) {
           thumbTintColor={theme.accent}
         />
         <View style={styles.infoRow}>
-          <Text style={[styles.small, { color: theme.muted }]}>{(shown * 100).toFixed(1)}%</Text>
-          <Text style={[styles.small, { color: theme.muted }]}>{p.info ?? ''}</Text>
+          <Pressable onPress={p.onGoTo} hitSlop={8} accessibilityLabel="Go to page" style={styles.goTo}>
+            <Text style={[styles.small, { color: theme.accent }]}>
+              {p.pageLabel ? `${p.pageLabel(shown)} · ` : ''}
+              {(shown * 100).toFixed(1)}%
+            </Text>
+            <Ionicons name="chevron-forward" size={12} color={theme.accent} />
+          </Pressable>
+          <Text numberOfLines={1} style={[styles.small, styles.info, { color: theme.muted }]}>
+            {p.info ?? ''}
+          </Text>
         </View>
         <View style={[styles.tools, { borderColor: theme.border }]}>
           {tool('list', p.onContents, 'Contents')}
@@ -104,7 +145,6 @@ const styles = StyleSheet.create({
     top: 0,
     flexDirection: 'row',
     alignItems: 'center',
-    paddingHorizontal: 8,
     paddingBottom: 8,
     gap: 4,
     borderBottomWidth: StyleSheet.hairlineWidth,
@@ -114,7 +154,6 @@ const styles = StyleSheet.create({
     left: 0,
     right: 0,
     bottom: 0,
-    paddingHorizontal: 18,
     paddingTop: 12,
     borderTopWidth: StyleSheet.hairlineWidth,
   },
@@ -123,8 +162,12 @@ const styles = StyleSheet.create({
   tools: { flexDirection: 'row', justifyContent: 'space-around', marginTop: 10, paddingTop: 10, borderTopWidth: StyleSheet.hairlineWidth },
   tool: { alignItems: 'center', minWidth: 58, paddingVertical: 2 },
   toolLabel: { fontSize: 11, marginTop: 3 },
-  chapter: { fontSize: 14, fontWeight: '600', textAlign: 'center' },
+  chapterRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  chapterBtn: { padding: 4 },
+  chapter: { flex: 1, fontSize: 14, fontWeight: '600', textAlign: 'center' },
+  goTo: { flexDirection: 'row', alignItems: 'center', gap: 2, flexShrink: 1 },
   slider: { alignSelf: 'stretch', height: 40 },
   infoRow: { flexDirection: 'row', justifyContent: 'space-between' },
   small: { fontSize: 12 },
+  info: { flexShrink: 1, textAlign: 'right', marginLeft: 12 },
 });

@@ -39,6 +39,8 @@ const EMPTY: Annotations = { bookmarks: [], highlights: [] };
 const cache = new Map<string, Annotations>();
 const byBlock = new Map<string, Map<number, Highlight[]>>();
 const listeners = new Set<() => void>();
+/** Bumped on every change, for screens that show several books' annotations. */
+let version = 0;
 
 const file = (bookId: string) => new File(Paths.document, 'books', bookId, 'annotations.json');
 
@@ -63,7 +65,19 @@ function save(bookId: string, a: Annotations) {
   } catch {
     // the book may have been deleted meanwhile
   }
+  version++;
   listeners.forEach((l) => l());
+}
+
+/** Changes whenever any book's annotations change. */
+export function useAnnotationsVersion(): number {
+  return useSyncExternalStore(
+    (l) => {
+      listeners.add(l);
+      return () => listeners.delete(l);
+    },
+    () => version,
+  );
 }
 
 export function useAnnotations(bookId: string): Annotations {

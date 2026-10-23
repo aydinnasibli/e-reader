@@ -1,7 +1,9 @@
 import { DarkTheme, DefaultTheme, type ErrorBoundaryProps, Stack, ThemeProvider } from 'expo-router';
+import { StatusBar } from 'expo-status-bar';
 import { ErrorScreen } from '@/ui/ErrorScreen';
 import { AppState, Platform } from 'react-native';
 import { flushLibrary, loadLibrary } from '@/lib/library';
+import { useSharedFileNavigation } from '@/lib/openWith';
 import { flushStats } from '@/lib/stats';
 import { DialogHost } from '@/ui/dialogs';
 import { useAppColors } from '@/ui/theme';
@@ -21,6 +23,7 @@ if (Platform.OS !== 'web') {
 
 export default function RootLayout() {
   const c = useAppColors();
+  useSharedFileNavigation();
   const base = c.dark ? DarkTheme : DefaultTheme;
   return (
     <ThemeProvider value={{ ...base, colors: { ...base.colors, background: c.bg, card: c.bg, text: c.text, primary: c.accent, border: c.border } }}>
@@ -30,6 +33,8 @@ export default function RootLayout() {
         <Stack.Screen name="reader/[id]" options={{ headerShown: false, gestureEnabled: false, fullScreenGestureEnabled: false }} />
       </Stack>
       <DialogHost />
+      {/* Dark icons on light screens and light ones on dark (the reader sets its own). */}
+      <StatusBar style={c.dark ? 'light' : 'dark'} />
     </ThemeProvider>
   );
 }

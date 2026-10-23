@@ -5,9 +5,21 @@
 import * as DocumentPicker from 'expo-document-picker';
 import { Directory, File, Paths } from 'expo-file-system';
 import { useSyncExternalStore } from 'react';
-import { ingestBook, isSupportedName, titleFromFileName } from '@/engine/ingest';
+import { AppState } from 'react-native';
+import {
+  bookExtension,
+  bookFileName,
+  describeError,
+  friendlyStoredError,
+  ingestBook,
+  isSupportedName,
+  type SniffedFormat,
+  sniffFormat,
+  titleFromFileName,
+} from '@/engine/ingest';
 import type { BookFormat, Manifest, Position } from '@/engine/types';
 import { forgetAnnotations } from './annotations';
+import { fingerprintOf } from './fingerprint';
 import {
   FileSink,
   FileSource,
@@ -49,6 +61,10 @@ export interface BookEntry {
   finished?: boolean;
   /** Conversions started and not finished; a book that keeps killing the app stops being retried. */
   attempts?: number;
+  /** Title/author were edited by hand: conversion must not overwrite them. */
+  titleEdited?: boolean;
+  /** Identity of the original file, to notice it being added again (see fingerprint.ts). */
+  fp?: string;
 }
 
 /** What the reader needs about a book that is still being converted. */
@@ -97,6 +113,7 @@ export function loadLibrary() {
   ensureDir(booksDir());
   books = readJson<BookEntry[]>(libraryFile()) ?? [];
   for (const b of books) {
+    if (b.status === 'error') b.error = friendlyStoredError(b.error);
     if (b.status !== 'processing') continue;
     // Interrupted mid-conversion (app closed) starts over, unless converting
     // it is what keeps closing the app.
@@ -107,6 +124,10 @@ export function loadLibrary() {
     }
   }
   recoverOrphans();
+  AppState.addEventListener('change', (s) => {
+    if (s === 'active') countAttempt(true);
+    else if (s === 'background') countAttempt(false);
+  });
   emit();
   void runQueue();
 }
@@ -225,67 +246,235 @@ export interface ImportResult {
   skipped: string[];
   /** Couldn't be copied (usually storage full). */
   failed: string[];
+  /** Already on the shelf: [file name, title of the book on the shelf]. */
+  duplicates: [string, string][];
+}
+
+/** Fingerprint of a file, or undefined when it can't be read. */
+function fingerprintFile(file: File): string | undefined {
+  let src: FileSource | undefined;
+  try {
+    src = new FileSource(file);
+    return fingerprintOf(src);
+  } catch {
+    return undefined;
+  } finally {
+    src?.close();
+  }
+}
+
+/**
+ * The book on the shelf that is this file, if any. Books added by older
+ * versions get their fingerprint here, the first time a file of the same
+ * size comes in. A book that failed to prepare counts too: adding it again
+ * would only add another failed copy, and the one on the shelf offers to
+ * try again.
+ */
+function findDuplicate(fp: string, size: number): BookEntry | undefined {
+  for (const b of books) {
+    if (!b.fp && b.size === size) {
+      const f = fingerprintFile(sourceFile(b));
+      if (f) b.fp = f;
+    }
+    if (b.fp === fp) return b;
+  }
+  return undefined;
+}
+
+type AddOutcome = { added: BookEntry } | { duplicate: BookEntry } | { failed: true };
+
+/**
+ * Put one file on the shelf by moving it into the book's folder; a file
+ * that is already on the shelf is dropped instead. `file` must be the app's
+ * own copy (the picker's, or one made of a shared file). The caller saves
+ * and starts conversion with finishAdding().
+ */
+function addFile(file: File, name: string, size: number): AddOutcome {
+  const fp = fingerprintFile(file);
+  const dup = fp ? findDuplicate(fp, size) : undefined;
+  if (dup) {
+    try {
+      file.delete();
+    } catch {
+      // the cache is cleared by the system anyway
+    }
+    return { duplicate: dup };
+  }
+  const id = newId();
+  const dir = bookDir(id);
+  try {
+    ensureDir(dir);
+    const dest = new File(dir, `source.${bookExtension(name) ?? 'bin'}`);
+    // Already our own copy: moving it is instant even for huge files.
+    try {
+      file.moveSync(dest);
+    } catch {
+      file.copySync(dest);
+    }
+    const now = Date.now();
+    const book: BookEntry = {
+      id,
+      title: titleFromFileName(name),
+      author: '',
+      fileName: name,
+      sourceName: dest.name,
+      size: dest.size,
+      addedAt: now,
+      openedAt: now,
+      status: 'processing',
+      progress: 0,
+      ...(fp ? { fp } : {}),
+    };
+    books.unshift(book);
+    return { added: book };
+  } catch {
+    // Usually storage full. Don't leave a half-copied book behind.
+    try {
+      if (dir.exists) dir.delete();
+    } catch {
+      // recoverOrphans() tidies it next launch
+    }
+    return { failed: true };
+  }
+}
+
+/** Save what addFile() did and start converting the new books. */
+function finishAdding(added: number) {
+  if (added) {
+    emit();
+    flushLibrary();
+    void runQueue();
+  } else scheduleSave(); // fingerprints filled in by findDuplicate()
 }
 
 /** Let the user pick files and add them to the shelf. */
 export async function importBooks(): Promise<ImportResult> {
   const res = await DocumentPicker.getDocumentAsync({ type: '*/*', multiple: true, copyToCacheDirectory: true });
-  if (res.canceled) return { added: 0, skipped: [], failed: [] };
+  if (res.canceled) return { added: 0, skipped: [], failed: [], duplicates: [] };
   const skipped: string[] = [];
   const failed: string[] = [];
+  const duplicates: [string, string][] = [];
   let added = 0;
   try {
     for (const asset of res.assets) {
-      if (!isSupportedName(asset.name)) {
-        skipped.push(asset.name);
-        continue;
-      }
-      const id = newId();
-      const dir = bookDir(id);
-      try {
-        ensureDir(dir);
-        const lower = asset.name.toLowerCase();
-        const ext = lower.endsWith('.fb2.zip') ? 'fb2.zip' : (lower.split('.').pop() ?? 'bin');
-        const dest = new File(dir, `source.${ext}`);
-        const picked = new File(asset.uri);
-        // The picker already made a private copy; moving it is instant even for huge files.
-        try {
-          picked.moveSync(dest);
-        } catch {
-          picked.copySync(dest);
+      const picked = new File(asset.uri);
+      let name = asset.name;
+      // No book extension ("document", "book.bin"): recognised from the bytes, like shared files.
+      if (!isSupportedName(name)) {
+        const format = sniffFile(picked);
+        if (!format) {
+          (format === null ? skipped : failed).push(asset.name);
+          continue;
         }
-        const now = Date.now();
-        books.unshift({
-          id,
-          title: titleFromFileName(asset.name),
-          author: '',
-          fileName: asset.name,
-          sourceName: dest.name,
-          size: dest.size,
-          addedAt: now,
-          openedAt: now,
-          status: 'processing',
-          progress: 0,
-        });
-        added++;
-      } catch {
-        // Usually storage full. Don't leave a half-copied book behind.
-        failed.push(asset.name);
-        try {
-          if (dir.exists) dir.delete();
-        } catch {
-          // recoverOrphans() tidies it next launch
-        }
+        name = bookFileName(name, format);
       }
+      const r = addFile(picked, name, asset.size ?? picked.size);
+      if ('added' in r) added++;
+      else if ('duplicate' in r) duplicates.push([asset.name, r.duplicate.title]);
+      else failed.push(asset.name);
     }
   } finally {
-    if (added) {
-      emit();
-      flushLibrary();
-      void runQueue();
+    finishAdding(added);
+  }
+  return { added, skipped, failed, duplicates };
+}
+
+export type SharedFileResult =
+  | { book: BookEntry; duplicate: boolean }
+  /** Not a book this app reads. */
+  | { unsupported: true }
+  /** Couldn't be read or copied (no permission, storage full). */
+  | { failed: true };
+
+/**
+ * Add a file another app handed over ("Open with" on Android). Its
+ * content:// or file:// URI is only readable for a short while, so it's
+ * copied right away. Shared files often come without a usable name
+ * ("document", a number), so the format is recognised from the bytes.
+ */
+export async function importSharedFile(uri: string): Promise<SharedFileResult> {
+  loadLibrary();
+  const shared = new File(uri);
+  // A plain file is recognised where it is, so that a huge video isn't copied
+  // just to be refused. Anything from another app is copied first: reading it
+  // in place can mean waiting for a download (a cloud file) with the app frozen,
+  // and some apps hand over a stream whose size isn't known.
+  let format = /^file:/i.test(uri) ? sniffFile(shared) : undefined;
+  if (format === null) return { unsupported: true };
+  // Copied under a name of our own. Copied into a folder, the file would get
+  // the name the sending app reports, which could be "../../files/library.json".
+  const incoming = new Directory(Paths.cache, 'incoming');
+  const copy = new File(incoming, newId());
+  try {
+    try {
+      ensureDir(incoming);
+      await shared.copy(copy);
+    } catch {
+      return { failed: true }; // no permission to read it, or storage full
+    }
+    // Chat apps usually only let the file be read from start to end: recognised once copied.
+    if (format === undefined) format = sniffFile(copy);
+    if (format === undefined) return { failed: true };
+    if (format === null) return { unsupported: true };
+    const r = addFile(copy, bookFileName(sharedFileName(shared), format), copy.size);
+    finishAdding('added' in r ? 1 : 0);
+    if ('added' in r) return { book: r.added, duplicate: false };
+    if ('duplicate' in r) return { book: r.duplicate, duplicate: true };
+    return { failed: true };
+  } finally {
+    try {
+      if (copy.exists) copy.delete();
+    } catch {
+      // the cache is cleared by the system anyway
     }
   }
-  return { added, skipped, failed };
+}
+
+/** What book a file is from its bytes: null if none, undefined if it can't be read where it is. */
+function sniffFile(file: File): SniffedFormat | null | undefined {
+  let src: FileSource | undefined;
+  try {
+    src = new FileSource(file);
+    // A size of 0 can also mean "unknown" (a pipe): not readable here.
+    return src.size > 0 ? sniffFormat(src) : undefined;
+  } catch {
+    return undefined;
+  } finally {
+    src?.close();
+  }
+}
+
+/**
+ * A name for a shared file to show as its title, from the end of its URI
+ * ("My%20Book.epub"): no folders, control characters or leading dots, and
+ * not endless. Many apps share a file under an id ("…/item/48213",
+ * "msf:1000001234") rather than its name: then none (the book's own title,
+ * or a text's first line, is used instead).
+ */
+function sharedFileName(file: File): string {
+  let name = file.name;
+  try {
+    name = decodeURIComponent(name);
+  } catch {
+    // not percent-encoded after all
+  }
+  const clean = (name.split(/[/\\]/).pop() ?? '').replace(/\p{Cc}/gu, '').replace(/^[.\s]+/, '').slice(0, 120);
+  return bookExtension(clean) ? clean : '';
+}
+
+/** Edit a book's title and/or author; kept even if the book is converted again. */
+export function renameBook(id: string, patch: { title?: string; author?: string }) {
+  const title = patch.title?.trim();
+  const author = patch.author?.trim();
+  updateBook(id, { ...(title ? { title } : {}), ...(author !== undefined ? { author } : {}), titleEdited: true });
+}
+
+/** Go back to the title and author the book file itself gives. */
+export function restoreBookTitle(id: string) {
+  const m = loadManifest(id);
+  const b = getBook(id);
+  if (!b) return;
+  updateBook(id, { title: m?.title || titleFromFileName(b.fileName), author: m?.author ?? '', titleEdited: false });
 }
 
 /** Convert a book again from its original file (after damage or an engine upgrade). */
@@ -311,6 +500,22 @@ export function deleteBook(id: string) {
 // ---------- background conversion ----------
 
 let running = false;
+
+// A conversion that kills the app must not be retried forever, so each one
+// is counted on disk while it runs (attempts; see loadLibrary). Android also
+// kills apps in the background whenever it needs memory, which says nothing
+// about the book: the attempt is taken back while the app is in the
+// background and counted again when it comes back.
+let converting: string | null = null;
+let counted = false;
+
+function countAttempt(on: boolean) {
+  const b = converting ? getBook(converting) : undefined;
+  if (!b || counted === on) return;
+  counted = on;
+  updateBook(b.id, { attempts: Math.max(0, (b.attempts ?? 0) + (on ? 1 : -1)) });
+  flushLibrary();
+}
 
 async function runQueue() {
   if (running) return;
@@ -355,10 +560,9 @@ async function convert(book: BookEntry) {
     // ignore
   }
 
-  // Count the attempt on disk before starting, so a book whose conversion
-  // kills the app isn't retried forever (see loadLibrary).
-  updateBook(id, { attempts: (book.attempts ?? 0) + 1 });
-  flushLibrary();
+  converting = id;
+  counted = false;
+  if (AppState.currentState !== 'background') countAttempt(true);
 
   const state: LiveBook = { chunks: [], totalBlocks: 0, totalChars: 0, progress: 0 };
   live.set(id, state);
@@ -392,11 +596,12 @@ async function convert(book: BookEntry) {
           publish();
         },
         pause: makePause(),
-        fallbackTitle: book.title,
+        fallbackTitle: titleFromFileName(book.fileName),
         meta: (info) => {
           const patch: Partial<BookEntry> = {};
-          if (info.title) patch.title = info.title;
-          if (info.author) patch.author = info.author;
+          const edited = getBook(id)?.titleEdited;
+          if (info.title && !edited) patch.title = info.title;
+          if (info.author && !edited) patch.author = info.author;
           if (info.coverFile) patch.coverFile = info.coverFile;
           updateBook(id, patch);
         },
@@ -405,18 +610,19 @@ async function convert(book: BookEntry) {
     );
     writeJson(manifestFile(id), manifest);
     const coverRef = manifest.cover ? manifest.images[manifest.cover] : undefined;
+    const edited = getBook(id)?.titleEdited;
     updateBook(id, {
       status: 'ready',
       progress: 1,
       attempts: undefined,
-      title: manifest.title,
-      author: manifest.author,
+      ...(edited ? {} : { title: manifest.title, author: manifest.author }),
       format: manifest.format,
       coverFile: coverRef && 'file' in coverRef ? coverRef.file : getBook(id)?.coverFile,
     });
   } catch (e) {
-    updateBook(id, { status: 'error', error: e instanceof Error ? e.message : String(e), attempts: undefined });
+    updateBook(id, { status: 'error', error: describeError(e), attempts: undefined });
   } finally {
+    converting = null;
     src?.close();
     live.delete(id);
     emitLive();

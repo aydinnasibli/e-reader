@@ -8,6 +8,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import type { Block, Position } from '@/engine/types';
 import type { ReaderSettings, Theme } from '@/lib/settings';
 import type { BookData } from './book';
+import { ClockBattery } from './StatusInfo';
 import { BlockImage, BlockText, Spacer } from './BlockText';
 import { hitText } from './hitTest';
 import { drawn, lookOf, toBlock } from './look';
@@ -34,7 +35,20 @@ interface Props {
   highlighting?: boolean;
   onHighlightDrag?(from: TextPoint | null, to: TextPoint | null, done: boolean): void;
   onHighlightTap?(at: TextPoint): void;
+  /** Auto-scroll speed in points per second; 0 or missing = off. */
+  autoScroll?: number;
+  /** The reader touched the list while it was auto-scrolling. */
+  onAutoInterrupt?(): void;
+  /** Auto-scroll reached the end of the book. */
+  onAutoEnd?(): void;
+  /** The end of the book came into view. */
+  onReachEnd?(): void;
 }
+
+/** How far auto-scroll may ask to be ahead of where the list really is, in points. */
+const MAX_LEAD = 120;
+/** Further apart than auto-scroll can be ahead: the content moved under the list; start again from where it is. */
+const RESYNC = MAX_LEAD + 80;
 
 interface Win {
   first: number; // first chunk in the window
@@ -42,7 +56,7 @@ interface Win {
   start: number; // first block shown
 }
 
-export function ScrollReader({ book, settings, theme, start, startKey, version, onPosition, onTap, marksFor, onLongPressBlock, onLink, footerRight, highlighting, onHighlightDrag, onHighlightTap }: Props) {
+export function ScrollReader({ book, settings, theme, start, startKey, version, onPosition, onTap, marksFor, onLongPressBlock, onLink, footerRight, highlighting, onHighlightDrag, onHighlightTap, autoScroll, onAutoInterrupt, onAutoEnd, onReachEnd }: Props) {
   const win = useWindowDimensions();
   const insets = useSafeAreaInsets();
   // Clear of a landscape notch on either side.
@@ -66,6 +80,9 @@ export function ScrollReader({ book, settings, theme, start, startKey, version, 
     blocks.clear();
     setW(null);
     busy.current = false;
+    // The list starts over at the top: auto-scroll must not carry on from the old place.
+    actual.current = 0;
+    offset.current = 0;
     if (waiting) return;
     const c = book.chunkOf(start.b);
     book.loadChunk(c).then((bl) => {
@@ -191,6 +208,46 @@ export function ScrollReader({ book, settings, theme, start, startKey, version, 
     });
   };
 
+  // ---- auto-scroll ----
+  const list = useRef<FlatList<number>>(null);
+  const offset = useRef(0);
+  /** Where the list really is (it stops at the end of what's loaded). */
+  const actual = useRef(0);
+  /** The end of the book is loaded (set while drawing). */
+  const endLoaded = useRef(false);
+  const onAutoEndRef = useRef(onAutoEnd);
+  onAutoEndRef.current = onAutoEnd;
+  useEffect(() => {
+    if (!autoScroll) return;
+    let frame = 0;
+    let last = Date.now();
+    // When the list last moved: stuck at the end of the book means done.
+    let moved = last;
+    let seen = actual.current;
+    offset.current = actual.current;
+    const step = () => {
+      const now = Date.now();
+      // Any movement counts: trimming text above moves the list up, not down.
+      if (Math.abs(actual.current - seen) > 0.5) {
+        seen = actual.current;
+        moved = now;
+      } else if (endLoaded.current && now - moved > 1500) {
+        onAutoEndRef.current?.();
+        return;
+      }
+      // Frames can be late (busy JS thread): move by elapsed time, not per frame.
+      const dt = Math.min(0.25, (now - last) / 1000);
+      last = now;
+      // Never run ahead of the list: at the end of the loaded text it can't
+      // move, and new text arriving must not make it jump.
+      offset.current = Math.min(offset.current + autoScroll * dt, actual.current + MAX_LEAD);
+      list.current?.scrollToOffset({ offset: offset.current, animated: false });
+      frame = requestAnimationFrame(step);
+    };
+    frame = requestAnimationFrame(step);
+    return () => cancelAnimationFrame(frame);
+  }, [autoScroll]);
+
   // ---- highlight tool ----
   // Scrolling is paused while it's on, so where each paragraph sits on screen
   // is measured once (and again if the list changes) and hit testing is instant.
@@ -291,6 +348,7 @@ export function ScrollReader({ book, settings, theme, start, startKey, version, 
   };
 
   const atEnd = w ? w.last >= book.chunkCount - 1 : false;
+  endLoaded.current = atEnd && book.complete;
   const pct = book.fraction(pos) * 100;
 
   return (
@@ -312,8 +370,18 @@ export function ScrollReader({ book, settings, theme, start, startKey, version, 
       )}
       {w && (
         <FlatList
+          ref={list}
           key={startKey}
           scrollEnabled={!highlighting}
+          onScroll={(e) => {
+            const { contentOffset, layoutMeasurement, contentSize } = e.nativeEvent;
+            actual.current = contentOffset.y;
+            if (endLoaded.current && contentOffset.y + layoutMeasurement.height >= contentSize.height - 40) onReachEnd?.();
+            // Not auto-scrolling, or the content moved under it (text trimmed above): follow the list.
+            if (!autoScroll || Math.abs(offset.current - actual.current) > RESYNC) offset.current = actual.current;
+          }}
+          scrollEventThrottle={32}
+          onScrollBeginDrag={() => autoScroll && onAutoInterrupt?.()}
           data={data}
           keyExtractor={(b) => String(b)}
           renderItem={renderItem}
@@ -339,7 +407,9 @@ export function ScrollReader({ book, settings, theme, start, startKey, version, 
       )}
       {highlightLayer}
       <View pointerEvents="none" style={[styles.badge, { bottom: insets.bottom + 6, backgroundColor: theme.bg }]}>
-        <Text style={{ color: theme.muted, fontSize: 12 }}>
+        <Text style={{ color: theme.muted, fontSize: 12 }} numberOfLines={1} maxFontSizeMultiplier={1.4}>
+          {settings.showClock ? <ClockBattery /> : null}
+          {settings.showClock ? ' · ' : ''}
           {pct.toFixed(1)}%{footerRight ? ` · ${footerRight}` : ''}
         </Text>
       </View>

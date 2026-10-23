@@ -4,6 +4,7 @@ import { Stack, router } from 'expo-router';
 import { useMemo, useState } from 'react';
 import { FlashList } from '@shopify/flash-list';
 import { ActivityIndicator, Alert, Pressable, ScrollView, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import {
   type Filter,
   SORT_LABELS,
@@ -19,8 +20,10 @@ import {
   toggleInCollection,
   useShelves,
 } from '@/lib/collections';
-import { type BookEntry, deleteBook, importBooks, updateBook, useLibrary, useLiveBook } from '@/lib/library';
+import { type BookEntry, deleteBook, importBooks, reprocessBook, updateBook, useLibrary, useLiveBook } from '@/lib/library';
+import { useAddingSharedFile } from '@/lib/openWith';
 import { Cover } from '@/ui/Cover';
+import { confirmRemoveBook } from '@/ui/confirm';
 import { showActions, showPrompt } from '@/ui/dialogs';
 import { formatBytes } from '@/ui/format';
 import { StatsSheet } from '@/ui/StatsSheet';
@@ -34,10 +37,14 @@ export default function Library() {
   const c = useAppColors();
   const books = useLibrary();
   const shelves = useShelves();
-  const { width } = useWindowDimensions();
+  const win = useWindowDimensions();
+  const insets = useSafeAreaInsets();
+  // Clear of a landscape camera cutout on either side.
+  const width = win.width - insets.left - insets.right;
   const [query, setQuery] = useState('');
   const [filter, setFilter] = useState<Filter>({ kind: 'all' });
   const [importing, setImporting] = useState(false);
+  const addingShared = useAddingSharedFile();
   const [statsOpen, setStatsOpen] = useState(false);
   const columns = width >= 700 ? 5 : 3;
   const cellWidth = (width - GAP * (columns + 1)) / columns;
@@ -63,6 +70,10 @@ export default function Library() {
       const res = await importBooks();
       if (res.failed.length) Alert.alert("Couldn't add some books", `There may not be enough free space:\n\n${res.failed.join('\n')}`);
       if (res.skipped.length) Alert.alert('Some files were skipped', `Supported formats: EPUB, FB2, MOBI, AZW3 and TXT:\n\n${res.skipped.join('\n')}`);
+      if (res.duplicates.length) {
+        const list = res.duplicates.map(([file, title]) => (file === title || !title ? file : `${file} — “${title}”`)).join('\n');
+        Alert.alert('Already in your library', `Not added again:\n\n${list}`);
+      }
     } catch (e) {
       Alert.alert('Import failed', e instanceof Error ? e.message : String(e));
     } finally {
@@ -102,6 +113,7 @@ export default function Library() {
     Haptics.selectionAsync().catch(() => {});
     const finished = isFinished(b);
     showActions(b.title, [
+      { label: 'Details', icon: 'information-circle-outline', onPress: () => router.push({ pathname: '/book/[id]', params: { id: b.id } }) },
       { label: 'Add to collection…', icon: 'albums-outline', onPress: () => collectionsMenu(b) },
       {
         label: finished ? 'Mark as unread' : 'Mark as finished',
@@ -112,11 +124,7 @@ export default function Library() {
         label: 'Remove from library',
         icon: 'trash-outline',
         destructive: true,
-        onPress: () =>
-          Alert.alert('Remove book?', `"${b.title}" will be deleted from this phone.`, [
-            { text: 'Cancel', style: 'cancel' },
-            { text: 'Remove', style: 'destructive', onPress: () => deleteBook(b.id) },
-          ]),
+        onPress: () => confirmRemoveBook(b),
       },
     ]);
   };
@@ -139,18 +147,27 @@ export default function Library() {
         label: 'Delete collection',
         icon: 'trash-outline',
         destructive: true,
-        onPress: () => {
-          deleteCollection(id, books);
-          if (filter.kind === 'collection' && filter.id === id) setFilter({ kind: 'all' });
-        },
+        onPress: () =>
+          Alert.alert('Delete collection?', `"${name}" will be deleted. The books in it stay in your library.`, [
+            { text: 'Cancel', style: 'cancel' },
+            {
+              text: 'Delete',
+              style: 'destructive',
+              onPress: () => {
+                deleteCollection(id, books);
+                if (filter.kind === 'collection' && filter.id === id) setFilter({ kind: 'all' });
+              },
+            },
+          ]),
       },
     ]);
 
   const open = (b: BookEntry) => {
     if (b.status === 'error') {
       Alert.alert("Couldn't open this book", b.error ?? 'Unknown error', [
-        { text: 'OK' },
+        { text: 'OK', style: 'cancel' },
         { text: 'Remove', style: 'destructive', onPress: () => deleteBook(b.id) },
+        { text: 'Try again', onPress: () => reprocessBook(b.id) },
       ]);
       return;
     }
@@ -174,6 +191,12 @@ export default function Library() {
     // The grid's content is inset by half a gap; undo that for the full-width header.
     <View style={{ marginHorizontal: shelves.view === 'grid' ? -GAP / 2 : 0 }}>
       <UpdateBanner />
+      {addingShared ? (
+        <View style={styles.adding}>
+          <ActivityIndicator />
+          <Text style={{ color: c.secondary, fontSize: 14 }}>Adding book…</Text>
+        </View>
+      ) : null}
       <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chips}>
         {chips.map((ch) => (
           <Pressable
@@ -209,7 +232,7 @@ export default function Library() {
   );
 
   return (
-    <View style={{ flex: 1, backgroundColor: c.bg }}>
+    <View style={{ flex: 1, backgroundColor: c.bg, paddingLeft: insets.left, paddingRight: insets.right }}>
       <Stack.Screen
         options={{
           title: 'Library',
@@ -227,6 +250,9 @@ export default function Library() {
           },
           headerRight: () => (
             <View style={styles.headerButtons}>
+              <Pressable onPress={() => router.push('/notes')} hitSlop={10} accessibilityLabel="Highlights and notes">
+                <Ionicons name="color-wand-outline" size={22} color={c.text} />
+              </Pressable>
               <Pressable onPress={() => setStatsOpen(true)} hitSlop={10} accessibilityLabel="Reading stats">
                 <Ionicons name="stats-chart-outline" size={22} color={c.text} />
               </Pressable>
@@ -254,7 +280,7 @@ export default function Library() {
           keyboardDismissMode="on-drag"
           ListHeaderComponent={header}
           ListEmptyComponent={empty}
-          contentContainerStyle={{ paddingBottom: 40, paddingHorizontal: GAP / 2 }}
+          contentContainerStyle={{ paddingBottom: insets.bottom + 40, paddingHorizontal: GAP / 2 }}
           renderItem={({ item }) => <GridCell book={item} width={cellWidth} c={c} onPress={() => open(item)} onLongPress={() => bookMenu(item)} />}
         />
       ) : (
@@ -266,7 +292,7 @@ export default function Library() {
           keyboardDismissMode="on-drag"
           ListHeaderComponent={header}
           ListEmptyComponent={empty}
-          contentContainerStyle={{ paddingBottom: 40 }}
+          contentContainerStyle={{ paddingBottom: insets.bottom + 40 }}
           ItemSeparatorComponent={() => <View style={[styles.sep, { backgroundColor: c.border }]} />}
           renderItem={({ item }) => <ListRow book={item} c={c} onPress={() => open(item)} onLongPress={() => bookMenu(item)} />}
         />
@@ -387,8 +413,9 @@ function ListRow({ book, c, onPress, onLongPress }: { book: BookEntry; c: AppCol
 
 const styles = StyleSheet.create({
   headerButtons: { flexDirection: 'row', alignItems: 'center', gap: 18 },
+  adding: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingHorizontal: GAP, paddingBottom: 10 },
   chips: { paddingHorizontal: GAP, paddingTop: 4, paddingBottom: 12, gap: 8 },
-  chip: { paddingHorizontal: 14, height: 34, borderRadius: 17, alignItems: 'center', justifyContent: 'center' },
+  chip: { paddingHorizontal: 14, paddingVertical: 6, minHeight: 34, borderRadius: 17, alignItems: 'center', justifyContent: 'center' },
   continue: {
     flexDirection: 'row',
     marginHorizontal: GAP,
@@ -410,7 +437,7 @@ const styles = StyleSheet.create({
   badge: { position: 'absolute', left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.65)', paddingVertical: 4, alignItems: 'center' },
   badgeText: { color: '#fff', fontSize: 11, fontWeight: '600' },
   cellTitle: { fontSize: 13, fontWeight: '600', marginTop: 8, minHeight: 34 },
-  cellMeta: { flexDirection: 'row', alignItems: 'center', gap: 6, height: 16 },
+  cellMeta: { flexDirection: 'row', alignItems: 'center', gap: 6, minHeight: 16 },
   track: { height: 3, borderRadius: 2, overflow: 'hidden' },
   fill: { height: 3 },
   row: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: GAP, paddingVertical: 10, gap: 14 },

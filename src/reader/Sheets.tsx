@@ -6,6 +6,7 @@ import { ActivityIndicator, FlatList, Pressable, StyleSheet, Text, TextInput, Vi
 import type { Position, TocEntry } from '@/engine/types';
 import { type Bookmark, type Highlight, removeBookmark, removeHighlight, useAnnotations } from '@/lib/annotations';
 import type { Theme } from '@/lib/settings';
+import { confirmDeleteHighlight, hasNote } from '@/ui/confirm';
 import { Sheet } from '@/ui/Sheet';
 import type { BookData } from './book';
 import { type Hit, MAX_HITS, type SearchProgress, searchBook } from './search';
@@ -100,7 +101,7 @@ export function NavigatorSheet({
             </>
           )}
           onPress={(h) => onGo({ b: h.b, o: h.s })}
-          onDelete={(h) => removeHighlight(book.entry.id, h.id)}
+          onDelete={(h) => confirmDeleteHighlight(hasNote(h), () => removeHighlight(book.entry.id, h.id))}
         />
       )}
     </Sheet>
@@ -134,12 +135,14 @@ function TocList({ book, theme, currentBlock, visible, onGo }: { book: BookData;
       onScrollToIndexFailed={() => {}}
       renderItem={({ item, index }) => (
         <Pressable onPress={() => onGo({ b: item.b, o: 0 })} style={[styles.tocRow, { paddingLeft: 20 + Math.min(item.l, 4) * 18 }]}>
+          {/* Rows have a fixed height (to jump straight to the current chapter in long contents): text grows only so far. */}
           <Text
             numberOfLines={1}
+            maxFontSizeMultiplier={1.4}
             style={{ flex: 1, color: index === current ? theme.accent : theme.text, fontSize: 16, fontWeight: index === current ? '700' : '400' }}>
             {item.t}
           </Text>
-          <Text style={{ color: theme.muted, fontSize: 13 }}>{book.totalChars ? `${Math.round((book.chunks[book.chunkOf(item.b)]?.[1] / book.estimatedChars) * 100)}%` : ''}</Text>
+          <Text maxFontSizeMultiplier={1.4} style={{ color: theme.muted, fontSize: 13 }}>{book.totalChars ? `${Math.round((book.chunks[book.chunkOf(item.b)]?.[1] / book.estimatedChars) * 100)}%` : ''}</Text>
         </Pressable>
       )}
     />

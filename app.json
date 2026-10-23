@@ -25,6 +25,25 @@
         "REQUEST_INSTALL_PACKAGES"
       ],
       "allowBackup": false,
+      "intentFilters": [
+        {
+          "action": "VIEW",
+          "category": ["DEFAULT"],
+          "data": [
+            { "scheme": "content" },
+            { "scheme": "file" },
+            { "mimeType": "application/epub+zip" },
+            { "mimeType": "application/x-fictionbook+xml" },
+            { "mimeType": "application/x-fictionbook" },
+            { "mimeType": "application/x-mobipocket-ebook" },
+            { "mimeType": "application/vnd.amazon.ebook" },
+            { "mimeType": "application/vnd.amazon.mobi8-ebook" },
+            { "mimeType": "text/plain" },
+            { "mimeType": "application/zip" },
+            { "mimeType": "application/octet-stream" }
+          ]
+        }
+      ],
       "blockedPermissions": [
         "android.permission.SYSTEM_ALERT_WINDOW",
         "android.permission.READ_EXTERNAL_STORAGE",
@@ -52,7 +71,6 @@
       "expo-font",
       "expo-image",
       "expo-status-bar",
-      "expo-web-browser",
       "expo-localization"
     ],
     "experiments": {

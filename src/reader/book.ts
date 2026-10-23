@@ -72,6 +72,13 @@ export class BookData {
     return i + 1 < this.chunks.length ? this.chunks[i + 1][0] : this.totalBlocks;
   }
 
+  /** Characters in chunk `i`. */
+  chunkChars(i: number): number {
+    const start = this.chunks[i]?.[1] ?? 0;
+    const end = i + 1 < this.chunks.length ? this.chunks[i + 1][1] : this.totalChars;
+    return Math.max(0, end - start);
+  }
+
   chunkOf(block: number): number {
     let lo = 0;
     let hi = this.chunks.length - 1;
@@ -149,7 +156,7 @@ export class BookData {
     return total > 0 ? Math.min(1, this.charOffset(pos) / total) : 0;
   }
 
-  /** Position at a fraction of the book (for the progress slider). */
+  /** Position at a fraction of the book (progress slider, go to page), down to the character. */
   async positionAt(fraction: number): Promise<Position> {
     if (!this.chunks.length) return { b: 0, o: 0 };
     const target = Math.max(0, Math.min(this.totalChars - 1, fraction * this.estimatedChars));
@@ -164,7 +171,8 @@ export class BookData {
     let n = this.chunks[lo][1];
     for (let k = 0; k < blocks.length; k++) {
       const len = blockLength(blocks[k]);
-      if (n + len > target) return { b: this.chunks[lo][0] + k, o: 0 };
+      // Inside a long paragraph, the page with that character, not the one where the paragraph starts.
+      if (n + len > target) return { b: this.chunks[lo][0] + k, o: Math.floor(target - n) };
       n += len;
     }
     return { b: this.chunks[lo][0] + blocks.length - 1, o: 0 };

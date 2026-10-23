@@ -4,7 +4,7 @@
 
 import { createDecoder, detectBom, type StreamDecoder, xmlDeclaredEncoding } from './decode';
 import { HtmlToBlocks } from './html';
-import type { IngestContext } from './io';
+import { BookError, DRM_MESSAGE, type IngestContext } from './io';
 import { type MarkupHandler, MarkupTokenizer } from './markup';
 import type { ImageRef, Manifest, TocEntry } from './types';
 import { BookWriter } from './writer';
@@ -89,12 +89,12 @@ function readContainer(zip: ZipArchive): string {
     if (path) return path;
   }
   for (const name of zip.entries.keys()) if (name.toLowerCase().endsWith('.opf')) return name;
-  throw new Error('This EPUB has no package file');
+  throw new BookError('This EPUB is damaged: the list of its chapters is missing.');
 }
 
 function readPackage(zip: ZipArchive, opfPath: string): Package {
   const entry = zip.find(opfPath);
-  if (!entry) throw new Error('This EPUB is missing its package file');
+  if (!entry) throw new BookError('This EPUB is damaged: the list of its chapters is missing.');
   const pkg: Package = { title: '', authors: [], lang: '', items: new Map(), spine: [], tocId: '', coverId: '' };
   let capture: 'title' | 'creator' | 'language' | null = null;
   let buf = '';
@@ -136,6 +136,71 @@ function readPackage(zip: ZipArchive, opfPath: string): Package {
     for (const it of pkg.items.values()) if (/\bcover-image\b/.test(it.props)) pkg.coverId = it.id;
   }
   return pkg;
+}
+
+// Font obfuscation (IDPF and Adobe): only embedded fonts are scrambled, the text is readable.
+const FONT_OBFUSCATION = new Set(['http://www.idpf.org/2008/embedding', 'http://ns.adobe.com/pdf/enc#RC']);
+// Files the common kinds of DRM add. They only tell which kind it is: many
+// stores leave them in books whose text isn't encrypted at all.
+const DRM_KINDS = [
+  ['META-INF/rights.xml', 'Adobe DRM'],
+  ['META-INF/sinf.xml', 'Apple FairPlay'],
+  ['META-INF/license.lcpl', 'Readium LCP'],
+] as const;
+const CONTENT_FILE = /\.(x?html?|xml|opf|ncx)$/i;
+
+/** Files META-INF/encryption.xml lists as really encrypted (not just obfuscated fonts). */
+function encryptedFiles(zip: ZipArchive): string[] {
+  const e = zip.find('META-INF/encryption.xml');
+  if (!e) return [];
+  const out: string[] = [];
+  let inData = false;
+  let keyDepth = 0; // inside <KeyInfo>/<EncryptedKey>, whose methods are about the key
+  let algorithm = '';
+  let uri = '';
+  parseXml(zip.read(e), {
+    open(name, attrs) {
+      if (name === 'encrypteddata') {
+        inData = true;
+        algorithm = uri = '';
+      } else if (!inData) return;
+      else if (name === 'keyinfo' || name === 'encryptedkey') keyDepth++;
+      else if (name === 'encryptionmethod' && !keyDepth && !algorithm) algorithm = (attrs.algorithm ?? '').trim();
+      else if (name === 'cipherreference' && !keyDepth && attrs.uri) uri = attrs.uri;
+    },
+    close(name) {
+      if (!inData) return;
+      if (name === 'keyinfo' || name === 'encryptedkey') keyDepth = Math.max(0, keyDepth - 1);
+      else if (name === 'encrypteddata') {
+        // Paths in encryption.xml are relative to the root of the container.
+        if (uri && !FONT_OBFUSCATION.has(algorithm)) out.push(resolvePath('', uri));
+        inData = false;
+        keyDepth = 0;
+      }
+    },
+    text() {},
+  });
+  return out;
+}
+
+/**
+ * Refuse copy-protected books up front with a clear message, instead of
+ * producing pages of scrambled bytes: books whose text is encrypted (Adobe
+ * ADEPT, Apple FairPlay, Readium LCP or any other kind). Books whose only
+ * "encryption" is font obfuscation are fine.
+ */
+function checkDrm(zip: ZipArchive, encrypted: string[], pkg?: Package) {
+  if (!encrypted.length) return;
+  const content = new Set<string>();
+  if (pkg) {
+    for (const id of pkg.spine) {
+      const it = pkg.items.get(id);
+      if (it) content.add(it.href.toLowerCase());
+    }
+  }
+  if (!encrypted.some((p) => CONTENT_FILE.test(p) || content.has(p.toLowerCase()))) return;
+  const kind = DRM_KINDS.find(([file]) => zip.find(file))?.[1];
+  throw new BookError(kind ? `${DRM_MESSAGE} It uses ${kind}.` : DRM_MESSAGE);
 }
 
 function readNav(zip: ZipArchive, item: ManifestItem): RawToc[] {
@@ -215,8 +280,12 @@ function extOf(path: string, type = ''): string {
 }
 
 export async function ingestEpub(ctx: IngestContext, zip: ZipArchive): Promise<Manifest> {
+  // Checked before the package too: an encrypted package can't be parsed.
+  const encrypted = encryptedFiles(zip);
+  checkDrm(zip, encrypted);
   const opfPath = readContainer(zip);
   const pkg = readPackage(zip, opfPath);
+  checkDrm(zip, encrypted, pkg);
 
   let rawToc: RawToc[] = [];
   const navItem = [...pkg.items.values()].find((i) => /\bnav\b/.test(i.props));

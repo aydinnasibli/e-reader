@@ -13,6 +13,8 @@ import { BlockImage, BlockText, Spacer } from './BlockText';
 import { Measurer } from './Measurer';
 import { swipeOutcome, tapZone } from './gestures';
 import { hitText } from './hitTest';
+import { Battery, Clock } from './StatusInfo';
+import { charsPerPage, pageCount, pageNumber } from './pageNumbers';
 import { type Look, drawn, layoutKeyOf, toBlock, toDrawn } from './look';
 import type { Mark } from './marks';
 import { type Measure, type Page, type PageItem, pageOf, paginate } from './paginate';
@@ -20,6 +22,8 @@ import type { TextPoint } from './selection';
 
 export const HEADER = 30;
 export const FOOTER = 30;
+/** The header and footer have a fixed height (pages are cut to fit between them): their text grows with the phone's text size only this far. */
+const META_SCALE = 1.4;
 
 type Insets = { top: number; bottom: number; left: number; right: number };
 
@@ -45,8 +49,11 @@ interface Props {
   startKey: number;
   /** Bumped whenever the book grows (still converting) or finishes. */
   version: number;
-  /** Called with the first and last position shown. */
-  onPosition(pos: Position, end?: Position): void;
+  /**
+   * Called with the first and last position shown, and whether a page turn
+   * just arrived at the book's last page (not a layout change showing it).
+   */
+  onPosition(pos: Position, end?: Position, turnedToLast?: boolean): void;
   onTap(): void;
   /** Highlights and search hits for a block. */
   marksFor?(b: number): Mark[] | undefined;
@@ -65,6 +72,19 @@ interface Props {
   onHighlightDrag?(from: TextPoint | null, to: TextPoint | null, done: boolean): void;
   /** A tap on text while highlighting. */
   onHighlightTap?(at: TextPoint): void;
+  /** The page number shown, the (estimated) total, and characters per page. */
+  onPageInfo?(info: PageInfo): void;
+  /** Turn requests from outside (auto page turn); `n` increments per request. */
+  turn?: { dir: 1 | -1; n: number };
+  /** A forward turn was asked for on the last page of the book. */
+  onEnd?(): void;
+}
+
+export interface PageInfo {
+  page: number;
+  total: number;
+  /** Characters per page at the current settings (for estimates like pages left). */
+  cpp: number;
 }
 
 interface Laid {
@@ -89,7 +109,7 @@ interface Cur {
   page: number | null;
 }
 
-export function PageReader({ book, settings, theme, start, startKey, version, onPosition, onTap, marksFor, onLongPressBlock, onLink, bookmarked, footerRight, onLayoutReady, highlighting, onHighlightDrag, onHighlightTap }: Props) {
+export function PageReader({ book, settings, theme, start, startKey, version, onPosition, onTap, marksFor, onLongPressBlock, onLink, bookmarked, footerRight, onLayoutReady, highlighting, onHighlightDrag, onHighlightTap, onPageInfo, turn, onEnd }: Props) {
   const win = useWindowDimensions();
   const liveInsets = useSafeAreaInsets();
   // Showing/hiding the status bar can change the top inset on some iPhones;
@@ -185,7 +205,8 @@ export function PageReader({ book, settings, theme, start, startKey, version, on
     for (const c of laid.keys()) if (Math.abs(c - cur.chunk) > 2) laid.delete(c);
   }, [cur.chunk, laid, book]);
 
-  // Report the reading position.
+  // Report the reading position. `turned`: the next position comes from a page turn.
+  const turned = useRef(false);
   useEffect(() => {
     if (cur.page === null || !curLaid) return;
     const item = curLaid.pages[cur.page]?.items[0];
@@ -201,8 +222,11 @@ export function PageReader({ book, settings, theme, start, startKey, version, on
     lastPos.current = pos;
     // The end is exclusive: where the next page starts.
     const lastText = curLaid.measures[last.b - curLaid.first]?.kind === 'text';
-    onPosition(pos, lastText ? { b: last.b, o: bookOffset(last.b, last.e) } : { b: last.b + 1, o: 0 });
-  }, [cur, curLaid, onPosition, step]);
+    const lastPage = book.complete && cur.chunk + 1 >= book.chunkCount && cur.page + step >= curLaid.pages.length;
+    const byTurn = turned.current;
+    turned.current = false;
+    onPosition(pos, lastText ? { b: last.b, o: bookOffset(last.b, last.e) } : { b: last.b + 1, o: 0 }, lastPage && byTurn);
+  }, [cur, curLaid, onPosition, step, book]);
 
   /** The page one step away, or why there isn't one. */
   const neighbour = (dir: 1 | -1): { cur: Cur; pageData?: { laid: Laid; index: number } } | 'end' | 'processing' | null => {
@@ -238,6 +262,7 @@ export function PageReader({ book, settings, theme, start, startKey, version, on
     const n = neighbour(dir);
     if (!n || n === 'end' || n === 'processing') {
       springBack();
+      if (n === 'end' && dir === 1) onEnd?.();
       return;
     }
     animating.current = true;
@@ -251,6 +276,7 @@ export function PageReader({ book, settings, theme, start, startKey, version, on
       // which the layout change has already re-targeted.
       if (layoutKeyRef.current !== keyAtStart) return;
       staleOk.current = false;
+      turned.current = true;
       if (n.cur.page === null) target.current = { pos: { b: book.chunkStart(n.cur.chunk), o: 0 }, last: dir < 0 };
       setCur(n.cur);
     };
@@ -273,6 +299,11 @@ export function PageReader({ book, settings, theme, start, startKey, version, on
       land();
     }
   };
+  const goRef = useRef(go);
+  goRef.current = go;
+  useEffect(() => {
+    if (turn) goRef.current(turn.dir);
+  }, [turn]);
   const layoutKeyRef = useRef(layoutKey);
   layoutKeyRef.current = layoutKey;
   const widthRef = useRef(win.width);
@@ -389,7 +420,7 @@ export function PageReader({ book, settings, theme, start, startKey, version, on
     const column = (page: Page | undefined, colKey: string) => (
       <Pressable
         key={colKey}
-        style={spread ? { width } : styles.fill}
+        style={[spread ? { width } : styles.fill, page?.center && styles.middle]}
         onPress={(e) => tapPage(e.nativeEvent.pageX)}
         onLongPress={(e) => longPress(e.nativeEvent.pageX, e.nativeEvent.pageY, colKey)}
         delayLongPress={450}>
@@ -522,12 +553,38 @@ export function PageReader({ book, settings, theme, start, startKey, version, on
   const chapter = firstItem ? book.chapterAt(firstItem.b)?.t : undefined;
   const pct = firstItem ? book.fraction(lastPos.current) * 100 : 0;
 
+  // Page numbers: exact inside the laid-out chunks, estimated beyond them.
+  const cpp = charsPerPage([...laid.entries()].map(([c, l]) => ({ chars: book.chunkChars(c), pages: l.pages.length })));
+  const pageInfo =
+    cpp && current && cur.page !== null
+      ? (() => {
+          const total = pageCount(book.estimatedChars, cpp);
+          return { page: Math.min(total, pageNumber(book.chunks[cur.chunk]?.[1] ?? 0, book.chunkChars(cur.chunk), cur.page, cpp)), total, cpp };
+        })()
+      : null;
+  const pageKeyInfo = pageInfo ? `${pageInfo.page}|${pageInfo.total}|${Math.round(pageInfo.cpp)}` : '';
+  useEffect(() => {
+    if (pageInfo) onPageInfo?.(pageInfo);
+  }, [pageKeyInfo]); // eslint-disable-line react-hooks/exhaustive-deps
+  const pageText = pageInfo ? `${pageInfo.page} of ${book.complete ? '' : '~'}${pageInfo.total} · ` : '';
+
   return (
     <View style={[styles.root, { backgroundColor: theme.bg, paddingTop: insets.top, paddingBottom: insets.bottom }]}>
-      <View style={[styles.header, { paddingLeft: textLeft + 22, paddingRight: settings.margin + insets.right + 22 }]}>
-        <Text numberOfLines={1} style={[styles.meta, { color: theme.muted }]}>
+      {/* Clock, chapter, battery; the right edge is kept clear for the bookmark ribbon. */}
+      <View style={[styles.header, { paddingLeft: textLeft + (settings.showClock ? 0 : 22), paddingRight: settings.margin + insets.right + 22 }]}>
+        {settings.showClock ? (
+          <View style={styles.side}>
+            <Clock maxScale={META_SCALE} style={[styles.meta, { color: theme.muted }]} />
+          </View>
+        ) : null}
+        <Text numberOfLines={1} maxFontSizeMultiplier={META_SCALE} style={[styles.meta, styles.headerTitle, { color: theme.muted }]}>
           {chapter ?? book.entry.title}
         </Text>
+        {settings.showClock ? (
+          <View style={[styles.side, styles.sideRight]}>
+            <Battery maxScale={META_SCALE} style={[styles.meta, { color: theme.muted }]} />
+          </View>
+        ) : null}
         {bookmarked ? <Ionicons name="bookmark" size={20} color={theme.accent} style={styles.ribbon} /> : null}
       </View>
       <View
@@ -563,10 +620,12 @@ export function PageReader({ book, settings, theme, start, startKey, version, on
         )}
       </View>
       <View style={[styles.footer, { paddingLeft: textLeft, paddingRight: settings.margin + insets.right }]}>
-        <Text style={[styles.meta, { color: theme.muted }]}>
-          {book.complete ? `${pct.toFixed(1)}%` : `${pct.toFixed(1)}% · preparing ${Math.round(book.progress * 100)}%`}
+        <Text numberOfLines={1} maxFontSizeMultiplier={META_SCALE} style={[styles.meta, { color: theme.muted }]}>
+          {book.complete ? `${pageText}${pct.toFixed(1)}%` : `${pageText}${pct.toFixed(1)}% · preparing ${Math.round(book.progress * 100)}%`}
         </Text>
-        <Text style={[styles.meta, { color: theme.muted }]}>{footerRight ?? ''}</Text>
+        <Text numberOfLines={1} maxFontSizeMultiplier={META_SCALE} style={[styles.meta, styles.shrink, { color: theme.muted }]}>
+          {footerRight ?? ''}
+        </Text>
       </View>
     </View>
   );
@@ -574,12 +633,17 @@ export function PageReader({ book, settings, theme, start, startKey, version, on
 
 const styles = StyleSheet.create({
   root: { flex: 1 },
-  header: { height: HEADER, justifyContent: 'center', alignItems: 'center' },
+  header: { height: HEADER, flexDirection: 'row', alignItems: 'center' },
+  side: { width: 64 },
+  sideRight: { alignItems: 'flex-end' },
+  headerTitle: { flex: 1, textAlign: 'center' },
   footer: { height: FOOTER, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   ribbon: { position: 'absolute', right: 10, top: 2 },
   meta: { fontSize: 12 },
+  shrink: { flexShrink: 1, marginLeft: 12, textAlign: 'right' },
   viewport: { flex: 1, overflow: 'hidden' },
   page: { position: 'absolute', left: 0, top: 0, overflow: 'hidden' },
+  middle: { justifyContent: 'center' },
   fill: { flex: 1 },
   row: { flex: 1, flexDirection: 'row' },
   center: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 24 },
