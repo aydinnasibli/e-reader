@@ -47,6 +47,8 @@ export interface ReaderSettings {
   /** Auto page turn / auto-scroll speed in words per minute; 0 = the reader's measured speed. */
   autoWpm: number;
   screenAwake: ScreenAwake;
+  /** The time and battery level at the top of the page while reading. */
+  showClock: boolean;
   /** Language to translate into; '' = the phone's language. */
   translateTo: string;
 }
@@ -106,6 +108,7 @@ const DEFAULTS: ReaderSettings = {
   autoWpm: 0,
   translateTo: '',
   screenAwake: '10',
+  showClock: true,
 };
 
 const file = () => new File(Paths.document, 'settings.json');

@@ -12,6 +12,7 @@ import { Pressable, ScrollView, Share, StyleSheet, Text, View } from 'react-nati
 import { type Block, blockText } from '@/engine/types';
 import { type Highlight, addHighlight, clearHighlightRange, updateHighlight, useAnnotations } from '@/lib/annotations';
 import type { Theme } from '@/lib/settings';
+import { confirmDeleteHighlight, hasNote } from '@/ui/confirm';
 import { showPrompt } from '@/ui/dialogs';
 import { Sheet } from '@/ui/Sheet';
 import { HIGHLIGHT_COLORS, type HighlightColor } from '@/ui/theme';
@@ -106,8 +107,10 @@ export function SelectionSheet({ bookId, bookTitle, lang, target, theme, onClose
         initial: ex?.note ?? '',
         placeholder: 'Your note',
         multiline: true,
+        // Emptying an existing note removes it.
+        allowEmpty: !!ex?.note,
         onSubmit: (n) => {
-          if (ex) updateHighlight(bookId, ex.id, { note: n });
+          if (ex) updateHighlight(bookId, ex.id, { note: n || undefined });
           else addHighlight(bookId, { b: t.b, s, e, color: 'yellow', text: text.slice(s, e), note: n, chapter: t.chapter });
         },
       }),
@@ -174,8 +177,13 @@ export function SelectionSheet({ bookId, bookTitle, lang, target, theme, onClose
             {touched && target ? (
               <Pressable
                 onPress={() => {
-                  clearHighlightRange(bookId, target.b, range[0], range[1]);
-                  close();
+                  const clear = () => {
+                    clearHighlightRange(bookId, target.b, range[0], range[1]);
+                    close();
+                  };
+                  // A note goes with its highlight: ask first. Plain highlighting is cleared at once.
+                  if (highlights.some((h) => hasNote(h) && h.s < range[1] && range[0] < h.e)) confirmDeleteHighlight(true, clear);
+                  else clear();
                 }}
                 style={styles.dotBtn}
                 accessibilityLabel="Remove highlight">

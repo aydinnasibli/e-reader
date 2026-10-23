@@ -4,12 +4,14 @@
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { Stack, router, useLocalSearchParams } from 'expo-router';
 import { useMemo } from 'react';
-import { Alert, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useAnnotations } from '@/lib/annotations';
 import { isFinished, useShelves } from '@/lib/collections';
-import { deleteBook, loadManifest, renameBook, restoreBookTitle, useBook } from '@/lib/library';
+import { loadManifest, renameBook, restoreBookTitle, useBook } from '@/lib/library';
 import { bookTimeMs, readingSpeed, useStats } from '@/lib/stats';
 import { Cover } from '@/ui/Cover';
+import { confirmRemoveBook } from '@/ui/confirm';
 import { showPrompt } from '@/ui/dialogs';
 import { formatBytes, formatMinutes } from '@/ui/format';
 import { useAppColors } from '@/ui/theme';
@@ -20,6 +22,7 @@ const date = (ms: number) => (ms ? new Date(ms).toLocaleDateString(undefined, { 
 export default function BookDetails() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const c = useAppColors();
+  const insets = useSafeAreaInsets();
   const book = useBook(id);
   const ann = useAnnotations(id);
   const shelves = useShelves();
@@ -53,20 +56,10 @@ export default function BookDetails() {
       initial: book.author,
       placeholder: 'Author',
       confirm: 'Save',
+      allowEmpty: true,
       onSubmit: (author) => renameBook(id, { author }),
     });
-  const remove = () =>
-    Alert.alert('Remove book?', `"${book.title}" will be deleted from this phone.`, [
-      { text: 'Cancel', style: 'cancel' },
-      {
-        text: 'Remove',
-        style: 'destructive',
-        onPress: () => {
-          router.back();
-          deleteBook(id);
-        },
-      },
-    ]);
+  const remove = () => confirmRemoveBook(book, () => router.back());
 
   const row = (label: string, value: string) => (
     <View style={[styles.row, { borderColor: c.border }]} key={label}>
@@ -78,7 +71,7 @@ export default function BookDetails() {
   );
 
   return (
-    <ScrollView style={{ backgroundColor: c.bg }} contentContainerStyle={styles.body}>
+    <ScrollView style={{ backgroundColor: c.bg }} contentContainerStyle={[styles.body, { paddingBottom: insets.bottom + 48, paddingLeft: insets.left + 20, paddingRight: insets.right + 20 }]}>
       <Stack.Screen options={{ title: 'Details', headerStyle: { backgroundColor: c.bg }, headerTintColor: c.text, headerShadowVisible: false }} />
       <View style={styles.top}>
         <Cover book={book} width={110} radius={8} />
@@ -139,7 +132,7 @@ export default function BookDetails() {
 
 const styles = StyleSheet.create({
   center: { flex: 1, alignItems: 'center', justifyContent: 'center' },
-  body: { padding: 20, paddingBottom: 48 },
+  body: { paddingTop: 20 },
   top: { flexDirection: 'row', gap: 16, alignItems: 'flex-start' },
   names: { flex: 1, gap: 8, paddingTop: 4 },
   editable: { flexDirection: 'row', alignItems: 'center', gap: 6, flexWrap: 'wrap' },

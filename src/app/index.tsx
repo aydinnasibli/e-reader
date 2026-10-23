@@ -4,6 +4,7 @@ import { Stack, router } from 'expo-router';
 import { useMemo, useState } from 'react';
 import { FlashList } from '@shopify/flash-list';
 import { ActivityIndicator, Alert, Pressable, ScrollView, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import {
   type Filter,
   SORT_LABELS,
@@ -21,6 +22,7 @@ import {
 } from '@/lib/collections';
 import { type BookEntry, deleteBook, importBooks, updateBook, useLibrary, useLiveBook } from '@/lib/library';
 import { Cover } from '@/ui/Cover';
+import { confirmRemoveBook } from '@/ui/confirm';
 import { showActions, showPrompt } from '@/ui/dialogs';
 import { formatBytes } from '@/ui/format';
 import { StatsSheet } from '@/ui/StatsSheet';
@@ -34,7 +36,10 @@ export default function Library() {
   const c = useAppColors();
   const books = useLibrary();
   const shelves = useShelves();
-  const { width } = useWindowDimensions();
+  const win = useWindowDimensions();
+  const insets = useSafeAreaInsets();
+  // Clear of a landscape camera cutout on either side.
+  const width = win.width - insets.left - insets.right;
   const [query, setQuery] = useState('');
   const [filter, setFilter] = useState<Filter>({ kind: 'all' });
   const [importing, setImporting] = useState(false);
@@ -117,11 +122,7 @@ export default function Library() {
         label: 'Remove from library',
         icon: 'trash-outline',
         destructive: true,
-        onPress: () =>
-          Alert.alert('Remove book?', `"${b.title}" will be deleted from this phone.`, [
-            { text: 'Cancel', style: 'cancel' },
-            { text: 'Remove', style: 'destructive', onPress: () => deleteBook(b.id) },
-          ]),
+        onPress: () => confirmRemoveBook(b),
       },
     ]);
   };
@@ -144,10 +145,18 @@ export default function Library() {
         label: 'Delete collection',
         icon: 'trash-outline',
         destructive: true,
-        onPress: () => {
-          deleteCollection(id, books);
-          if (filter.kind === 'collection' && filter.id === id) setFilter({ kind: 'all' });
-        },
+        onPress: () =>
+          Alert.alert('Delete collection?', `"${name}" will be deleted. The books in it stay in your library.`, [
+            { text: 'Cancel', style: 'cancel' },
+            {
+              text: 'Delete',
+              style: 'destructive',
+              onPress: () => {
+                deleteCollection(id, books);
+                if (filter.kind === 'collection' && filter.id === id) setFilter({ kind: 'all' });
+              },
+            },
+          ]),
       },
     ]);
 
@@ -214,7 +223,7 @@ export default function Library() {
   );
 
   return (
-    <View style={{ flex: 1, backgroundColor: c.bg }}>
+    <View style={{ flex: 1, backgroundColor: c.bg, paddingLeft: insets.left, paddingRight: insets.right }}>
       <Stack.Screen
         options={{
           title: 'Library',
@@ -262,7 +271,7 @@ export default function Library() {
           keyboardDismissMode="on-drag"
           ListHeaderComponent={header}
           ListEmptyComponent={empty}
-          contentContainerStyle={{ paddingBottom: 40, paddingHorizontal: GAP / 2 }}
+          contentContainerStyle={{ paddingBottom: insets.bottom + 40, paddingHorizontal: GAP / 2 }}
           renderItem={({ item }) => <GridCell book={item} width={cellWidth} c={c} onPress={() => open(item)} onLongPress={() => bookMenu(item)} />}
         />
       ) : (
@@ -274,7 +283,7 @@ export default function Library() {
           keyboardDismissMode="on-drag"
           ListHeaderComponent={header}
           ListEmptyComponent={empty}
-          contentContainerStyle={{ paddingBottom: 40 }}
+          contentContainerStyle={{ paddingBottom: insets.bottom + 40 }}
           ItemSeparatorComponent={() => <View style={[styles.sep, { backgroundColor: c.border }]} />}
           renderItem={({ item }) => <ListRow book={item} c={c} onPress={() => open(item)} onLongPress={() => bookMenu(item)} />}
         />
@@ -396,7 +405,7 @@ function ListRow({ book, c, onPress, onLongPress }: { book: BookEntry; c: AppCol
 const styles = StyleSheet.create({
   headerButtons: { flexDirection: 'row', alignItems: 'center', gap: 18 },
   chips: { paddingHorizontal: GAP, paddingTop: 4, paddingBottom: 12, gap: 8 },
-  chip: { paddingHorizontal: 14, height: 34, borderRadius: 17, alignItems: 'center', justifyContent: 'center' },
+  chip: { paddingHorizontal: 14, paddingVertical: 6, minHeight: 34, borderRadius: 17, alignItems: 'center', justifyContent: 'center' },
   continue: {
     flexDirection: 'row',
     marginHorizontal: GAP,
@@ -418,7 +427,7 @@ const styles = StyleSheet.create({
   badge: { position: 'absolute', left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.65)', paddingVertical: 4, alignItems: 'center' },
   badgeText: { color: '#fff', fontSize: 11, fontWeight: '600' },
   cellTitle: { fontSize: 13, fontWeight: '600', marginTop: 8, minHeight: 34 },
-  cellMeta: { flexDirection: 'row', alignItems: 'center', gap: 6, height: 16 },
+  cellMeta: { flexDirection: 'row', alignItems: 'center', gap: 6, minHeight: 16 },
   track: { height: 3, borderRadius: 2, overflow: 'hidden' },
   fill: { height: 3 },
   row: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: GAP, paddingVertical: 10, gap: 14 },

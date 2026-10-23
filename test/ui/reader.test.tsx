@@ -4,11 +4,12 @@
 // a word and highlight it.
 
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react-native';
-import { Dimensions } from 'react-native';
+import { Alert, BackHandler, Dimensions } from 'react-native';
 import type { Block, Manifest } from '@/engine/types';
 import { getAnnotations } from '@/lib/annotations';
 import { setSettings } from '@/lib/settings';
 import ReaderScreen from '@/app/reader/[id]';
+import { DialogHost } from '@/ui/dialogs';
 
 const P1 = 'Call me Ishmael. Some years ago, never mind how long precisely, having little or no money in my purse.';
 const P2 = 'It is a way I have of driving off the spleen and regulating the circulation.';
@@ -25,6 +26,7 @@ const manifest: Manifest = {
   images: {},
 };
 
+const mockUpdateBook = jest.fn();
 jest.mock('expo-router', () => ({ useLocalSearchParams: () => ({ id: 'moby' }), router: { back: jest.fn() } }));
 jest.mock('expo-screen-orientation', () => ({ lockAsync: () => Promise.resolve(), OrientationLock: {} }));
 jest.mock('@/lib/library', () => {
@@ -34,7 +36,7 @@ jest.mock('@/lib/library', () => {
     loadManifest: () => require('./reader.test').manifestForMock,
     useBookStatus: () => 'ready',
     useLiveBook: () => undefined,
-    updateBook: () => {},
+    updateBook: (...a: unknown[]) => mockUpdateBook(...a),
     reprocessBook: () => {},
     sourceFile: () => ({}),
   };
@@ -42,13 +44,13 @@ jest.mock('@/lib/library', () => {
 export const manifestForMock = manifest;
 
 const { width: W } = Dimensions.get('window');
-type El = { props: { style?: unknown; pointerEvents?: string }; parent: El | null };
+type El = { props?: { style?: unknown; pointerEvents?: string }; parent: El | null };
 /** Text on screen, not in the hidden view used to measure paragraphs. */
 const shown = (text: string) =>
   screen.queryAllByText(text).filter((el) => {
     for (let n: El | null = el as unknown as El; n; n = n.parent) {
-      const op = [n.props.style].flat().find((st) => (st as { opacity?: number })?.opacity === 0);
-      if (op && n.props.pointerEvents === 'none') return false;
+      const op = [n.props?.style].flat().find((st) => (st as { opacity?: number })?.opacity === 0);
+      if (op && n.props?.pointerEvents === 'none') return false;
     }
     return true;
   });
@@ -230,6 +232,91 @@ describe('page numbers, back after a jump, auto page turn', () => {
     expect(screen.getByText(/\d+ wpm/)).toBeTruthy();
     // The whole (short) book is on screen: the list can't move, so it's the end.
     await waitFor(() => expect(screen.queryByText(/\d+ wpm/)).toBeNull(), { timeout: 4000 });
+  }, 30000);
+});
+
+describe('Android back button', () => {
+  // The reader's back listener; React Navigation's own one (leaving the screen) runs only if it returns false.
+  let back: () => boolean | null | undefined = () => false;
+  beforeEach(() => {
+    jest.spyOn(BackHandler, 'addEventListener').mockImplementation((_e, handler) => {
+      back = handler as unknown as () => boolean;
+      return { remove: () => {} };
+    });
+  });
+  afterEach(() => jest.restoreAllMocks());
+  const press = () => {
+    let handled: boolean | null | undefined;
+    act(() => {
+      handled = back();
+    });
+    return handled;
+  };
+
+  it('closes the Display panel, or the menu, before leaving the book', async () => {
+    await openBook();
+    fireEvent.press(shown(P1)[0], { nativeEvent: { pageX: W / 2, pageY: 300 } });
+    fireEvent.press(screen.getByLabelText('Display'));
+    expect(press()).toBe(true); // closes the panel (it slides away; animations don't finish in tests)
+    expect(press()).toBe(false); // and with it the menu: nothing is open, back leaves the book
+    fireEvent.press(shown(P1)[0], { nativeEvent: { pageX: W / 2, pageY: 300 } });
+    expect(screen.getByLabelText('Contents')).toBeTruthy();
+    expect(press()).toBe(true); // closes the menu
+    expect(press()).toBe(false);
+  }, 30000);
+
+  it('turns the highlight tool off, and stops auto page turn', async () => {
+    await openBook();
+    fireEvent.press(shown(P1)[0], { nativeEvent: { pageX: W / 2, pageY: 300 } });
+    fireEvent.press(screen.getByLabelText('Highlight'));
+    expect(screen.getByTestId('highlight-layer')).toBeTruthy();
+    expect(press()).toBe(true);
+    expect(screen.queryByTestId('highlight-layer')).toBeNull();
+    fireEvent.press(shown(P1)[0], { nativeEvent: { pageX: W / 2, pageY: 300 } });
+    fireEvent.press(screen.getByLabelText('Auto page turn'));
+    expect(screen.getByText(/\d+ wpm/)).toBeTruthy();
+    expect(press()).toBe(true);
+    expect(screen.queryByText(/\d+ wpm/)).toBeNull();
+  }, 30000);
+});
+
+describe('the end of the book', () => {
+  it('turning past the last page marks the book finished and says so', async () => {
+    mockUpdateBook.mockClear();
+    await openBook();
+    // Opening on the last page isn't finishing it.
+    expect(mockUpdateBook.mock.calls.some(([, patch]) => patch.finished)).toBe(false);
+    fireEvent.press(shown(P1)[0], { nativeEvent: { pageX: W * 0.9, pageY: 300 } }); // next page: there is none
+    expect(await screen.findByLabelText('Finished · Back to library')).toBeTruthy();
+    expect(mockUpdateBook).toHaveBeenCalledWith('moby', { finished: true });
+  }, 30000);
+});
+
+describe('getting around from the menu', () => {
+  it('Go to page takes a page number or a percentage, and says what to type otherwise', async () => {
+    const alert = jest.spyOn(Alert, 'alert').mockImplementation(() => {});
+    render(
+      <>
+        <ReaderScreen />
+        <DialogHost />
+      </>,
+    );
+    await waitFor(() => expect(shown(P1).length).toBeGreaterThan(0), { timeout: 9000 });
+    fireEvent.press(shown(P1)[0], { nativeEvent: { pageX: W / 2, pageY: 300 } });
+    await waitFor(() => expect(screen.getByText(/^1 of 1 · /)).toBeTruthy(), { timeout: 3000 });
+    fireEvent.press(screen.getByLabelText('Go to page'));
+    fireEvent.changeText(screen.getByPlaceholderText('Page 1–1, or a percentage like 45%'), '7');
+    fireEvent.press(screen.getByText('Go'));
+    await waitFor(() => expect(alert).toHaveBeenCalledWith('Enter a page from 1 to 1, or a percentage.'));
+    alert.mockRestore();
+  }, 30000);
+
+  it('chapter buttons: none before the first chapter or after the last', async () => {
+    await openBook();
+    fireEvent.press(shown(P1)[0], { nativeEvent: { pageX: W / 2, pageY: 300 } });
+    // The book has one chapter, starting where it opens.
+    expect(screen.getByLabelText('Previous chapter').props.accessibilityState?.disabled).toBe(true);
+    expect(screen.getByLabelText('Next chapter').props.accessibilityState?.disabled).toBe(true);
   }, 30000);
 });
 

@@ -6,11 +6,13 @@ import * as Clipboard from 'expo-clipboard';
 import { Stack, router } from 'expo-router';
 import { useMemo, useState } from 'react';
 import { Pressable, SectionList, Share, StyleSheet, Text, TextInput, View } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { type Highlight, getAnnotations, removeHighlight, useAnnotationsVersion } from '@/lib/annotations';
 import { exportFileName, notesMarkdown } from '@/lib/exportNotes';
 import { type BookEntry, useLibrary } from '@/lib/library';
 import { shareTextFile } from '@/lib/shareText';
 import { highlightColor } from '@/reader/SelectionSheet';
+import { confirmDeleteHighlight, hasNote } from '@/ui/confirm';
 import { showActions } from '@/ui/dialogs';
 import { useAppColors } from '@/ui/theme';
 
@@ -24,6 +26,7 @@ const exportBooks = (sections: Section[]) =>
 
 export default function NotesScreen() {
   const c = useAppColors();
+  const insets = useSafeAreaInsets();
   const books = useLibrary();
   const version = useAnnotationsVersion();
   const [query, setQuery] = useState('');
@@ -63,7 +66,7 @@ export default function NotesScreen() {
       { label: 'Open in book', icon: 'book-outline', onPress: () => open(book, h) },
       { label: 'Copy', icon: 'copy-outline', onPress: () => void Clipboard.setStringAsync(h.note ? `${h.text}\n\n${h.note}` : h.text) },
       { label: 'Share', icon: 'share-outline', onPress: () => void Share.share({ message: `“${h.text}”\n— ${book.title}${h.note ? `\n\n${h.note}` : ''}` }) },
-      { label: 'Delete highlight', icon: 'trash-outline', destructive: true, onPress: () => removeHighlight(book.id, h.id) },
+      { label: 'Delete highlight', icon: 'trash-outline', destructive: true, onPress: () => confirmDeleteHighlight(hasNote(h), () => removeHighlight(book.id, h.id)) },
     ]);
   const exportAll = () => void shareTextFile('Highlights.md', notesMarkdown(exportBooks(sections)));
 
@@ -109,7 +112,7 @@ export default function NotesScreen() {
         sections={sections}
         keyExtractor={(h) => h.id}
         stickySectionHeadersEnabled={false}
-        contentContainerStyle={{ paddingBottom: 40 }}
+        contentContainerStyle={{ paddingBottom: insets.bottom + 40, paddingLeft: insets.left, paddingRight: insets.right }}
         renderSectionHeader={({ section }) => (
           <View style={styles.sectionHead}>
             <View style={{ flex: 1 }}>

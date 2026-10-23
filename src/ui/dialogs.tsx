@@ -3,7 +3,7 @@
 
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { useEffect, useState } from 'react';
-import { Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
+import { Platform, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import { Sheet } from './Sheet';
 import { useAppColors } from './theme';
 
@@ -18,7 +18,7 @@ export interface Action {
 
 type Dialog =
   | { kind: 'actions'; title?: string; actions: Action[] }
-  | { kind: 'prompt'; title: string; initial: string; placeholder?: string; confirm: string; multiline?: boolean; onSubmit(text: string): void };
+  | { kind: 'prompt'; title: string; initial: string; placeholder?: string; confirm: string; multiline?: boolean; allowEmpty?: boolean; numbers?: boolean; onSubmit(text: string): void };
 
 let current: Dialog | null = null;
 let listener: ((d: Dialog | null) => void) | null = null;
@@ -34,7 +34,11 @@ export function showActions(title: string | undefined, actions: Action[]) {
 
 export function showPrompt(
   title: string,
-  opts: { initial?: string; placeholder?: string; confirm?: string; multiline?: boolean; onSubmit(text: string): void },
+  /**
+   * `allowEmpty`: saving an empty field is allowed (it clears the value); otherwise it does nothing.
+   * `numbers`: a keyboard for numbers (and "%").
+   */
+  opts: { initial?: string; placeholder?: string; confirm?: string; multiline?: boolean; allowEmpty?: boolean; numbers?: boolean; onSubmit(text: string): void },
 ) {
   open({
     kind: 'prompt',
@@ -43,6 +47,8 @@ export function showPrompt(
     placeholder: opts.placeholder,
     confirm: opts.confirm ?? 'Save',
     multiline: opts.multiline,
+    allowEmpty: opts.allowEmpty,
+    numbers: opts.numbers,
     onSubmit: opts.onSubmit,
   });
 }
@@ -61,10 +67,14 @@ export function DialogHost() {
     };
   }, []);
   const close = () => open(null);
+  const submit = () => {
+    if (dialog?.kind === 'prompt' && (text.trim() || dialog.allowEmpty)) dialog.onSubmit(text.trim());
+    close();
+  };
   const colors = { bg: c.elevated, text: c.text, border: c.border };
 
   return (
-    <Sheet visible={!!dialog} onClose={close} colors={colors} title={dialog?.title}>
+    <Sheet visible={!!dialog} onClose={close} colors={colors} title={dialog?.title} position={dialog?.kind === 'prompt' ? 'top' : 'bottom'}>
       {dialog?.kind === 'actions' &&
         dialog.actions.map((a, i) => (
           <Pressable
@@ -90,10 +100,9 @@ export function DialogHost() {
             placeholderTextColor={c.secondary}
             multiline={dialog.multiline}
             style={[styles.input, dialog.multiline && styles.multiline, { color: c.text, borderColor: c.border, backgroundColor: c.card }]}
-            onSubmitEditing={() => {
-              if (text.trim()) dialog.onSubmit(text.trim());
-              close();
-            }}
+            onSubmitEditing={submit}
+            // iOS has a number keyboard with "%"; Android's number pads don't, so it keeps the full one.
+            keyboardType={dialog.numbers && Platform.OS === 'ios' ? 'numbers-and-punctuation' : 'default'}
             returnKeyType="done"
           />
           <View style={styles.buttons}>
@@ -102,8 +111,7 @@ export function DialogHost() {
             </Pressable>
             <Pressable
               onPress={() => {
-                if (text.trim()) dialog.onSubmit(text.trim());
-                close();
+                submit();
               }}
               style={[styles.btn, { backgroundColor: c.accent }]}>
               <Text style={{ color: c.accentText, fontSize: 16, fontWeight: '600' }}>{dialog.confirm}</Text>

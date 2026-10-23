@@ -3,7 +3,7 @@ import * as ScreenOrientation from 'expo-screen-orientation';
 import { type ErrorBoundaryProps, router, useLocalSearchParams } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ActivityIndicator, AppState, Pressable, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
+import { ActivityIndicator, Alert, AppState, BackHandler, Pressable, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
 import { type Block, type Position, blockText } from '@/engine/types';
 import { addBookmark, addHighlight, highlightsByBlock, removeBookmark, useAnnotations } from '@/lib/annotations';
 import { getBook, loadManifest, reprocessBook, updateBook, useBookStatus, useLiveBook } from '@/lib/library';
@@ -21,6 +21,9 @@ import { type TextPoint, dragRanges } from '@/reader/selection';
 import { AutoBar } from '@/reader/AutoBar';
 import { CHARS_PER_WORD, pageDelay, scrollSpeed, stepWpm } from '@/reader/autoRead';
 import { BackChip } from '@/reader/BackChip';
+import { backLayer } from '@/reader/backLayer';
+import { storyEnd } from '@/reader/finish';
+import { chapterTarget, parseGoTo } from '@/reader/navigate';
 import { DisplayPanel } from '@/reader/DisplayPanel';
 import { HighlightBar } from '@/reader/HighlightBar';
 import { TapZones } from '@/reader/TapZones';
@@ -28,6 +31,7 @@ import { LivePreview } from '@/reader/LivePreview';
 import { NoteSheet } from '@/reader/NoteSheet';
 import { useScreenAwake } from '@/reader/screenAwake';
 import { NavigatorSheet, SearchSheet } from '@/reader/Sheets';
+import { showPrompt } from '@/ui/dialogs';
 import { ErrorScreen } from '@/ui/ErrorScreen';
 import { formatMinutes } from '@/ui/format';
 
@@ -106,6 +110,22 @@ export default function ReaderScreen() {
     if (book) book.onError = (e) => setFailed(e instanceof Error ? e.message : String(e));
   }, [book]);
 
+  // The end of the book: its last page, or the back matter after the story,
+  // reached by turning pages (not by jumping there). Marks the book finished.
+  const storyEndBlock = useRef<number | null>(null);
+  storyEndBlock.current = book?.complete ? storyEnd(book.toc, book.totalBlocks) : null;
+  const finishedHere = useRef(false);
+  const [endChip, setEndChip] = useState(false);
+  const markFinished = useCallback(() => {
+    finishedHere.current = true;
+    if (!getBook(id)?.finished) updateBook(id, { finished: true });
+    setEndChip(true);
+  }, [id]);
+  // Once per visit: dismissing the chip at the end must not bring it back on every scroll.
+  const reachEnd = useCallback(() => {
+    if (!finishedHere.current) markFinished();
+  }, [markFinished]);
+
   // Reading time: page turns feed the tracker; jumps reset it.
   const tracker = useRef(new ReadingTracker(id)).current;
   const jumped = useRef(true);
@@ -120,11 +140,12 @@ export default function ReaderScreen() {
     updateBook(id, { position: latest.current, percent: book.fraction(latest.current), openedAt: Date.now() });
   }, [book, id]);
   const onPosition = useCallback(
-    (p: Position, e?: Position) => {
+    (p: Position, e?: Position, last?: boolean) => {
       latest.current = p;
       setPos(p);
       setEnd(e);
       if (book) {
+        if (!jumped.current && (last || (storyEndBlock.current !== null && p.b >= storyEndBlock.current))) reachEnd();
         const ch = book.charOffset(p);
         if (jumped.current) tracker.reset(ch);
         else {
@@ -137,7 +158,7 @@ export default function ReaderScreen() {
       if (saveTimer.current) clearTimeout(saveTimer.current);
       saveTimer.current = setTimeout(save, 800);
     },
-    [save, book, tracker],
+    [save, book, tracker, reachEnd],
   );
   useEffect(() => {
     const sub = AppState.addEventListener('change', (s) => {
@@ -183,6 +204,11 @@ export default function ReaderScreen() {
   autoRunning.current = !!auto?.running;
   // The end of the book: auto reading is over.
   const stopAuto = useCallback(() => setAuto(null), []);
+  // Turning past the last page: the book is read; say so (instead of nothing happening).
+  const pastEnd = useCallback(() => {
+    setAuto(null);
+    markFinished();
+  }, [markFinished]);
   const toggleChrome = useCallback(() => {
     if (autoRunning.current) setAuto({ running: false });
     else setChrome((c) => !c);
@@ -262,6 +288,31 @@ export default function ReaderScreen() {
   const autoActive = !!auto?.running && !chrome && !sheet && !note && !selection && !highlighting;
   // The screen stays on while reading (Display → Page), counted from the last page turn or tap.
   useScreenAwake(settings.screenAwake, `${pos.b}:${pos.o}:${chrome}:${sheet}:${!!selection}:${note !== null}:${highlighting}`, autoActive);
+  // First time in page mode: the tap zones are shown.
+  const showGuide = settings.mode === 'page' && !settings.seenTapZones && !highlighting && !sheet;
+  // Android back closes what's drawn over the page first, then leaves the book.
+  const closeTop = useRef<() => boolean>(() => false);
+  closeTop.current = () => {
+    const layer = backLayer({
+      display: sheet === 'display',
+      highlighting,
+      menu: chrome,
+      auto: !!auto,
+      guide: showGuide,
+    });
+    if (layer === 'display') {
+      setSheet(null);
+      setChrome(false);
+    } else if (layer === 'highlight') setHighlighting(false);
+    else if (layer === 'menu') setChrome(false);
+    else if (layer === 'auto') setAuto(null);
+    else if (layer === 'guide') setSettings({ seenTapZones: true });
+    return layer !== null;
+  };
+  useEffect(() => {
+    const sub = BackHandler.addEventListener('hardwareBackPress', () => closeTop.current());
+    return () => sub.remove();
+  }, []);
   const [turn, setTurn] = useState<{ dir: 1 | -1; n: number } | undefined>(undefined);
   useEffect(() => {
     if (!autoActive || settings.mode !== 'page' || !book) return;
@@ -365,11 +416,12 @@ export default function ReaderScreen() {
   // Time left, from this reader's measured speed.
   const speed = charsPerMinute(id);
   const here = book.charOffset(pos);
-  const nextChapter = book.toc.find((t) => t.b > pos.b);
-  const chapterLeft = nextChapter ? (book.charOffset({ b: nextChapter.b, o: 0 }) - here) / speed : null;
+  const prevChapter = chapterTarget(book.toc, pos.b, -1);
+  const nextChapter = chapterTarget(book.toc, pos.b, 1);
+  const chapterLeft = nextChapter !== null ? (book.charOffset({ b: nextChapter, o: 0 }) - here) / speed : null;
   const bookLeft = (book.estimatedChars - here) / speed;
   const footerRight = chapterLeft !== null && chapterLeft > 0 ? `${formatMinutes(chapterLeft)} left in chapter` : `${formatMinutes(bookLeft)} left`;
-  const pagesLeftInChapter = pageInfo && nextChapter ? pagesBetween(here, book.charOffset({ b: nextChapter.b, o: 0 }), pageInfo.cpp) : null;
+  const pagesLeftInChapter = pageInfo && nextChapter !== null ? pagesBetween(here, book.charOffset({ b: nextChapter, o: 0 }), pageInfo.cpp) : null;
   const pageLabel = pageInfo
     ? (f: number) => `Page ${Math.min(pageInfo.total, Math.max(1, Math.round(f * pageInfo.total)))} of ${pageInfo.total}`
     : undefined;
@@ -380,6 +432,19 @@ export default function ReaderScreen() {
       : `${formatMinutes(bookLeft)} left in book`;
 
   const Reader = settings.mode === 'page' ? PageReader : ScrollReader;
+  const goToPrompt = () => {
+    const pages = pageInfo?.total ?? null;
+    showPrompt(pages ? 'Go to page' : 'Go to', {
+      placeholder: pages ? `Page 1–${pages}, or a percentage like 45%` : 'A percentage, like 45%',
+      confirm: 'Go',
+      numbers: true,
+      onSubmit: async (text) => {
+        const f = parseGoTo(text, pages);
+        if (f === null) return Alert.alert(pages ? `Enter a page from 1 to ${pages}, or a percentage.` : 'Enter a percentage from 0 to 100.');
+        goTo(await book.positionAt(f));
+      },
+    });
+  };
   return (
     <View style={{ flex: 1, backgroundColor: theme.bg }}>
       <StatusBar hidden={!chrome && sheet !== 'display'} style={theme.dark ? 'light' : 'dark'} />
@@ -403,13 +468,22 @@ export default function ReaderScreen() {
         turn={turn}
         autoScroll={autoScroll}
         onAutoInterrupt={() => setAuto({ running: false })}
-        onEnd={stopAuto}
+        onEnd={pastEnd}
         onAutoEnd={stopAuto}
+        onReachEnd={reachEnd}
         highlighting={highlighting}
         onHighlightDrag={onHighlightDrag}
         onHighlightTap={onHighlightTap}
       />
-      {back && !chrome && !highlighting && !sheet && !auto ? (
+      {endChip && !chrome && !highlighting && !sheet ? (
+        <BackChip
+          theme={theme}
+          icon="checkmark-done"
+          label="Finished · Back to library"
+          onPress={() => router.back()}
+          onDismiss={() => setEndChip(false)}
+        />
+      ) : back && !chrome && !highlighting && !sheet && !auto ? (
         <BackChip
           theme={theme}
           label={
@@ -454,8 +528,11 @@ export default function ReaderScreen() {
           setHighlighting(true);
         }}
         onSeek={async (f) => goTo(await book.positionAt(f))}
+        onGoTo={goToPrompt}
+        onPrevChapter={prevChapter !== null ? () => goTo({ b: prevChapter, o: 0 }) : undefined}
+        onNextChapter={nextChapter !== null ? () => goTo({ b: nextChapter, o: 0 }) : undefined}
       />
-      {settings.mode === 'page' && !settings.seenTapZones && !highlighting && !sheet ? (
+      {showGuide ? (
         <TapZones theme={theme} tapForward={settings.tapForward} onDismiss={() => setSettings({ seenTapZones: true })} />
       ) : null}
       {auto && !chrome && !highlighting ? (

@@ -36,6 +36,8 @@ export function canSelfUpdate() {
 
 let state: UpdateState = { kind: 'idle' };
 let lastCheck = 0;
+/** "Not now" on this build: not offered again by the automatic checks until the app restarts or a newer one comes. */
+let snoozed = 0;
 const listeners = new Set<() => void>();
 
 function set(s: UpdateState) {
@@ -57,12 +59,37 @@ async function fetchLatest(): Promise<AvailableUpdate | null> {
   const res = await fetch(`https://api.github.com/repos/${REPO}/releases/latest`, {
     headers: { Accept: 'application/vnd.github+json' },
   });
-  if (!res.ok) throw new Error(`GitHub answered ${res.status}`);
+  if (!res.ok) throw new UpdateError(res.status === 403 || res.status === 429 ? 'busy' : 'server');
   const rel = (await res.json()) as { tag_name?: string; body?: string; assets?: { name: string; browser_download_url: string; size: number }[] };
   const build = Number(/^build-(\d+)$/.exec(rel.tag_name ?? '')?.[1] ?? 0);
   const apk = rel.assets?.find((a) => a.name.endsWith('.apk'));
   if (!build || !apk) return null;
   return { build, url: apk.browser_download_url, size: apk.size, notes: rel.body ?? '' };
+}
+
+type Problem = 'offline' | 'busy' | 'server' | 'incomplete' | 'installer';
+
+/** A problem with a message written for people. */
+class UpdateError extends Error {
+  constructor(readonly problem: Problem) {
+    super(problem);
+  }
+}
+
+const MESSAGES: Record<Problem, string> = {
+  offline: 'Couldn’t connect. Check the internet connection and try again.',
+  busy: 'The update server is busy right now. Try again in a while.',
+  server: 'Couldn’t check for updates right now. Try again later.',
+  incomplete: 'The download didn’t finish. Please try again.',
+  installer: 'Couldn’t open Android’s installer. Please try again.',
+};
+
+/** What to tell the person about a failed check or download. */
+export function updateErrorMessage(e: unknown, during: 'check' | 'download' | 'install'): string {
+  if (e instanceof UpdateError) return MESSAGES[e.problem];
+  if (during === 'install') return MESSAGES.installer;
+  // fetch and downloads fail with a TypeError or a native error when there's no connection.
+  return MESSAGES.offline;
 }
 
 const busy = () => state.kind === 'downloading' || state.kind === 'installing';
@@ -82,6 +109,10 @@ export async function checkForUpdate(manual = false): Promise<'available' | 'non
     // An update may have started meanwhile; don't replace its progress.
     if (busy()) return 'busy';
     if (latest && latest.build > CURRENT_BUILD) {
+      if (!manual && latest.build === snoozed) {
+        set({ kind: 'idle' });
+        return 'none';
+      }
       set({ kind: 'available', update: latest });
       return 'available';
     }
@@ -89,7 +120,7 @@ export async function checkForUpdate(manual = false): Promise<'available' | 'non
     return 'none';
   } catch (e) {
     if (busy()) return 'busy';
-    set(manual ? { kind: 'error', message: e instanceof Error ? e.message : String(e) } : { kind: 'idle' });
+    set(manual ? { kind: 'error', message: updateErrorMessage(e, 'check') } : { kind: 'idle' });
     return 'error';
   }
 }
@@ -112,6 +143,7 @@ export function cleanOldDownloads() {
 /** Download the APK and open Android's installer for it. */
 export async function installUpdate(update: AvailableUpdate) {
   if (busy()) return;
+  let step: 'download' | 'install' = 'download';
   try {
     set({ kind: 'downloading', update, progress: 0 });
     const dest = new File(Paths.cache, apkName(update.build));
@@ -124,8 +156,9 @@ export async function installUpdate(update: AvailableUpdate) {
     });
     if (update.size > 0 && file.size !== update.size) {
       file.delete();
-      throw new Error('The download was incomplete. Please try again.');
+      throw new UpdateError('incomplete');
     }
+    step = 'install';
     set({ kind: 'installing', update });
     await IntentLauncher.startActivityAsync('android.intent.action.VIEW', {
       data: file.contentUri,
@@ -135,8 +168,15 @@ export async function installUpdate(update: AvailableUpdate) {
     // If the person backs out of the installer, offer the update again.
     set({ kind: 'available', update });
   } catch (e) {
-    set({ kind: 'error', message: e instanceof Error ? e.message : String(e), update });
+    set({ kind: 'error', message: updateErrorMessage(e, step), update });
   }
+}
+
+/** "Not now": hide the offer of this build. */
+export function snoozeUpdate() {
+  if (state.kind !== 'available') return;
+  snoozed = state.update.build;
+  set({ kind: 'idle' });
 }
 
 export function dismissUpdateError() {

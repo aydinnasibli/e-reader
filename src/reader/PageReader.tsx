@@ -13,6 +13,7 @@ import { BlockImage, BlockText, Spacer } from './BlockText';
 import { Measurer } from './Measurer';
 import { swipeOutcome, tapZone } from './gestures';
 import { hitText } from './hitTest';
+import { Battery, Clock } from './StatusInfo';
 import { charsPerPage, pageCount, pageNumber } from './pageNumbers';
 import { type Look, drawn, layoutKeyOf, toBlock, toDrawn } from './look';
 import type { Mark } from './marks';
@@ -21,6 +22,8 @@ import type { TextPoint } from './selection';
 
 export const HEADER = 30;
 export const FOOTER = 30;
+/** The header and footer have a fixed height (pages are cut to fit between them): their text grows with the phone's text size only this far. */
+const META_SCALE = 1.4;
 
 type Insets = { top: number; bottom: number; left: number; right: number };
 
@@ -46,8 +49,8 @@ interface Props {
   startKey: number;
   /** Bumped whenever the book grows (still converting) or finishes. */
   version: number;
-  /** Called with the first and last position shown. */
-  onPosition(pos: Position, end?: Position): void;
+  /** Called with the first and last position shown, and whether this is the book's last page. */
+  onPosition(pos: Position, end?: Position, last?: boolean): void;
   onTap(): void;
   /** Highlights and search hits for a block. */
   marksFor?(b: number): Mark[] | undefined;
@@ -215,8 +218,9 @@ export function PageReader({ book, settings, theme, start, startKey, version, on
     lastPos.current = pos;
     // The end is exclusive: where the next page starts.
     const lastText = curLaid.measures[last.b - curLaid.first]?.kind === 'text';
-    onPosition(pos, lastText ? { b: last.b, o: bookOffset(last.b, last.e) } : { b: last.b + 1, o: 0 });
-  }, [cur, curLaid, onPosition, step]);
+    const lastPage = book.complete && cur.chunk + 1 >= book.chunkCount && cur.page + step >= curLaid.pages.length;
+    onPosition(pos, lastText ? { b: last.b, o: bookOffset(last.b, last.e) } : { b: last.b + 1, o: 0 }, lastPage);
+  }, [cur, curLaid, onPosition, step, book]);
 
   /** The page one step away, or why there isn't one. */
   const neighbour = (dir: 1 | -1): { cur: Cur; pageData?: { laid: Laid; index: number } } | 'end' | 'processing' | null => {
@@ -559,10 +563,15 @@ export function PageReader({ book, settings, theme, start, startKey, version, on
 
   return (
     <View style={[styles.root, { backgroundColor: theme.bg, paddingTop: insets.top, paddingBottom: insets.bottom }]}>
-      <View style={[styles.header, { paddingLeft: textLeft + 22, paddingRight: settings.margin + insets.right + 22 }]}>
-        <Text numberOfLines={1} style={[styles.meta, { color: theme.muted }]}>
+      {/* Clock, chapter, battery; the right edge is kept clear for the bookmark ribbon. */}
+      <View style={[styles.header, { paddingLeft: textLeft, paddingRight: settings.margin + insets.right + 22 }]}>
+        <View style={styles.side}>{settings.showClock ? <Clock maxScale={META_SCALE} style={[styles.meta, { color: theme.muted }]} /> : null}</View>
+        <Text numberOfLines={1} maxFontSizeMultiplier={META_SCALE} style={[styles.meta, styles.headerTitle, { color: theme.muted }]}>
           {chapter ?? book.entry.title}
         </Text>
+        <View style={[styles.side, styles.sideRight]}>
+          {settings.showClock ? <Battery maxScale={META_SCALE} style={[styles.meta, { color: theme.muted }]} /> : null}
+        </View>
         {bookmarked ? <Ionicons name="bookmark" size={20} color={theme.accent} style={styles.ribbon} /> : null}
       </View>
       <View
@@ -598,10 +607,12 @@ export function PageReader({ book, settings, theme, start, startKey, version, on
         )}
       </View>
       <View style={[styles.footer, { paddingLeft: textLeft, paddingRight: settings.margin + insets.right }]}>
-        <Text style={[styles.meta, { color: theme.muted }]}>
+        <Text numberOfLines={1} maxFontSizeMultiplier={META_SCALE} style={[styles.meta, { color: theme.muted }]}>
           {book.complete ? `${pageText}${pct.toFixed(1)}%` : `${pageText}${pct.toFixed(1)}% · preparing ${Math.round(book.progress * 100)}%`}
         </Text>
-        <Text style={[styles.meta, { color: theme.muted }]}>{footerRight ?? ''}</Text>
+        <Text numberOfLines={1} maxFontSizeMultiplier={META_SCALE} style={[styles.meta, styles.shrink, { color: theme.muted }]}>
+          {footerRight ?? ''}
+        </Text>
       </View>
     </View>
   );
@@ -609,10 +620,14 @@ export function PageReader({ book, settings, theme, start, startKey, version, on
 
 const styles = StyleSheet.create({
   root: { flex: 1 },
-  header: { height: HEADER, justifyContent: 'center', alignItems: 'center' },
+  header: { height: HEADER, flexDirection: 'row', alignItems: 'center' },
+  side: { width: 64 },
+  sideRight: { alignItems: 'flex-end' },
+  headerTitle: { flex: 1, textAlign: 'center' },
   footer: { height: FOOTER, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   ribbon: { position: 'absolute', right: 10, top: 2 },
   meta: { fontSize: 12 },
+  shrink: { flexShrink: 1, marginLeft: 12, textAlign: 'right' },
   viewport: { flex: 1, overflow: 'hidden' },
   page: { position: 'absolute', left: 0, top: 0, overflow: 'hidden' },
   middle: { justifyContent: 'center' },

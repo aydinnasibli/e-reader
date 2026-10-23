@@ -1,7 +1,7 @@
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { useEffect } from 'react';
-import { AppState, Pressable, StyleSheet, Text, View } from 'react-native';
-import { canSelfUpdate, checkForUpdate, cleanOldDownloads, dismissUpdateError, installUpdate, useUpdateState } from '@/lib/appUpdate';
+import { ActivityIndicator, AppState, Pressable, StyleSheet, Text, View } from 'react-native';
+import { canSelfUpdate, checkForUpdate, cleanOldDownloads, dismissUpdateError, installUpdate, snoozeUpdate, useUpdateState } from '@/lib/appUpdate';
 import { formatBytes } from './format';
 import { useAppColors } from './theme';
 
@@ -19,7 +19,17 @@ export function UpdateBanner() {
     return () => sub.remove();
   }, []);
 
-  if (s.kind === 'idle' || s.kind === 'checking') return null;
+  if (s.kind === 'idle') return null;
+
+  // Only a check asked for from the menu shows this.
+  if (s.kind === 'checking') {
+    return (
+      <View style={[styles.bar, { backgroundColor: c.card, borderColor: c.border }]}>
+        <ActivityIndicator color={c.accent} />
+        <Text style={[styles.title, styles.body, { color: c.text }]}>Checking for updates…</Text>
+      </View>
+    );
+  }
 
   if (s.kind === 'error') {
     return (
@@ -47,11 +57,16 @@ export function UpdateBanner() {
         <Text style={[styles.title, { color: c.text }]}>
           {s.kind === 'downloading' ? `Downloading… ${Math.round(s.progress * 100)}%` : s.kind === 'installing' ? 'Opening installer…' : 'New version available'}
         </Text>
+        {s.kind === 'installing' ? (
+          <Text style={{ color: c.secondary, fontSize: 13 }}>
+            If Android asks, tap Settings, allow installing from this app, then go back and tap Install.
+          </Text>
+        ) : null}
         {s.kind === 'downloading' ? (
           <View style={[styles.track, { backgroundColor: c.border }]}>
             <View style={[styles.fill, { width: `${Math.round(s.progress * 100)}%`, backgroundColor: c.accent }]} />
           </View>
-        ) : (
+        ) : s.kind === 'installing' ? null : (
           <Text numberOfLines={2} style={{ color: c.secondary, fontSize: 13 }}>
             {`Version 1.0.${update.build} · ${formatBytes(update.size)}`}
             {update.notes ? ` · ${update.notes.split('\n')[0]}` : ''}
@@ -59,9 +74,14 @@ export function UpdateBanner() {
         )}
       </View>
       {!busy && (
-        <Pressable onPress={() => installUpdate(update)} style={[styles.btn, { backgroundColor: c.accent }]}>
-          <Text style={{ color: c.accentText, fontWeight: '700' }}>Update</Text>
-        </Pressable>
+        <View style={styles.actions}>
+          <Pressable onPress={() => installUpdate(update)} style={[styles.btn, { backgroundColor: c.accent }]}>
+            <Text style={{ color: c.accentText, fontWeight: '700' }}>Update</Text>
+          </Pressable>
+          <Pressable onPress={snoozeUpdate} hitSlop={8} accessibilityLabel="Not now">
+            <Text style={{ color: c.secondary, fontSize: 13 }}>Not now</Text>
+          </Pressable>
+        </View>
       )}
     </View>
   );
@@ -81,6 +101,7 @@ const styles = StyleSheet.create({
   body: { flex: 1, gap: 3 },
   title: { fontSize: 15, fontWeight: '700' },
   btn: { paddingHorizontal: 14, paddingVertical: 8, borderRadius: 10 },
+  actions: { alignItems: 'center', gap: 6 },
   track: { height: 4, borderRadius: 2, overflow: 'hidden', marginTop: 4 },
   fill: { height: 4 },
 });

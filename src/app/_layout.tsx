@@ -1,4 +1,5 @@
 import { DarkTheme, DefaultTheme, type ErrorBoundaryProps, Stack, ThemeProvider } from 'expo-router';
+import { StatusBar } from 'expo-status-bar';
 import { ErrorScreen } from '@/ui/ErrorScreen';
 import { AppState, Platform } from 'react-native';
 import { flushLibrary, loadLibrary } from '@/lib/library';
@@ -30,6 +31,8 @@ export default function RootLayout() {
         <Stack.Screen name="reader/[id]" options={{ headerShown: false, gestureEnabled: false, fullScreenGestureEnabled: false }} />
       </Stack>
       <DialogHost />
+      {/* Dark icons on light screens and light ones on dark (the reader sets its own). */}
+      <StatusBar style={c.dark ? 'light' : 'dark'} />
     </ThemeProvider>
   );
 }

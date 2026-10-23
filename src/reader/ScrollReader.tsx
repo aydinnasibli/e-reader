@@ -8,6 +8,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import type { Block, Position } from '@/engine/types';
 import type { ReaderSettings, Theme } from '@/lib/settings';
 import type { BookData } from './book';
+import { ClockBattery } from './StatusInfo';
 import { BlockImage, BlockText, Spacer } from './BlockText';
 import { hitText } from './hitTest';
 import { drawn, lookOf, toBlock } from './look';
@@ -40,6 +41,8 @@ interface Props {
   onAutoInterrupt?(): void;
   /** Auto-scroll reached the end of the book. */
   onAutoEnd?(): void;
+  /** The end of the book came into view. */
+  onReachEnd?(): void;
 }
 
 /** How far auto-scroll may ask to be ahead of where the list really is, in points. */
@@ -53,7 +56,7 @@ interface Win {
   start: number; // first block shown
 }
 
-export function ScrollReader({ book, settings, theme, start, startKey, version, onPosition, onTap, marksFor, onLongPressBlock, onLink, footerRight, highlighting, onHighlightDrag, onHighlightTap, autoScroll, onAutoInterrupt, onAutoEnd }: Props) {
+export function ScrollReader({ book, settings, theme, start, startKey, version, onPosition, onTap, marksFor, onLongPressBlock, onLink, footerRight, highlighting, onHighlightDrag, onHighlightTap, autoScroll, onAutoInterrupt, onAutoEnd, onReachEnd }: Props) {
   const win = useWindowDimensions();
   const insets = useSafeAreaInsets();
   // Clear of a landscape notch on either side.
@@ -371,7 +374,9 @@ export function ScrollReader({ book, settings, theme, start, startKey, version, 
           key={startKey}
           scrollEnabled={!highlighting}
           onScroll={(e) => {
-            actual.current = e.nativeEvent.contentOffset.y;
+            const { contentOffset, layoutMeasurement, contentSize } = e.nativeEvent;
+            actual.current = contentOffset.y;
+            if (endLoaded.current && contentOffset.y + layoutMeasurement.height >= contentSize.height - 40) onReachEnd?.();
             // Not auto-scrolling, or the content moved under it (text trimmed above): follow the list.
             if (!autoScroll || Math.abs(offset.current - actual.current) > RESYNC) offset.current = actual.current;
           }}
@@ -402,7 +407,9 @@ export function ScrollReader({ book, settings, theme, start, startKey, version, 
       )}
       {highlightLayer}
       <View pointerEvents="none" style={[styles.badge, { bottom: insets.bottom + 6, backgroundColor: theme.bg }]}>
-        <Text style={{ color: theme.muted, fontSize: 12 }}>
+        <Text style={{ color: theme.muted, fontSize: 12 }} numberOfLines={1} maxFontSizeMultiplier={1.4}>
+          {settings.showClock ? <ClockBattery /> : null}
+          {settings.showClock ? ' · ' : ''}
           {pct.toFixed(1)}%{footerRight ? ` · ${footerRight}` : ''}
         </Text>
       </View>

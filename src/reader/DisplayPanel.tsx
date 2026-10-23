@@ -265,6 +265,9 @@ function PageTab({ s, c }: { s: ReaderSettings; c: Theme }) {
               : `The screen stays on while you read, and turns off ${s.screenAwake} minutes after the last page turn.`}
         </Text>
       </View>
+      <Row c={c} label="Time and battery while reading">
+        <Switch value={s.showClock} onValueChange={(showClock) => setSettings({ showClock })} />
+      </Row>
       <Row c={c} label="Tap left side to go forward">
         <Switch value={s.tapForward} onValueChange={(tapForward) => setSettings({ tapForward })} />
       </Row>
