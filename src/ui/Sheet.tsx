@@ -35,7 +35,10 @@ export function Sheet({ visible, onClose, colors, title, height, right, position
   return (
     <Modal visible={visible} transparent animationType={top ? 'fade' : 'slide'} onRequestClose={onClose} statusBarTranslucent navigationBarTranslucent>
       <KeyboardAvoidingView
-        style={[styles.fill, top && { justifyContent: 'flex-start', paddingTop: insets.top + 16 }]}
+        // A bottom sheet never reaches under the status bar: when the keyboard
+        // takes the lower part of the screen, a tall sheet (search) shrinks to
+        // the space left instead of being pushed off the top with its text box.
+        style={[styles.fill, top ? { justifyContent: 'flex-start', paddingTop: insets.top + 16 } : { paddingTop: insets.top + 8 }]}
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
         <Pressable style={styles.backdrop} onPress={onClose} accessibilityLabel="Close" />
         <View
@@ -62,7 +65,7 @@ export function Sheet({ visible, onClose, colors, title, height, right, position
 const styles = StyleSheet.create({
   fill: { flex: 1, justifyContent: 'flex-end' },
   backdrop: { ...StyleSheet.absoluteFill, backgroundColor: 'rgba(0,0,0,0.35)' },
-  sheet: { borderTopLeftRadius: 18, borderTopRightRadius: 18, borderTopWidth: StyleSheet.hairlineWidth, paddingTop: 8 },
+  sheet: { borderTopLeftRadius: 18, borderTopRightRadius: 18, borderTopWidth: StyleSheet.hairlineWidth, paddingTop: 8, flexShrink: 1 },
   card: { borderRadius: 18, borderWidth: StyleSheet.hairlineWidth, paddingTop: 8, paddingBottom: 12 },
   // Clear of a phone keyboard, which takes up to about the lower half of the
   // screen; the note box (dialogs.tsx) is sized so a note card ends well above that.
