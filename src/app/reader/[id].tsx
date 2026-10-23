@@ -128,7 +128,8 @@ export default function ReaderScreen() {
         const ch = book.charOffset(p);
         if (jumped.current) tracker.reset(ch);
         else {
-          tracker.turn(ch);
+          if (autoRunning.current) tracker.autoTurn(ch);
+          else tracker.turn(ch);
           setBack((bk) => (!bk ? bk : bk.turns >= 10 ? null : { ...bk, turns: bk.turns + 1 }));
         }
         jumped.current = false;
@@ -157,9 +158,10 @@ export default function ReaderScreen() {
   // "Back to where I was": the place before the last jump, until used,
   // dismissed, or read past (about ten page turns on).
   // Opened at a highlight: offer the way back to where reading left off.
-  const [back, setBack] = useState<{ pos: Position; turns: number } | null>(atB !== undefined ? { pos: savedPos, turns: 0 } : null);
+  // `page` is the number the footer showed there, so the chip says the same.
+  const [back, setBack] = useState<{ pos: Position; turns: number; page?: number } | null>(atB !== undefined ? { pos: savedPos, turns: 0 } : null);
   const goTo = useCallback((p: Position, mark?: { s: number; e: number }, remember = true) => {
-    if (remember) setBack({ pos: latest.current, turns: 0 });
+    if (remember) setBack({ pos: latest.current, turns: 0, page: pageInfoRef.current?.page });
     latest.current = p;
     jumped.current = true;
     setSearchMark(mark ? { b: p.b, ...mark } : null);
@@ -172,6 +174,8 @@ export default function ReaderScreen() {
   const [auto, setAuto] = useState<{ running: boolean } | null>(null);
   const autoRunning = useRef(false);
   autoRunning.current = !!auto?.running;
+  // The end of the book: auto reading is over.
+  const stopAuto = useCallback(() => setAuto(null), []);
   const toggleChrome = useCallback(() => {
     if (autoRunning.current) setAuto({ running: false });
     else setChrome((c) => !c);
@@ -218,6 +222,8 @@ export default function ReaderScreen() {
 
   // Page numbers (page mode only), reported by the page reader.
   const [pageInfo, setPageInfo] = useState<PageInfo | null>(null);
+  const pageInfoRef = useRef(pageInfo);
+  pageInfoRef.current = pageInfo;
   useEffect(() => setPageInfo(null), [settings.mode]);
 
   // Highlight tool (bottom menu): while on, dragging over text highlights it.
@@ -395,6 +401,8 @@ export default function ReaderScreen() {
         turn={turn}
         autoScroll={autoScroll}
         onAutoInterrupt={() => setAuto({ running: false })}
+        onEnd={stopAuto}
+        onAutoEnd={stopAuto}
         highlighting={highlighting}
         onHighlightDrag={onHighlightDrag}
         onHighlightTap={onHighlightTap}
@@ -404,7 +412,7 @@ export default function ReaderScreen() {
           theme={theme}
           label={
             pageInfo
-              ? `Back to page ${Math.min(pageInfo.total, Math.floor(book.charOffset(back.pos) / pageInfo.cpp) + 1)}`
+              ? `Back to page ${back.page ?? Math.min(pageInfo.total, Math.floor(book.charOffset(back.pos) / pageInfo.cpp) + 1)}`
               : `Back to ${Math.round(book.fraction(back.pos) * 100)}%`
           }
           onPress={() => {

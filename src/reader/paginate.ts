@@ -92,7 +92,11 @@ function headingRun(blocks: Block[], measures: Measure[], looks: Look[], i: numb
   const m = measures[j];
   if (m) {
     if (m.kind === 'box') need += looks[j].marginTop + Math.min(m.height, pageHeight);
-    else need += looks[j].marginTop + m.lines.slice(0, KEEP_LINES).reduce((t, l) => t + l.height, 0);
+    else {
+      // Two lines, or all three of a three-line paragraph (two of three would leave its last line alone).
+      const keep = m.lines.length === KEEP_LINES + 1 ? m.lines.length : KEEP_LINES;
+      need += looks[j].marginTop + m.lines.slice(0, keep).reduce((t, l) => t + l.height, 0);
+    }
   }
   return need <= pageHeight ? need : null;
 }

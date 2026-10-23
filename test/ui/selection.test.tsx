@@ -148,5 +148,31 @@ describe('look up and translate stay in the app', () => {
     open('c4', 'fox');
     fireEvent.press(screen.getByLabelText('Look up'));
     expect(await screen.findByText(/No dictionary entry/)).toBeTruthy();
+    // "Translate instead" switches over without reading the empty definition as a translation.
+    fetchMock.mockImplementation(() => json([[['tilki', 'fox']], null, 'en']));
+    fireEvent.press(screen.getByLabelText('Translate instead'));
+    expect(await screen.findByText('tilki')).toBeTruthy();
+  });
+
+  it('switching from a translation to the definition and back', async () => {
+    fetchMock.mockImplementation((url: string) =>
+      url.includes('wiktionary')
+        ? json({ en: [{ partOfSpeech: 'Noun', language: 'English', definitions: [{ definition: 'A small wild canine.' }] }] })
+        : json([[['tilki', 'fox']], null, 'en']),
+    );
+    open('c5', 'fox');
+    fireEvent.press(screen.getByLabelText('Translate'));
+    expect(await screen.findByText('tilki')).toBeTruthy();
+    fireEvent.press(screen.getByLabelText('Show definition'));
+    expect(await screen.findByText('A small wild canine.')).toBeTruthy();
+    fireEvent.press(screen.getByLabelText('Show translation'));
+    expect(await screen.findByText('tilki')).toBeTruthy();
+  });
+
+  it('a service error is not reported as a missing connection', async () => {
+    fetchMock.mockImplementation(() => json({}, 429));
+    open('c6', 'fox');
+    fireEvent.press(screen.getByLabelText('Translate'));
+    expect(await screen.findByText(/service didn’t answer/)).toBeTruthy();
   });
 });

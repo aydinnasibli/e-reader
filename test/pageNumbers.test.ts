@@ -9,10 +9,26 @@ describe('page numbers', () => {
   });
 
   it('pages count up one by one inside a chunk', () => {
-    expect(pageNumber(0, 0, 1500)).toBe(1);
-    expect(pageNumber(0, 19, 1500)).toBe(20);
+    // 30,000 characters on 20 pages, at 1500 a page.
+    expect(pageNumber(0, 30_000, 0, 20, 1500)).toBe(1);
+    expect(pageNumber(0, 30_000, 19, 20, 1500)).toBe(20);
     // The next chunk starts 30,000 characters in: page 21.
-    expect(pageNumber(30_000, 0, 1500)).toBe(21);
+    expect(pageNumber(30_000, 30_000, 0, 20, 1500)).toBe(21);
+  });
+
+  it('never go backwards from one chunk into the next', () => {
+    // Three 50,000-character chunks laid out to 80, 120 and 80 pages: the middle one has more pages than its share.
+    const cpp = charsPerPage([{ chars: 50_000, pages: 80 }, { chars: 50_000, pages: 120 }, { chars: 50_000, pages: 80 }])!;
+    const sizes = [80, 120, 80];
+    let prev = 0;
+    for (let c = 0; c < 3; c++) {
+      for (let i = 0; i < sizes[c]; i++) {
+        const n = pageNumber(c * 50_000, 50_000, i, sizes[c], cpp);
+        expect(n).toBeGreaterThanOrEqual(prev);
+        prev = n;
+      }
+    }
+    expect(prev).toBeLessThanOrEqual(pageCount(150_000, cpp));
   });
 
   it('total pages and pages left', () => {

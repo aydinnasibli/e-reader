@@ -137,4 +137,28 @@ describe('formatMinutes', () => {
     expect(formatMinutes(1)).toBe('1 min');
     expect(formatMinutes(95)).toBe('1 h 35 min');
   });
+
+  it('a jump keeps the time spent on the page jumped from', () => {
+    const { id, t } = reader();
+    clock += 90 * SEC;
+    t.reset(50_000); // contents, search, slider...
+    t.stop();
+    expect(bookTimeMs(id)).toBe(90 * SEC);
+  });
+
+  it('auto page turn counts as reading time but not as the reader\'s speed', () => {
+    const { id, t } = reader();
+    const before = readingSpeed().cpm; // from the books read in the tests above
+    let c = 0;
+    for (let i = 0; i < 20; i++) {
+      clock += 30 * SEC; // 3000 chars a minute, the machine's pace
+      c += PAGE;
+      t.autoTurn(c);
+    }
+    t.stop();
+    expect(bookTimeMs(id)).toBe(20 * 30 * SEC);
+    // This book has no speed of its own, and the overall speed is unchanged.
+    expect(readingSpeed(id).cpm).toBe(before);
+  });
 });
+

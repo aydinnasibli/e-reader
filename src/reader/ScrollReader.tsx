@@ -38,6 +38,8 @@ interface Props {
   autoScroll?: number;
   /** The reader touched the list while it was auto-scrolling. */
   onAutoInterrupt?(): void;
+  /** Auto-scroll reached the end of the book. */
+  onAutoEnd?(): void;
 }
 
 interface Win {
@@ -46,7 +48,7 @@ interface Win {
   start: number; // first block shown
 }
 
-export function ScrollReader({ book, settings, theme, start, startKey, version, onPosition, onTap, marksFor, onLongPressBlock, onLink, footerRight, highlighting, onHighlightDrag, onHighlightTap, autoScroll, onAutoInterrupt }: Props) {
+export function ScrollReader({ book, settings, theme, start, startKey, version, onPosition, onTap, marksFor, onLongPressBlock, onLink, footerRight, highlighting, onHighlightDrag, onHighlightTap, autoScroll, onAutoInterrupt, onAutoEnd }: Props) {
   const win = useWindowDimensions();
   const insets = useSafeAreaInsets();
   // Clear of a landscape notch on either side.
@@ -70,6 +72,9 @@ export function ScrollReader({ book, settings, theme, start, startKey, version, 
     blocks.clear();
     setW(null);
     busy.current = false;
+    // The list starts over at the top: auto-scroll must not carry on from the old place.
+    actual.current = 0;
+    offset.current = 0;
     if (waiting) return;
     const c = book.chunkOf(start.b);
     book.loadChunk(c).then((bl) => {
@@ -200,13 +205,27 @@ export function ScrollReader({ book, settings, theme, start, startKey, version, 
   const offset = useRef(0);
   /** Where the list really is (it stops at the end of what's loaded). */
   const actual = useRef(0);
+  /** The end of the book is loaded (set while drawing). */
+  const endLoaded = useRef(false);
+  const onAutoEndRef = useRef(onAutoEnd);
+  onAutoEndRef.current = onAutoEnd;
   useEffect(() => {
     if (!autoScroll) return;
     let frame = 0;
     let last = Date.now();
+    // When the list last moved: stuck at the end of the book means done.
+    let moved = last;
+    let seen = actual.current;
     offset.current = actual.current;
     const step = () => {
       const now = Date.now();
+      if (actual.current > seen + 0.5) {
+        seen = actual.current;
+        moved = now;
+      } else if (endLoaded.current && now - moved > 1500) {
+        onAutoEndRef.current?.();
+        return;
+      }
       // Frames can be late (busy JS thread): move by elapsed time, not per frame.
       const dt = Math.min(0.25, (now - last) / 1000);
       last = now;
@@ -320,6 +339,7 @@ export function ScrollReader({ book, settings, theme, start, startKey, version, 
   };
 
   const atEnd = w ? w.last >= book.chunkCount - 1 : false;
+  endLoaded.current = atEnd && book.complete;
   const pct = book.fraction(pos) * 100;
 
   return (
@@ -346,7 +366,8 @@ export function ScrollReader({ book, settings, theme, start, startKey, version, 
           scrollEnabled={!highlighting}
           onScroll={(e) => {
             actual.current = e.nativeEvent.contentOffset.y;
-            if (!autoScroll) offset.current = actual.current;
+            // Not auto-scrolling, or the content moved under it (text trimmed above): follow the list.
+            if (!autoScroll || Math.abs(offset.current - actual.current) > 200) offset.current = actual.current;
           }}
           scrollEventThrottle={32}
           onScrollBeginDrag={() => autoScroll && onAutoInterrupt?.()}

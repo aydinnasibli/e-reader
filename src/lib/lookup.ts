@@ -20,6 +20,8 @@ export interface Translation {
   text: string;
   /** Detected source language code. */
   from?: string;
+  /** Only the beginning of a long selection was translated. */
+  partial?: boolean;
 }
 
 /** Languages offered as translation targets. */
@@ -54,8 +56,15 @@ export function languageName(code?: string): string | undefined {
 
 const TIMEOUT_MS = 12000;
 
-/** Thrown when there is no connection or the service didn't answer properly. */
-export class LookupError extends Error {}
+/** Thrown when there is no connection (`offline`) or the service didn't answer properly. */
+export class LookupError extends Error {
+  constructor(
+    message: string,
+    readonly offline = false,
+  ) {
+    super(message);
+  }
+}
 
 async function getJson(url: string, headers?: Record<string, string>, signal?: AbortSignal): Promise<unknown | null> {
   const ctl = new AbortController();
@@ -75,7 +84,8 @@ async function getJson(url: string, headers?: Record<string, string>, signal?: A
     }
   } catch (e) {
     if (e instanceof LookupError) throw e;
-    throw new LookupError(String(e));
+    // fetch itself failed: no connection, or it took too long.
+    throw new LookupError(String(e), true);
   } finally {
     clearTimeout(timer);
     signal?.removeEventListener('abort', onAbort);
@@ -226,16 +236,54 @@ export async function defineWord(text: string, lang?: string, signal?: AbortSign
   return null;
 }
 
-/** Longest text sent in one request; longer selections are cut at a sentence. */
-export const MAX_TRANSLATE = 4000;
+/**
+ * Longest text sent in one request, counted as it travels in the address
+ * (a Cyrillic letter takes 6 characters there, a Chinese one 9): servers
+ * refuse addresses much longer than this.
+ */
+export const MAX_ENCODED = 6000;
+
+/** Text with any broken surrogate pairs (from a damaged book) replaced, so it can be sent. */
+export function wellFormed(text: string): string {
+  let out = '';
+  for (let i = 0; i < text.length; i++) {
+    const c = text.charCodeAt(i);
+    if (c >= 0xd800 && c <= 0xdbff) {
+      const d = text.charCodeAt(i + 1);
+      if (d >= 0xdc00 && d <= 0xdfff) {
+        out += text[i] + text[i + 1];
+        i++;
+      } else out += '\uFFFD';
+    } else out += c >= 0xdc00 && c <= 0xdfff ? '\uFFFD' : text[i];
+  }
+  return out;
+}
+
+/** The beginning of `text` that fits in one request, cut at a sentence (or a space) when it doesn't all fit. */
+export function fitForRequest(text: string, max = MAX_ENCODED): string {
+  if (encodeURIComponent(text).length <= max) return text;
+  // Never end on the first half of a pair: that can't be encoded.
+  const end = (n: number) => (n > 0 && /[\uD800-\uDBFF]/.test(text[n - 1]) ? n - 1 : n);
+  // Longest prefix that fits, then back to the last sentence end or space in it.
+  let lo = 0;
+  let hi = text.length;
+  while (lo < hi) {
+    const mid = Math.ceil((lo + hi) / 2);
+    if (encodeURIComponent(text.slice(0, end(mid))).length <= max) lo = mid;
+    else hi = mid - 1;
+  }
+  lo = end(lo);
+  const head = text.slice(0, lo);
+  const sentence = Math.max(head.lastIndexOf('. '), head.lastIndexOf('! '), head.lastIndexOf('? '), head.lastIndexOf('。'));
+  if (sentence > lo / 2) return head.slice(0, sentence + 1);
+  const space = head.lastIndexOf(' ');
+  return space > lo / 2 ? head.slice(0, space) : head;
+}
 
 export async function translateText(text: string, to: string, signal?: AbortSignal): Promise<Translation> {
-  let q = text.replace(/­/g, '').trim();
-  if (q.length > MAX_TRANSLATE) {
-    const cut = q.lastIndexOf('. ', MAX_TRANSLATE);
-    q = q.slice(0, cut > MAX_TRANSLATE / 2 ? cut + 1 : MAX_TRANSLATE);
-  }
+  const all = wellFormed(text.replace(/\u00AD/g, '').trim());
+  const q = fitForRequest(all);
   const t = parseTranslation(await getJson(gtx(q, to, ['t']), undefined, signal));
   if (!t) throw new LookupError('Empty translation');
-  return t;
+  return q.length < all.length ? { ...t, partial: true } : t;
 }

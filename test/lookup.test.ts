@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { cleanWord, parseGoogleDefinitions, parseTranslation, parseWiktionary, stripHtml } from '../src/lib/lookup';
+import { MAX_ENCODED, cleanWord, fitForRequest, parseGoogleDefinitions, parseTranslation, parseWiktionary, stripHtml, wellFormed } from '../src/lib/lookup';
 
 describe('in-app dictionary and translation', () => {
   it('cleans the selected word', () => {
@@ -49,5 +49,25 @@ describe('in-app dictionary and translation', () => {
     expect(parseTranslation(json)).toEqual({ text: 'Hello world. I am reading a book.', from: 'az' });
     expect(parseTranslation('<html>')).toBeNull();
     expect(parseTranslation([[], null, 'en'])).toBeNull();
+  });
+
+  it('long selections are cut to what one request can carry, at a sentence', () => {
+    const short = 'Короткий текст.';
+    expect(fitForRequest(short)).toBe(short);
+    // Cyrillic takes 6 characters per letter in the address: 4000 letters would be 24 000.
+    const long = 'Это предложение. '.repeat(240);
+    const cut = fitForRequest(long);
+    expect(encodeURIComponent(cut).length).toBeLessThanOrEqual(MAX_ENCODED);
+    expect(cut.endsWith('предложение.')).toBe(true);
+    expect(long.startsWith(cut)).toBe(true);
+    // Emoji (surrogate pairs) are never cut in half.
+    const emoji = '😀'.repeat(2000);
+    expect(() => encodeURIComponent(fitForRequest(emoji))).not.toThrow();
+  });
+
+  it('broken characters from a damaged book can still be sent', () => {
+    const broken = 'a\uD800b\uDC00c😀';
+    expect(() => encodeURIComponent(wellFormed(broken))).not.toThrow();
+    expect(wellFormed(broken)).toBe('a\uFFFDb\uFFFDc😀');
   });
 });

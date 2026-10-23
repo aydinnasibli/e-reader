@@ -7,7 +7,7 @@ import * as Haptics from 'expo-haptics';
 import { getLocales } from 'expo-localization';
 import { useEffect, useState } from 'react';
 import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
-import { type Definition, LANGUAGES, type Translation, defineWord, languageName, translateText } from '@/lib/lookup';
+import { type Definition, LANGUAGES, LookupError, type Translation, defineWord, languageName, translateText } from '@/lib/lookup';
 import { setSettings, type Theme, useSettings } from '@/lib/settings';
 
 export type LookupKind = 'define' | 'translate';
@@ -23,7 +23,8 @@ interface Props {
   onSwitch(kind: LookupKind): void;
 }
 
-type State<T> = { status: 'loading' } | { status: 'done'; value: T | null } | { status: 'error' };
+/** `kind` is what the answer is for: right after switching, the old answer must not be read as the new kind. */
+type State<T> = { status: 'loading' } | { status: 'done'; kind: LookupKind; value: T | null } | { status: 'error'; kind: LookupKind; offline: boolean };
 
 /** The language to translate into: the saved choice, else the phone's. */
 export function translateTarget(saved: string): string {
@@ -36,9 +37,10 @@ export function LookupCard({ kind, text, lang, theme, onBack, onSwitch }: Props)
   const settings = useSettings();
   const to = translateTarget(settings.translateTo);
   const [attempt, setAttempt] = useState(0);
-  const [state, setState] = useState<State<Definition | Translation>>({
+  const [answer, setState] = useState<State<Definition | Translation>>({
     status: 'loading',
   });
+  const state: State<Definition | Translation> = answer.status !== 'loading' && answer.kind !== kind ? { status: 'loading' } : answer;
 
   useEffect(() => {
     const ctl = new AbortController();
@@ -46,8 +48,8 @@ export function LookupCard({ kind, text, lang, theme, onBack, onSwitch }: Props)
     const job: Promise<Definition | Translation | null> =
       kind === 'define' ? defineWord(text, lang, ctl.signal) : translateText(text, to, ctl.signal);
     job.then(
-      (value) => !ctl.signal.aborted && setState({ status: 'done', value }),
-      () => !ctl.signal.aborted && setState({ status: 'error' }),
+      (value) => !ctl.signal.aborted && setState({ status: 'done', kind, value }),
+      (e: unknown) => !ctl.signal.aborted && setState({ status: 'error', kind, offline: e instanceof LookupError && e.offline }),
     );
     return () => ctl.abort();
   }, [kind, text, lang, to, attempt]);
@@ -59,7 +61,8 @@ export function LookupCard({ kind, text, lang, theme, onBack, onSwitch }: Props)
       return (
         <View style={styles.pad}>
           <Text style={[styles.msg, muted]}>
-            {kind === 'define' ? 'Couldn’t reach the dictionary.' : 'Couldn’t translate right now.'} Check the internet connection.
+            {kind === 'define' ? 'Couldn’t reach the dictionary.' : 'Couldn’t translate right now.'}{' '}
+            {state.offline ? 'Check the internet connection.' : 'The service didn’t answer; try again in a moment.'}
           </Text>
           <Pressable onPress={() => setAttempt((a) => a + 1)} style={[styles.btn, { borderColor: theme.border }]} accessibilityLabel="Try again">
             <Text style={{ color: theme.accent, fontWeight: '600' }}>Try again</Text>
@@ -110,6 +113,7 @@ export function LookupCard({ kind, text, lang, theme, onBack, onSwitch }: Props)
         <Text selectable style={[styles.translation, { color: theme.text }]}>
           {t.text}
         </Text>
+        {t.partial ? <Text style={[styles.source, muted]}>Only the beginning was translated. Select less text to translate the rest.</Text> : null}
         <View style={styles.row}>
           {languageName(t.from) ? (
             <Text style={[styles.source, muted]}>From {languageName(t.from)} · Google Translate</Text>

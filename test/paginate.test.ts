@@ -88,6 +88,9 @@ describe('paginate', () => {
     // Room for the heading and two lines: it stays.
     const kept = paginate([p, h, p], 0, [text(4), text(1), text(4)], [look(), look(), look()], 70);
     expect(kept[0].items.map((i) => i.b)).toEqual([0, 1, 2]);
+    // A three-line paragraph after it: two of its lines would fit, but it can't be split 2 + 1, so the heading goes with it.
+    const three = paginate([p, h, p], 0, [text(6), text(1), text(3)], [look(), look(), look()], 90);
+    expect(three.map((pg) => pg.items.map((i) => i.b))).toEqual([[0], [1, 2]]);
   });
 
   it('two headings in a row go together', () => {

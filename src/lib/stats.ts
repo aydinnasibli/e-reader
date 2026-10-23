@@ -171,11 +171,29 @@ export class ReadingTracker {
     this.runChar = char;
   }
 
-  /** A jump: start counting from here. */
-  reset(char: number) {
-    this.restart(char);
+  /** Time on the current position so far, up to what a page could believably take. */
+  private settle(now: number) {
+    if (this.char !== null && this.at !== null) this.ms += Math.max(0, Math.min(now - this.at, this.cap(0) - this.pending));
     this.pending = 0;
-    this.at = this.now();
+    this.at = now;
+  }
+
+  /** A jump: the time on the page jumped from counts; start a new stretch here. */
+  reset(char: number) {
+    this.settle(this.now());
+    this.restart(char);
+  }
+
+  /**
+   * A page turned (or scrolled) by auto page turn: the time counts as reading,
+   * but the pace is the machine's, so it isn't a sample of the reader's speed.
+   */
+  autoTurn(char: number) {
+    this.settle(this.now());
+    this.endRun();
+    this.char = char;
+    this.runChar = char;
+    this.runMs = 0;
   }
 
   turn(char: number) {

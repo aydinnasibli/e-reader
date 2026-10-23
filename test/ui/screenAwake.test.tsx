@@ -50,3 +50,12 @@ it('auto page turn holds the screen on', () => {
   act(() => jest.advanceTimersByTime(30 * 60_000));
   expect(off).not.toHaveBeenCalled();
 });
+
+it("phone's own timeout: auto page turn still keeps the screen on while it runs", () => {
+  const r = render(<Probe setting="system" page={1} hold />);
+  expect(on).toHaveBeenCalledTimes(1);
+  act(() => jest.advanceTimersByTime(30 * 60_000));
+  expect(off).not.toHaveBeenCalled();
+  r.rerender(<Probe setting="system" page={1} hold={false} />); // auto stopped
+  expect(off).toHaveBeenCalledTimes(1);
+});

@@ -463,7 +463,7 @@ async function convert(book: BookEntry) {
           publish();
         },
         pause: makePause(),
-        fallbackTitle: book.title,
+        fallbackTitle: titleFromFileName(book.fileName),
         meta: (info) => {
           const patch: Partial<BookEntry> = {};
           const edited = getBook(id)?.titleEdited;

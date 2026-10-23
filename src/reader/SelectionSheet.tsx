@@ -133,7 +133,7 @@ export function SelectionSheet({ bookId, bookTitle, lang, target, theme, onClose
   return (
     <Sheet visible={!!target} onClose={() => close()} colors={sheetColors}>
       {lookup ? (
-        <LookupCard kind={lookup} text={lookupText(lookup).trim()} lang={lang} theme={theme} onBack={() => setLookup(null)} onSwitch={setLookup} />
+        <LookupCard key={lookup} kind={lookup} text={lookupText(lookup).trim()} lang={lang} theme={theme} onBack={() => setLookup(null)} onSwitch={setLookup} />
       ) : (
         <>
           <Text style={[styles.hint, { color: theme.muted }]}>

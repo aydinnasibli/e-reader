@@ -29,12 +29,12 @@ export function useScreenAwake(setting: ScreenAwake, activity: unknown, hold: bo
   };
   const ms = awakeMs(setting);
   useEffect(() => {
-    if (ms === null) {
+    if (ms === null && !hold) {
       set(false);
       return;
     }
     set(true);
-    if (ms === 0 || hold) return;
+    if (ms === null || ms === 0 || hold) return;
     const timer = setTimeout(() => set(false), ms);
     return () => clearTimeout(timer);
   }, [ms, activity, hold]);
