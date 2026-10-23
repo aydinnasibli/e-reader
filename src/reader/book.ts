@@ -215,14 +215,14 @@ export class BookData {
     const safe = key.replace(/[^A-Za-z0-9._-]/g, '_');
     if (ref && 'pdb' in ref) {
       const out = imageFile(this.entry.id, `p_${safe}.${ref.ext}`);
-      if (!out.exists) out.write(this.source().read(ref.pdb[0], ref.pdb[1]));
+      if (!out.exists) out.writeSync(this.source().read(ref.pdb[0], ref.pdb[1]));
       return out.uri;
     }
     if (ref && 'zip' in ref) {
       const out = imageFile(this.entry.id, `z_${safe}.${ref.ext}`);
       if (!out.exists) {
         const [offset, csize, size, method] = ref.zip;
-        out.write(readZipData(this.source(), offset, csize, size, method));
+        out.writeSync(readZipData(this.source(), offset, csize, size, method));
       }
       return out.uri;
     }
@@ -236,7 +236,7 @@ export class BookData {
     if (zip && e) {
       const ext = /\.([a-z0-9]{2,5})$/i.exec(key)?.[1]?.toLowerCase() ?? 'jpg';
       const out = imageFile(this.entry.id, `z_${safe}.${ext}`);
-      if (!out.exists) out.write(zip.read(e));
+      if (!out.exists) out.writeSync(zip.read(e));
       return out.uri;
     }
     return null;

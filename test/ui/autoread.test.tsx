@@ -32,16 +32,16 @@ export const manifestForMock = manifest;
 
 const { width: W } = Dimensions.get('window');
 
-beforeAll(() => {
+beforeAll(async () => {
   require('@/lib/storage').testChunks.set('sea/0', JSON.stringify({ b: blocks }));
 });
 
 it('auto page turn turns the pages', async () => {
   setSettings({ mode: 'page', seenTapZones: true, pageTurn: 'none', hyphenate: false, autoWpm: 1000 });
-  render(<ReaderScreen />);
+  await render(<ReaderScreen />);
   await waitFor(() => expect(screen.getByText(/^1 of \d+ · /)).toBeTruthy(), { timeout: 9000 });
-  fireEvent.press(screen.getAllByText(/Paragraph 0\./)[0], { nativeEvent: { pageX: W / 2, pageY: 300 } });
-  fireEvent.press(screen.getByLabelText('Auto page turn'));
+  await fireEvent.press(screen.getAllByText(/Paragraph 0\./)[0], { nativeEvent: { pageX: W / 2, pageY: 300 } });
+  await fireEvent.press(screen.getByLabelText('Auto page turn'));
   // While a page waits, a line fills up in the auto bar: it's visibly working.
   expect(screen.getByTestId('auto-page-timer')).toBeTruthy();
   await waitFor(() => expect(screen.getByText(/^2 of \d+ · /)).toBeTruthy(), { timeout: 8000 });

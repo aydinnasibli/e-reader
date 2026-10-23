@@ -3,7 +3,7 @@
 // whole book.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { FlatList, Pressable, StyleSheet, Text, type TextLayoutEvent, View, type ViewToken, useWindowDimensions } from 'react-native';
+import { FlatList, Pressable, StyleSheet, Text, type TextLayoutEvent, View, type ViewInstance, type ListViewToken, useWindowDimensions } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import type { Block, Position } from '@/engine/types';
 import type { ReaderSettings, Theme } from '@/lib/settings';
@@ -159,7 +159,7 @@ export function ScrollReader({ book, settings, theme, start, startKey, version, 
 
   const positionRef = useRef(onPosition);
   positionRef.current = onPosition;
-  const onViewable = useRef(({ viewableItems }: { viewableItems: ViewToken<number>[] }) => {
+  const onViewable = useRef(({ viewableItems }: { viewableItems: ListViewToken[] }) => {
     const first = viewableItems.find((v) => v.isViewable);
     if (first && typeof first.item === 'number') {
       const p = { b: first.item, o: 0 };
@@ -182,7 +182,7 @@ export function ScrollReader({ book, settings, theme, start, startKey, version, 
   // Line layout of each shown paragraph, and its view, for finding the word
   // under a long-press.
   const lines = useRef(new Map<number, Line[]>()).current;
-  const views = useRef(new Map<number, View>()).current;
+  const views = useRef(new Map<number, ViewInstance>()).current;
   // One stable callback per paragraph (BlockText is memoized); it reads the
   // current settings when called, since a new layout reports new lines.
   const settingsRef = useRef(settings);

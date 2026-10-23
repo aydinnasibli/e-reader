@@ -10,7 +10,7 @@ export async function shareTextFile(fileName: string, text: string, mimeType = '
     if (await Sharing.isAvailableAsync()) {
       const f = new File(Paths.cache, fileName);
       if (f.exists) f.delete();
-      f.write(text);
+      f.writeSync(text);
       await Sharing.shareAsync(f.uri, { mimeType, UTI: 'net.daringfireball.markdown', dialogTitle: fileName });
       return;
     }

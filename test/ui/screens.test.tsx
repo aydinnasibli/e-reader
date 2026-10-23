@@ -37,33 +37,33 @@ jest.mock('@/ui/dialogs', () => ({
   showPrompt: (title: string, o: { onSubmit(t: string): void }) => o.onSubmit(title === 'Title' ? 'Moby Dick, or The Whale' : 'H. Melville'),
 }));
 
-beforeAll(() => {
+beforeAll(async () => {
   addHighlight('a', { b: 3, s: 0, e: 16, color: 'yellow', text: 'Call me Ishmael.', chapter: 'Loomings' });
   addHighlight('a', { b: 9, s: 4, e: 30, color: 'green', text: 'a damp, drizzly November', note: 'Mood.', chapter: 'Loomings' });
   addHighlight('b', { b: 1, s: 0, e: 44, color: 'pink', text: 'Happy families are all alike', chapter: 'Part One' });
 });
 
 describe('highlights & notes', () => {
-  it('lists highlights by book, searches, filters notes, opens and exports', () => {
-    render(<NotesScreen />);
+  it('lists highlights by book, searches, filters notes, opens and exports', async () => {
+    await render(<NotesScreen />);
     expect(screen.getByText('Moby-Dick')).toBeTruthy();
     expect(screen.getByText('2 highlights')).toBeTruthy();
     expect(screen.getByText('Anna Karenina')).toBeTruthy();
 
-    fireEvent.changeText(screen.getByPlaceholderText('Search highlights and notes'), 'november');
+    await fireEvent.changeText(screen.getByPlaceholderText('Search highlights and notes'), 'november');
     expect(screen.queryByText('Call me Ishmael.')).toBeNull();
     expect(screen.getByText('a damp, drizzly November')).toBeTruthy();
-    fireEvent.changeText(screen.getByPlaceholderText('Search highlights and notes'), '');
+    await fireEvent.changeText(screen.getByPlaceholderText('Search highlights and notes'), '');
 
-    fireEvent.press(screen.getByText('With notes'));
+    await fireEvent.press(screen.getByText('With notes'));
     expect(screen.queryByText('Anna Karenina')).toBeNull();
     expect(screen.getByText('a damp, drizzly November')).toBeTruthy();
-    fireEvent.press(screen.getByText('With notes'));
+    await fireEvent.press(screen.getByText('With notes'));
 
-    fireEvent.press(screen.getByText('Call me Ishmael.'));
+    await fireEvent.press(screen.getByText('Call me Ishmael.'));
     expect(mockPush).toHaveBeenCalledWith({ pathname: '/reader/[id]', params: { id: 'a', b: '3', o: '0' } });
 
-    fireEvent.press(screen.getByLabelText('Export Moby-Dick'));
+    await fireEvent.press(screen.getByLabelText('Export Moby-Dick'));
     const [name, md] = mockShare.mock.calls[0];
     expect(name).toBe('Moby-Dick.md');
     expect(md).toContain('> Call me Ishmael.');
@@ -73,25 +73,25 @@ describe('highlights & notes', () => {
 });
 
 describe('book details', () => {
-  it('shows the book and reading facts, and edits the title and author', () => {
+  it('shows the book and reading facts, and edits the title and author', async () => {
     mockParams = { id: 'a' };
-    render(<BookDetails />);
+    await render(<BookDetails />);
     expect(screen.getAllByText('Moby-Dick').length).toBeGreaterThan(0); // heading (and the placeholder cover)
     expect(screen.getByText('EPUB')).toBeTruthy();
     expect(screen.getByText('1.2 MB')).toBeTruthy();
     expect(screen.getByText('25%')).toBeTruthy();
     expect(screen.getAllByText('2').length).toBeGreaterThan(0); // highlights
-    fireEvent.press(screen.getByLabelText('Edit title'));
+    await fireEvent.press(screen.getByLabelText('Edit title'));
     expect(mockRename).toHaveBeenCalledWith('a', { title: 'Moby Dick, or The Whale' });
-    fireEvent.press(screen.getByLabelText('Edit author'));
+    await fireEvent.press(screen.getByLabelText('Edit author'));
     expect(mockRename).toHaveBeenCalledWith('a', { author: 'H. Melville' });
     expect(screen.queryByText('Use the book’s own title')).toBeNull();
   });
 
-  it('an edited title can go back to the book’s own', () => {
+  it('an edited title can go back to the book’s own', async () => {
     mockParams = { id: 'b' };
-    render(<BookDetails />);
-    fireEvent.press(screen.getByText('Use the book’s own title'));
+    await render(<BookDetails />);
+    await fireEvent.press(screen.getByText('Use the book’s own title'));
     expect(mockRestore).toHaveBeenCalledWith('b');
   });
 });
