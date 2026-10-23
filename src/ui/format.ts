@@ -3,8 +3,9 @@ export function formatBytes(n: number) {
   return `${Math.max(1, Math.round(n / 1024))} KB`;
 }
 
-/** "3 min", "1 h 20 min". */
+/** "< 1 min", "3 min", "1 h 20 min". */
 export function formatMinutes(min: number) {
+  if (min < 0.5) return '< 1 min';
   const m = Math.max(1, Math.round(min));
   if (m < 60) return `${m} min`;
   const h = Math.floor(m / 60);

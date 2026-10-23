@@ -132,15 +132,16 @@ export default function ReaderScreen() {
   );
   useEffect(() => {
     const sub = AppState.addEventListener('change', (s) => {
+      // Time in other apps (or with the screen locked) isn't reading.
       if (s !== 'active') {
-        tracker.flush();
+        tracker.pause();
         save();
-      }
+      } else tracker.resume();
     });
     return () => {
       sub.remove();
       if (saveTimer.current) clearTimeout(saveTimer.current);
-      tracker.flush();
+      tracker.stop();
       save();
     };
   }, [save, tracker]);

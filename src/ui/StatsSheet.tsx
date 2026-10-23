@@ -1,7 +1,7 @@
 import { StyleSheet, Text, View } from 'react-native';
 import { isFinished } from '@/lib/collections';
 import { useLibrary } from '@/lib/library';
-import { charsPerMinute, dayKey, useStats } from '@/lib/stats';
+import { dayKey, readingSpeed, useStats } from '@/lib/stats';
 import { formatMinutes } from './format';
 import { Sheet } from './Sheet';
 import { useAppColors } from './theme';
@@ -23,8 +23,9 @@ export function StatsSheet({ visible, onClose }: { visible: boolean; onClose(): 
   const totalMs = Object.values(stats.books).reduce((a, b) => a + b.ms, 0);
   const weekMs = days.reduce((a, d) => a + d.ms, 0);
   const todayMs = days[6].ms;
-  const wpm = Math.round(charsPerMinute() / CHARS_PER_WORD);
-  const measured = totalMs >= 3 * 60_000;
+  const speed = readingSpeed();
+  const wpm = Math.round(speed.cpm / CHARS_PER_WORD);
+  const measured = speed.measured;
   const finished = books.filter(isFinished).length;
 
   const tile = (label: string, value: string) => (
@@ -55,7 +56,7 @@ export function StatsSheet({ visible, onClose }: { visible: boolean; onClose(): 
         ))}
       </View>
       <Text style={[styles.note, { color: c.secondary }]}>
-        Time counts while you turn pages; long pauses are ignored. Speed improves the “time left” estimates as you read.
+        Time counts while a book is open in front of you: breaks, other apps and flipping quickly through pages don’t count. Speed comes from pages read at a normal pace, and makes the “time left” estimates fit you.
       </Text>
     </Sheet>
   );
