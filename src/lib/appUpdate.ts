@@ -30,12 +30,9 @@ export type UpdateState =
   | { kind: 'installing'; update: AvailableUpdate }
   | { kind: 'error'; message: string; update?: AvailableUpdate };
 
-/** Off in store builds (STORE_BUILD=1, see app.config.js): the store updates them. */
-const SELF_UPDATE: boolean = Constants.expoConfig?.extra?.selfUpdate !== false;
-
-/** Only real Android builds made by CI can update themselves (not Expo Go, not store builds). */
+/** Only real Android builds made by CI can update themselves (not Expo Go). */
 export function canSelfUpdate() {
-  return SELF_UPDATE && Platform.OS === 'android' && Constants.executionEnvironment !== ExecutionEnvironment.StoreClient && CURRENT_BUILD > 0;
+  return Platform.OS === 'android' && Constants.executionEnvironment !== ExecutionEnvironment.StoreClient && CURRENT_BUILD > 0;
 }
 
 let state: UpdateState = { kind: 'idle' };

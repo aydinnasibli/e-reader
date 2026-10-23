@@ -29,7 +29,7 @@ anything not proven on a device is marked **NOT VERIFIED**).
 | # | Issue | Evidence | Impact | Recommendation |
 |---|---|---|---|---|
 | P0-1 | **Release signing key and its password are committed to a public repo.** | `signing/release.keystore`, `plugins/withReleaseSigning.js:11-14` (`storePassword 'nec-ebook-reader'`) | Anyone can sign an APK that Android accepts as an *update* of the installed app, inheriting its data and `REQUEST_INSTALL_PACKAGES`. The signature check is the only thing that protects users who install APKs passed around outside GitHub. | Rotate the key, keep it in CI secrets (or use Play App Signing). **Rotation breaks updates for every installed copy (Android refuses a new key), and with `allowBackup: false` users would lose their library on reinstall** → owner decision required; not changed in this pass. |
-| P0-2 | **Self-updater + `REQUEST_INSTALL_PACKAGES` are disallowed on Google Play** (apps may not update themselves outside Play; the permission is restricted to apps whose core purpose is installing packages). | `app.json:25`, `src/lib/appUpdate.ts:145-175` | Play rejection if submitted as is. (Not a problem for today's sideload distribution.) | Store builds must drop both. |
+| P0-2 | *(Out of scope: the app won't be published on Google Play or the App Store — owner, 2026-10-23.)* **Self-updater + `REQUEST_INSTALL_PACKAGES` are disallowed on Google Play** (apps may not update themselves outside Play; the permission is restricted to apps whose core purpose is installing packages). | `app.json:25`, `src/lib/appUpdate.ts:145-175` | Play rejection if submitted as is. (Not a problem for today's sideload distribution.) | Store builds must drop both. |
 | P0-3 | **A ZIP entry that lies about its size is allocated at that size.** `read()` does `new Uint8Array(e.size)` with `e.size` taken from the file. A damaged/hostile EPUB whose OPF/NCX/nav/cover claims ~4 GB makes the app try to allocate 4 GB during import (and on every open when the cover is extracted). | `src/engine/zip.ts:129, 162`; reproduced by `test/corrupt.test.ts` ("claiming to be 4 GB") | Out-of-memory crash on import; because the conversion is retried on next launch until `MAX_ATTEMPTS`, the app can crash twice in a row at start. | Refuse entries above a sane cap; cap streamed inflation against the declared size (zip bombs). |
 
 ### P1
@@ -37,7 +37,7 @@ anything not proven on a device is marked **NOT VERIFIED**).
 | # | Issue | Evidence | Impact | Recommendation |
 |---|---|---|---|---|
 | P1-1 | **Highlights, notes and bookmarks are silently lost when saving fails** (storage full, file locked). `save()` updates the in-memory cache, swallows the write error, and never retries. | `src/lib/annotations.ts:60-70` | The user sees the highlight/note; after the app is killed it is gone. | Keep the change, mark the book dirty, retry on next change / app background, and tell the user once. |
-| P1-2 | **Page mode can't be used with VoiceOver/TalkBack.** Page turns are only swipes (PanResponder) and edge taps; screen readers consume both. Each page column is one `Pressable` without label or actions. | `src/reader/PageReader.tsx:429-438, 388-410` | Blind / low-vision readers cannot turn pages (scroll mode works). | Expose the page as an adjustable element with "next/previous page" actions (`accessibilityActions`, increment/decrement). |
+| P1-2 | *(Won't do — owner, 2026-10-23.)* **Page mode can't be used with VoiceOver/TalkBack.** Page turns are only swipes (PanResponder) and edge taps; screen readers consume both. Each page column is one `Pressable` without label or actions. | `src/reader/PageReader.tsx:429-438, 388-410` | Blind / low-vision readers cannot turn pages (scroll mode works). | Expose the page as an adjustable element with "next/previous page" actions (`accessibilityActions`, increment/decrement). |
 | P1-3 | **No crash reporting.** Only render-time error boundaries exist; there is no global JS handler, no native crash reporter, no source-map upload. | `src/app/_layout.tsx:42-45`, `src/app/reader/[id].tsx:654-665`; no Sentry/Crashlytics in `package.json` | Production crashes are invisible. | Add a crash reporter (e.g. `@sentry/react-native` with its Expo plugin + EAS source-map upload). **Needs an account/DSN from the owner → asking before adding a dependency.** Interim: a local crash log. |
 | P1-4 | **RTL books (Arabic, Hebrew, Persian) are laid out and selected as LTR.** Alignment is forced to `left`/`justify`, there is no `writingDirection`, hit-testing/caret math assumes left-to-right lines, and swipe direction is fixed. Persian/Arabic are offered as translation targets, so the audience exists. | `src/reader/look.ts:53,79,82`; `src/reader/hitTest.ts`; `src/reader/gestures.ts` | RTL paragraphs left-aligned; long-press selects the wrong word; page order feels reversed. | Per-block direction detection, `writingDirection`, mirrored hit testing and page order. **Large change; needs device testing — proposed, not done.** |
 | P1-5 | **No CI on branches / pull requests.** The only workflow runs on `main` and publishes an APK that installed apps are offered as an update. Checks (tsc/lint/tests) therefore first run *after* code lands on `main`. No iOS build anywhere. | `.github/workflows/android-apk.yml:8,25` | A broken change is found only when it is already being shipped to users. iOS can rot unnoticed. | CI on every push/PR: checks + Android release build (no publish) + iOS release build. |
@@ -46,13 +46,13 @@ anything not proven on a device is marked **NOT VERIFIED**).
 
 | # | Issue | Evidence | Recommendation |
 |---|---|---|---|
-| P2-1 | iOS has no privacy manifest entries of its own and no export-compliance flag. Apple requires declared reasons for required-reason APIs (UserDefaults, file timestamps, boot time, disk space) since May 2024; libraries ship their own manifests (`expo-file-system`, `expo-constants`, RN core) but the app manifest should declare no tracking / no collected data explicitly. | `app.json` has no `ios.privacyManifests`, no `ITSAppUsesNonExemptEncryption` | Add `ios.privacyManifests` and `ITSAppUsesNonExemptEncryption: false`. |
-| P2-2 | Most buttons have no `accessibilityRole`, so screen readers don't announce them as buttons. | `src/ui/Tap.tsx:28` (46 labels across `src/`, ~7 roles) | Default `accessibilityRole="button"` in `Tap`. |
+| P2-1 | *(Out of scope: no App Store release.)* iOS has no privacy manifest entries of its own and no export-compliance flag. Apple requires declared reasons for required-reason APIs (UserDefaults, file timestamps, boot time, disk space) since May 2024; libraries ship their own manifests (`expo-file-system`, `expo-constants`, RN core) but the app manifest should declare no tracking / no collected data explicitly. | `app.json` has no `ios.privacyManifests`, no `ITSAppUsesNonExemptEncryption` | Add `ios.privacyManifests` and `ITSAppUsesNonExemptEncryption: false`. |
+| P2-2 | *(Won't do — owner.)* Most buttons have no `accessibilityRole`, so screen readers don't announce them as buttons. | `src/ui/Tap.tsx:28` (46 labels across `src/`, ~7 roles) | Default `accessibilityRole="button"` in `Tap`. |
 | P2-3 | Book text ignores the system text size (`allowFontScaling={false}`), and the first-run font size is fixed at 19 regardless of the user's accessibility setting. The in-app size slider (12–40) partly compensates. | `src/reader/BlockText.tsx:42`, `src/lib/settings.ts:95` | Seed the first-run size from `PixelRatio.getFontScale()`. |
 | P2-4 | Long-press word selection splits only on whitespace; a CJK paragraph without spaces is selected whole, so Look Up / Translate get a whole sentence. | `src/reader/selection.ts:12` | Treat each Han/Kana character (and Thai?) as its own token. |
 | P2-5 | Search crashes silently on a damaged chunk: `JSON.parse` throws inside an un-caught async IIFE → unhandled rejection, the sheet spins forever. | `src/reader/search.ts:85` | Skip unreadable chunks like unreadable files. |
 | P2-6 | Settings read from disk are not validated: a damaged/old `settings.json` with e.g. `fontSize: "big"` or an unknown theme name reaches the layout code (`THEMES[name]` → `undefined` → crash in render). | `src/lib/settings.ts:129-137, 195-197` | Validate each field, fall back to defaults. |
-| P2-7 | Store builds would declare network-sending of selected text to Google Translate's unofficial `client=gtx` endpoint (ToS-grey, can be blocked any time) — must be disclosed in Play Data safety ("App activity / other user content shared with a third party for app functionality") and App Privacy. | `src/lib/lookup.ts:201` | Use an official API or disclose; document in the store listing. |
+| P2-7 | *(Store disclosure part out of scope; the endpoint itself can still stop working.)* Store builds would declare network-sending of selected text to Google Translate's unofficial `client=gtx` endpoint (ToS-grey, can be blocked any time) — must be disclosed in Play Data safety ("App activity / other user content shared with a third party for app functionality") and App Privacy. | `src/lib/lookup.ts:201` | Use an official API or disclose; document in the store listing. |
 | P2-8 | `npm audit`: 5 high (node-forge, zod via `@expo/cli`). Build-time only — not in the app bundle. | `npm audit` | Pick up with the next Expo 58 patch (`npx expo install --fix`). |
 | P2-9 | `allowBackup: false` and no library export: a new phone or a reinstall loses every book, highlight and note (notes can be exported as text only). | `app.json:27`, `src/lib/exportNotes.ts` | Allow backup of `library.json`/annotations (exclude book sources) or add export/import. |
 | P2-10 | No storage-format versioning: `library.json`/`settings.json` have no `version`; migrations are ad-hoc key fix-ups. Manifests have `v: 1` but nothing re-converts books when the engine changes, while annotations store block indices that depend on the converter. | `src/lib/settings.ts:119-127`, `src/engine/types.ts:57` | Add a schema version + migration runner; store an engine version per book. |
@@ -99,20 +99,20 @@ Every "Fixed" row has a test that **fails on the old code and passes on the new*
 | # | Status | Change | Proof |
 |---|---|---|---|
 | P0-1 | **Open — owner decision** | Key rotation strands every installed copy (and `allowBackup: false` means reinstalling loses the library). | — |
-| P0-2 | **Fixed (for store builds)** | `STORE_BUILD=1` (`app.config.js`) drops `REQUEST_INSTALL_PACKAGES` (blocked with `tools:node="remove"`) and turns the updater off (`extra.selfUpdate`, `src/lib/appUpdate.ts`). Sideloaded builds unchanged. | `test/storeBuild.test.ts`; `STORE_BUILD=1 expo prebuild` manifest checked locally; CI `android-release (store)` checks the merged release manifest |
+| P0-2 | **Out of scope — reverted** | Not publishing to stores. The `STORE_BUILD` switch was added, then removed at the owner's request; `app.config.js`, `app.json` and `src/lib/appUpdate.ts` are back as they were. | — |
 | P0-3 | **Fixed** | `ZipArchive.read`/`readZipData` refuse entries > 64 MB declared, streaming refuses > 512 MB or > declared + 1 MB (`src/engine/zip.ts`). Shown as a normal "damaged book" message. | `test/corrupt.test.ts` (4 GB claim, zip bomb, 450 random corruptions, zip-slip) |
 | P1-1 | **Fixed** | Failed annotation saves stay in memory, are retried on the next change and on background (`flushAnnotations`, `src/app/_layout.tsx`), one alert per failure streak. | `test/annotationsSave.test.ts` (incl. module reload = app restart) |
-| P1-2 | **Fixed (logic) — device NOT VERIFIED** | Page = `adjustable` with increment/decrement/next/previous/activate actions, page number as its value; neighbour pages hidden from screen readers (`src/reader/PageReader.tsx`). | `test/ui/a11y.test.tsx`. Real VoiceOver/TalkBack behaviour needs a device. |
+| P1-2 | **Won't do — reverted** | Added, then removed at the owner's request; `src/reader/PageReader.tsx` is back as it was. | — |
 | P1-3 | **Open — needs owner** | Recommend `@sentry/react-native` (Expo config plugin, EAS source maps). Needs a Sentry project/DSN and is a new dependency. | — |
 | P1-4 | **Open — proposed** | RTL needs per-paragraph direction, mirrored hit testing and page order; too large to do blind. | — |
-| P1-5 | **Fixed** | `.github/workflows/ci.yml`: every non-main push and PR runs tsc, lint, all tests, `expo export`, Android release (sideload APK + store AAB) and iOS Release (simulator, unsigned). Publishes nothing. | CI run on this branch |
-| P2-1 | **Fixed** | `ios.privacyManifests` (no tracking, no collected data, UserDefaults CA92.1, FileTimestamp C617.1, SystemBootTime 35F9.1) + `ITSAppUsesNonExemptEncryption: false`. | `test/storeBuild.test.ts`; `expo prebuild -p ios` output checked; App Store upload validation **NOT VERIFIED** |
-| P2-2 | **Fixed** | `Tap` defaults to `accessibilityRole="button"`. | `test/ui/a11y.test.tsx` |
+| P1-5 | **Fixed** | `.github/workflows/ci.yml`: every non-main push and PR runs tsc, lint, all tests, `expo export`, Android release APK and iOS Release (simulator, unsigned). Publishes nothing. | CI run on this branch |
+| P2-1 | **Out of scope — reverted** | Only needed for the App Store; removed with the store changes. | — |
+| P2-2 | **Won't do — reverted** | `src/ui/Tap.tsx` is back as it was. | — |
 | P2-3 | **Fixed (first run)** | First-run book text size = 19 × system font scale (19–40). | `test/settings.test.ts` |
 | P2-4 | **Fixed** | Han/Kana characters and CJK punctuation are separate selection tokens. | `test/selection.test.ts` |
 | P2-5 | **Fixed** | Damaged/missing chunks are skipped; search always finishes. | `test/searchDamaged.test.ts` (old code: hang + unhandled `SyntaxError`) |
 | P2-6 | **Fixed** | `sanitizeSettings`: type, range, enum and colour checks per field. | `test/settings.test.ts` |
-| P2-13 | **Fixed (JS level) — device NOT VERIFIED** | `test/ui/flow.test.tsx`: real library/storage/conversion/annotations/reader over an in-memory file system (`test/ui/memfs.ts`): picker import → conversion → 2 page turns → highlight → leave → background → all modules dropped ("kill") → relaunch → same page ("3 of 21") with the highlight drawn. Breaking position restore makes it fail (mutation-checked). Device flow: `.maestro/import-read-highlight-reopen.yaml` — **NOT VERIFIED** (no emulator here). | `npm test` |
+| P2-13 | **Fixed (JS level) — device NOT VERIFIED** | `test/ui/flow.test.tsx`: real library/storage/conversion/annotations/reader over an in-memory file system (`test/ui/memfs.ts`): picker import → conversion → 2 page turns (taps on the right edge) → highlight → leave → background → all modules dropped ("kill") → relaunch → same page ("3 of 21") with the highlight drawn. Breaking position restore makes it fail (mutation-checked). Device flow: `.maestro/import-read-highlight-reopen.yaml` — **NOT VERIFIED** (no emulator here). | `npm test` |
 | P2-14 | **Fixed** | See P0-3. | `test/corrupt.test.ts` |
 | P3-3 | **Fixed** | Failed-book "Remove" goes through `confirmRemoveBook`. | lint/typecheck; trivial |
 | P2-7…P2-12, P3-1, P3-2, P3-4…P3-8 | Open | Documented above; none blocks a sideload release. | — |
@@ -123,28 +123,28 @@ Every "Fixed" row has a test that **fails on the old code and passes on the new*
 |---|---|
 | `npx tsc --noEmit` | ✅ exit 0 |
 | `npx expo lint` | ✅ exit 0 |
-| vitest (`test/*.test.ts`) | ✅ 161/161 (was 143) |
-| jest (`test/ui/*.test.tsx`) | ✅ 83/83 (was 80) |
+| vitest (`test/*.test.ts`) | ✅ 158/158 (was 143) |
+| jest (`test/ui/*.test.tsx`) | ✅ 81/81 (was 80) |
 | `expo export` android + ios (Hermes bytecode) | ✅ locally |
-| `expo prebuild` android (store) + ios | ✅ locally; manifests inspected |
-| Android release build | ✅ CI run 40036428137 on `3515e12`: `assembleRelease` (signed sideload APK) and `STORE_BUILD=1 bundleRelease` (AAB, `BUILD SUCCESSFUL in 11m 16s`). Merged release manifest: `android:targetSdkVersion="36"`; store build has no `REQUEST_INSTALL_PACKAGES`. Play Console upload/pre-launch report **NOT VERIFIED**. |
-| iOS release build | ✅ same run, Xcode 26.6: `xcodebuild -configuration Release -sdk iphonesimulator` → `** BUILD SUCCEEDED **`; `PrivacyInfo.xcprivacy` present in the `.app` with the declared reasons. A **signed device archive / App Store Connect validation is NOT VERIFIED** (no signing identity). |
-| Device E2E, memory over 20 open/close cycles, cold start, page-turn FPS, screen readers on device, dark-mode flash | **NOT VERIFIED** — no device or emulator available in this environment (Android SDK download host is blocked; no macOS) |
+| Android release build | CI_ANDROID |
+| iOS release build | CI_IOS |
+| Device E2E, memory over 20 open/close cycles, cold start, page-turn FPS, dark-mode flash | **NOT VERIFIED** — no device or emulator available in this environment (Android SDK download host is blocked; no macOS) |
 
 ## 4. Verdict
 
-**Sideloaded Android APK (today's distribution): ship** — on one condition: the owner accepts P0-1 (public signing key) as a known risk, or decides to rotate it. Everything this pass changed is covered by tests that fail on the old code; CI builds both release flavours.
+The app is distributed as a sideloaded Android APK (plus the owner's own iPhone builds); it will not go to Google Play or the App Store, so store rules don't apply.
 
-**Google Play / App Store: don't ship yet.** The store-specific blockers that code can fix are fixed (P0-2 via `STORE_BUILD=1`, the iOS privacy manifest, target SDK 36). What's still missing: a signing key that isn't public (Play App Signing), crash reporting (P1-3), store listing disclosures for look-up/translate (P2-7), and at least one run on real devices (all the **NOT VERIFIED** rows).
+**Ship** — on one condition: the owner accepts P0-1 (public signing key) as a known risk, or decides to rotate it. Every fix kept in this pass is covered by a test that fails on the old code, and CI builds the Android release APK and an iOS Release build.
 
 ### Remaining risks, most serious first
 
 1. **P0-1 public signing key.** Anyone can make an APK that installs as an update and gets this app's data. This needs an owner decision.
 2. **No crash reporting (P1-3).** Production crashes stay invisible. Needs a Sentry (or similar) account.
-3. **Nothing has been run on a device.** Not checked: the screen-reader page turning, the Maestro flow, memory over 20 open/close cycles, cold start, page-turn smoothness, the dark-mode flash, and the Hermes timings for 1000+ books.
+3. **Nothing has been run on a device.** Not checked: the Maestro flow, memory over 20 open/close cycles, cold start, page-turn smoothness, the dark-mode flash, and the Hermes timings for 1000+ books.
 4. **RTL books (P1-4)** display and select incorrectly.
 5. **No backup or export of the library (P2-9).** Reinstalling or moving to a new phone loses books, highlights and notes.
 6. **The Google Translate endpoint is unofficial (P2-7)** and can stop working at any time.
 7. **Storage format has no schema version (P2-10).** A future change to how books are converted can shift highlights to the wrong place in existing books.
 8. **iOS can't receive books from other apps (P2-11).** Only the Add button works.
 9. **`npm audit` reports 5 high issues (P2-8).** All are in build tooling, not in the app; they go away with the next Expo 58 patch.
+10. **Screen-reader users can't turn pages in page mode (P1-2)** — left as is by the owner's choice; scroll mode works with screen readers.

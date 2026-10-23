@@ -1,5 +1,5 @@
 # Checks every push and pull request, and proves the app still builds for
-# release on both platforms. Publishes nothing: releases come only from
+# release on Android and iPhone. Publishes nothing: releases come only from
 # android-apk.yml on main.
 name: CI
 
@@ -40,11 +40,6 @@ jobs:
     needs: checks
     runs-on: ubuntu-latest
     timeout-minutes: 60
-    strategy:
-      fail-fast: false
-      matrix:
-        # The sideloaded APK (self-updating) and a Play Store bundle.
-        flavor: [sideload, store]
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-node@v5
@@ -58,8 +53,6 @@ jobs:
       - uses: gradle/actions/setup-gradle@v5
       - run: npm ci
       - name: Generate the native Android project
-        env:
-          STORE_BUILD: ${{ matrix.flavor == 'store' && '1' || '' }}
         run: |
           npx expo prebuild --platform android --no-install --clean
           sed -i 's/^org\.gradle\.jvmargs=.*/org.gradle.jvmargs=-Xmx4g -XX:MaxMetaspaceSize=1g/' android/gradle.properties
@@ -73,24 +66,13 @@ jobs:
             sleep 15
           done
           exit 1
-      - name: Build release
+      - name: Build release APK
         working-directory: android
-        env:
-          STORE_BUILD: ${{ matrix.flavor == 'store' && '1' || '' }}
-        run: ./gradlew ${{ matrix.flavor == 'store' && 'bundleRelease' || 'assembleRelease' }} --no-daemon -PreactNativeArchitectures=armeabi-v7a,arm64-v8a
-      - name: Merged manifest checks (target SDK; no self-install permission in store builds)
-        run: |
-          MERGED=$(find android/app/build/intermediates -name AndroidManifest.xml -path '*release*' | grep -i merged | head -1)
-          echo "$MERGED"
-          grep -o 'android:targetSdkVersion="[0-9]*"' "$MERGED"
-          grep -q 'android:targetSdkVersion="3[6-9]"' "$MERGED"
-          if [ "${{ matrix.flavor }}" = store ]; then ! grep -q 'REQUEST_INSTALL_PACKAGES' "$MERGED"; fi
+        run: ./gradlew assembleRelease --no-daemon -PreactNativeArchitectures=armeabi-v7a,arm64-v8a
       - uses: actions/upload-artifact@v4
         with:
-          name: android-${{ matrix.flavor }}
-          path: |
-            android/app/build/outputs/apk/release/*.apk
-            android/app/build/outputs/bundle/release/*.aab
+          name: android-apk
+          path: android/app/build/outputs/apk/release/*.apk
           retention-days: 7
 
   ios-release:
@@ -116,8 +98,3 @@ jobs:
           SCHEME=$(basename "$WS" .xcworkspace)
           xcodebuild -workspace "$WS" -scheme "$SCHEME" -configuration Release -sdk iphonesimulator \
             -destination 'generic/platform=iOS Simulator' CODE_SIGNING_ALLOWED=NO build | tail -n 80
-      - name: Privacy manifest is in the app
-        run: |
-          APP=$(find ~/Library/Developer/Xcode/DerivedData -path '*Release-iphonesimulator/*.app' -maxdepth 6 -type d | head -1)
-          echo "$APP"
-          plutil -p "$APP/PrivacyInfo.xcprivacy"

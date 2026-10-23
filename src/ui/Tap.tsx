@@ -26,8 +26,6 @@ export function Tap({ style, feedback = 'scale', haptic, onPressIn, onPressOut, 
   const base = Number(StyleSheet.flatten(style)?.opacity ?? 1);
   return (
     <AnimatedPressable
-      // Announced as a button unless the caller says otherwise (tab, switch...).
-      accessibilityRole="button"
       {...rest}
       onPressIn={(e: GestureResponderEvent) => {
         to(1);

@@ -77,29 +77,26 @@ it('import → read → highlight → app killed → reopened on the same page w
   expect(a.library.getBook(id)?.title).toBe('The Sea');
 
   let view = await a.render(<a.Reader />);
-  const page = () =>
-    (view.container.queryAll((n: El) => n.props.accessibilityRole === 'adjustable') as El[]).find((n) => {
-      for (let p = n.parent; p; p = p.parent) if (p.props.accessibilityElementsHidden) return false;
-      return true;
-    })!;
+  // Paragraph boxes on the pages (the current one and its neighbours). A tap on
+  // any of them reaches the reader's page, like a finger on the text.
+  const items = () => view.container.queryAll((n: El) => typeof n.props.onLayout === 'function' && n.props.children?.props?.block) as El[];
   await a.waitFor(() => expect(view.getByText(/^1 of \d+ · /)).toBeTruthy(), { timeout: 9000 });
+  // Tap the right edge to turn the page, twice.
   for (const n of [2, 3]) {
-    await a.fireEvent(page() as never, 'accessibilityAction', { nativeEvent: { actionName: 'increment' } });
+    await a.fireEvent.press(items()[0] as never, { nativeEvent: { pageX: a.W - 5, pageY: 300 } });
     await a.waitFor(() => expect(view.getByText(new RegExp(`^${n} of \\d+ · `))).toBeTruthy(), { timeout: 8000 });
   }
   const footer = view.getByText(/^3 of \d+ · /).props.children as string;
   const pageNo = footer.split(' · ')[0];
 
   // Highlight tool: tap a word on this page, pick a colour.
-  await a.fireEvent.press(page() as never, { nativeEvent: { pageX: a.W / 2, pageY: 300 } });
+  await a.fireEvent.press(items()[0] as never, { nativeEvent: { pageX: a.W / 2, pageY: 300 } });
   await a.fireEvent.press(view.getByLabelText('Highlight'));
-  // The test renderer has no layout: give the current page's items boxes 60 points high.
-  const cur = page();
-  const items = view.container.queryAll(
-    (n: El) => typeof n.props.onLayout === 'function' && n.props.children?.props?.block && isInside(n, cur),
-  ) as El[];
-  expect(items.length).toBeGreaterThan(0);
-  for (const [i, v] of items.entries()) await a.fireEvent(v as never, 'layout', { nativeEvent: { layout: { x: 0, y: i * 60, width: a.W, height: 60 } } });
+  // The test renderer has no layout: give the items of each page boxes 60 points high.
+  const byPage = new Map<El | null, El[]>();
+  for (const v of items()) byPage.set(v.parent, [...(byPage.get(v.parent) ?? []), v]);
+  for (const list of byPage.values())
+    for (const [i, v] of list.entries()) await a.fireEvent(v as never, 'layout', { nativeEvent: { layout: { x: 0, y: i * 60, width: a.W, height: 60 } } });
   const layer = view.getByTestId('select-layer');
   const ev = { nativeEvent: { pageX: a.W * 0.5, pageY: 10 } };
   await a.fireEvent(layer, 'responderGrant', ev);
@@ -136,8 +133,3 @@ it('import → read → highlight → app killed → reopened on the same page w
   expect(drawn.length).toBeGreaterThan(0);
   await view.unmount();
 }, 90000);
-
-function isInside(n: El, ancestor: El) {
-  for (let p: El | null = n; p; p = p.parent) if (p === ancestor) return true;
-  return false;
-}
