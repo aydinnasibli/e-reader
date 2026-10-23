@@ -90,3 +90,43 @@ anything not proven on a device is marked **NOT VERIFIED**).
 - **IAP**: nothing is sold → no IAP rules apply.
 - **TypeScript strict** on (`tsconfig.json:4`), lint clean.
 - **Dark mode**: splash has a dark variant; screens and the reader paint their theme background on first render. A visual "no white flash" check needs a device → **NOT VERIFIED**.
+
+## 3. Status after this pass
+
+Branch `claude/focused-newton-cah1gy`. Nothing was merged or pushed to `main` (that would publish an APK to installed apps).
+Every "Fixed" row has a test that **fails on the old code and passes on the new** (checked by stashing the fix and re-running).
+
+| # | Status | Change | Proof |
+|---|---|---|---|
+| P0-1 | **Open — owner decision** | Key rotation strands every installed copy (and `allowBackup: false` means reinstalling loses the library). | — |
+| P0-2 | **Fixed (for store builds)** | `STORE_BUILD=1` (`app.config.js`) drops `REQUEST_INSTALL_PACKAGES` (blocked with `tools:node="remove"`) and turns the updater off (`extra.selfUpdate`, `src/lib/appUpdate.ts`). Sideloaded builds unchanged. | `test/storeBuild.test.ts`; `STORE_BUILD=1 expo prebuild` manifest checked locally; CI `android-release (store)` checks the merged release manifest |
+| P0-3 | **Fixed** | `ZipArchive.read`/`readZipData` refuse entries > 64 MB declared, streaming refuses > 512 MB or > declared + 1 MB (`src/engine/zip.ts`). Shown as a normal "damaged book" message. | `test/corrupt.test.ts` (4 GB claim, zip bomb, 450 random corruptions, zip-slip) |
+| P1-1 | **Fixed** | Failed annotation saves stay in memory, are retried on the next change and on background (`flushAnnotations`, `src/app/_layout.tsx`), one alert per failure streak. | `test/annotationsSave.test.ts` (incl. module reload = app restart) |
+| P1-2 | **Fixed (logic) — device NOT VERIFIED** | Page = `adjustable` with increment/decrement/next/previous/activate actions, page number as its value; neighbour pages hidden from screen readers (`src/reader/PageReader.tsx`). | `test/ui/a11y.test.tsx`. Real VoiceOver/TalkBack behaviour needs a device. |
+| P1-3 | **Open — needs owner** | Recommend `@sentry/react-native` (Expo config plugin, EAS source maps). Needs a Sentry project/DSN and is a new dependency. | — |
+| P1-4 | **Open — proposed** | RTL needs per-paragraph direction, mirrored hit testing and page order; too large to do blind. | — |
+| P1-5 | **Fixed — see CI result below** | `.github/workflows/ci.yml`: every non-main push and PR runs tsc, lint, all tests, `expo export`, Android release (sideload APK + store AAB) and iOS Release (simulator, unsigned). Publishes nothing. | CI run on this branch |
+| P2-1 | **Fixed** | `ios.privacyManifests` (no tracking, no collected data, UserDefaults CA92.1, FileTimestamp C617.1, SystemBootTime 35F9.1) + `ITSAppUsesNonExemptEncryption: false`. | `test/storeBuild.test.ts`; `expo prebuild -p ios` output checked; App Store upload validation **NOT VERIFIED** |
+| P2-2 | **Fixed** | `Tap` defaults to `accessibilityRole="button"`. | `test/ui/a11y.test.tsx` |
+| P2-3 | **Fixed (first run)** | First-run book text size = 19 × system font scale (19–40). | `test/settings.test.ts` |
+| P2-4 | **Fixed** | Han/Kana characters and CJK punctuation are separate selection tokens. | `test/selection.test.ts` |
+| P2-5 | **Fixed** | Damaged/missing chunks are skipped; search always finishes. | `test/searchDamaged.test.ts` (old code: hang + unhandled `SyntaxError`) |
+| P2-6 | **Fixed** | `sanitizeSettings`: type, range, enum and colour checks per field. | `test/settings.test.ts` |
+| P2-13 | **Fixed (JS level) — device NOT VERIFIED** | `test/ui/flow.test.tsx`: real library/storage/conversion/annotations/reader over an in-memory file system (`test/ui/memfs.ts`): picker import → conversion → 2 page turns → highlight → leave → background → all modules dropped ("kill") → relaunch → same page ("3 of 21") with the highlight drawn. Breaking position restore makes it fail (mutation-checked). Device flow: `.maestro/import-read-highlight-reopen.yaml` — **NOT VERIFIED** (no emulator here). | `npm test` |
+| P2-14 | **Fixed** | See P0-3. | `test/corrupt.test.ts` |
+| P3-3 | **Fixed** | Failed-book "Remove" goes through `confirmRemoveBook`. | lint/typecheck; trivial |
+| P2-7…P2-12, P3-1, P3-2, P3-4…P3-8 | Open | Documented above; none blocks a sideload release. | — |
+
+### Verification evidence (this pass)
+
+| Check | Result |
+|---|---|
+| `npx tsc --noEmit` | ✅ exit 0 |
+| `npx expo lint` | ✅ exit 0 |
+| vitest (`test/*.test.ts`) | ✅ 161/161 (was 143) |
+| jest (`test/ui/*.test.tsx`) | ✅ 83/83 (was 80) |
+| `expo export` android + ios (Hermes bytecode) | ✅ locally |
+| `expo prebuild` android (store) + ios | ✅ locally; manifests inspected |
+| Android release build | CI_ANDROID |
+| iOS release build | CI_IOS |
+| Device E2E, memory over 20 open/close cycles, cold start, page-turn FPS, screen readers on device, dark-mode flash | **NOT VERIFIED** — no device or emulator available in this environment (Android SDK download host is blocked; no macOS) |
