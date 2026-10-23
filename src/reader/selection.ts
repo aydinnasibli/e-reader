@@ -87,3 +87,35 @@ export function dragRanges(a: TextPoint, z: TextPoint, textOf: (b: number) => st
   }
   return out;
 }
+
+/**
+ * Text selected on the page: its first and last character (inclusive), in
+ * reading order, possibly in different paragraphs. Always whole words.
+ */
+export interface TextSel {
+  a: TextPoint;
+  z: TextPoint;
+}
+
+type TextOf = (b: number) => string | null;
+
+/** The selection between two points (either order), widened to whole words; null if only spaces. */
+export function selectBetween(p: TextPoint, q: TextPoint, textOf: TextOf): TextSel | null {
+  const r = dragRanges(p, q, textOf);
+  if (!r.length) return null;
+  const first = r[0];
+  const last = r[r.length - 1];
+  return { a: { b: first.b, o: first.s }, z: { b: last.b, o: last.e - 1 } };
+}
+
+/** The ranges a selection covers, one per paragraph. */
+export function selectionRanges(sel: TextSel, textOf: TextOf): { b: number; s: number; e: number }[] {
+  return dragRanges(sel.a, sel.z, textOf);
+}
+
+/** The selected text, paragraphs on separate lines. */
+export function selectionText(sel: TextSel, textOf: TextOf): string {
+  return selectionRanges(sel, textOf)
+    .map((r) => textOf(r.b)!.slice(r.s, r.e))
+    .join('\n');
+}

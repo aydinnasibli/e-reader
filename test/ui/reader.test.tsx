@@ -1,9 +1,10 @@
 /// <reference types="jest" />
 // The real reader screen, with a small converted book, driven like a finger
 // would: tap to show the menu, open Display, drag the size slider, long-press
-// a word and highlight it.
+// a word to select it, and highlight with the highlight tool.
 
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react-native';
+import * as Clipboard from 'expo-clipboard';
 import { BackHandler, Dimensions } from 'react-native';
 import type { Block, Manifest } from '@/engine/types';
 import { getAnnotations } from '@/lib/annotations';
@@ -84,85 +85,105 @@ it('size slider: the page text follows the slider live, then the pages are laid 
   await waitFor(() => expect(shown(P1).map(sizeOf)).toEqual([33]), { timeout: 9000 });
 }, 30000);
 
-it('long-pressing a word selects that word, and highlighting marks just it', async () => {
-  await openBook();
-  // Give the page items their on-screen boxes (the test renderer has no layout).
+/** Page items get their on-screen boxes: heading 0–60, P1 60–120, P2 120–180 (the test renderer has no layout). */
+async function layOut() {
   for (const view of screen.container.queryAll((n) => typeof n.props.onLayout === 'function' && n.props.children?.props?.block)) {
-    await fireEvent(view, 'layout', { nativeEvent: { layout: { x: 0, y: view.props.children.props.block.k === 'h' ? 0 : 60, width: W, height: 60 } } });
+    const block = view.props.children.props.block as Block;
+    const y = block.k === 'h' ? 0 : block.r?.[0] === P1 ? 60 : 120;
+    await fireEvent(view, 'layout', { nativeEvent: { layout: { x: 0, y, width: W, height: 60 } } });
   }
-  // Long-press near the start of the first line of P1 (the page starts below the header).
-  const p1 = shown(P1)[0];
-  await fireEvent(p1, 'longPress', { nativeEvent: { pageX: 20 + 8, pageY: 70 } });
-  await waitFor(() => expect(screen.getByText(/Tap words to extend/)).toBeTruthy());
-  await fireEvent.press(screen.getByLabelText('Highlight green'));
-  const hs = getAnnotations('moby').highlights;
-  expect(hs).toHaveLength(1);
-  expect(hs[0]).toMatchObject({ b: 1, text: 'Call', color: 'green' });
+}
+/** Text drawn with a background (highlighted or selected) starting with `start`. */
+const marked = (start: string) =>
+  screen.container
+    .queryAll((n) => typeof n.props.children === 'string' && n.props.children.startsWith(start))
+    .some((n) => [n.props.style].flat().some((st: { backgroundColor?: string } | null) => st?.backgroundColor));
+
+it('touch and hold selects the word with handles at both ends, and a menu to copy, look up, translate or share it', async () => {
+  const copy = jest.spyOn(Clipboard, 'setStringAsync');
+  await openBook();
+  await layOut();
+  // Near the start of the first line of P1 (the page starts below the header).
+  await fireEvent(shown(P1)[0], 'longPress', { nativeEvent: { pageX: 20 + 8, pageY: 70 } });
+  expect(screen.getByTestId('selection-handle-start')).toBeTruthy();
+  expect(screen.getByTestId('selection-handle-end')).toBeTruthy();
+  expect(marked('Call')).toBe(true);
+  for (const label of ['Copy', 'Look up', 'Translate', 'Share']) expect(screen.getByLabelText(label)).toBeTruthy();
+  // No highlighting here: that's the highlight tool's.
+  expect(screen.queryByLabelText(/Highlight colour/)).toBeNull();
+  await fireEvent.press(screen.getByLabelText('Copy'));
+  expect(copy).toHaveBeenCalledWith('Call');
+  expect(screen.queryByTestId('selection-handle-start')).toBeNull();
+  expect(getAnnotations('moby').highlights.filter((h) => h.text === 'Call')).toEqual([]);
+}, 30000);
+
+it('a tap off the selection ends it', async () => {
+  await openBook();
+  await layOut();
+  await fireEvent(shown(P1)[0], 'longPress', { nativeEvent: { pageX: 28, pageY: 70 } });
+  const layer = screen.getByTestId('select-layer');
+  await fireEvent(layer, 'responderGrant', { nativeEvent: { pageX: W / 2, pageY: 600 } });
+  await fireEvent(layer, 'responderRelease', { nativeEvent: { pageX: W / 2, pageY: 600 } });
+  expect(screen.queryByLabelText('Copy')).toBeNull();
+  expect(screen.queryByTestId('select-layer')).toBeNull(); // pages turn again
 }, 30000);
 
 describe('highlight tool', () => {
-  /** Page items get their on-screen boxes: heading 0–60, P1 60–120, P2 120–180. */
-  const layOut = async () => {
-    for (const view of screen.container.queryAll((n) => typeof n.props.onLayout === 'function' && n.props.children?.props?.block)) {
-      const block = view.props.children.props.block as Block;
-      const y = block.k === 'h' ? 0 : block.r?.[0] === P1 ? 60 : 120;
-      await fireEvent(view, 'layout', { nativeEvent: { layout: { x: 0, y, width: W, height: 60 } } });
-    }
-  };
   const ev = (pageX: number, pageY: number) => ({ nativeEvent: { pageX, pageY } });
   // Highlights persist across tests in this file: compare against what was there before.
   const all = () => getAnnotations('moby').highlights.map((h) => [h.b, h.text, h.color]);
   let before: unknown[] = [];
   const highlights = () => all().filter((h) => !before.some((x) => JSON.stringify(x) === JSON.stringify(h)));
   beforeEach(() => (before = all()));
-
-  it('Highlight in the bottom menu, then drag over text: highlighted live, saved on release', async () => {
+  const openTool = async () => {
     await openBook();
     await fireEvent.press(shown(P1)[0], { nativeEvent: { pageX: W / 2, pageY: 300 } });
     await fireEvent.press(screen.getByLabelText('Highlight'));
-    expect(screen.getByText('Drag over text')).toBeTruthy();
-    await fireEvent.press(screen.getByLabelText('Highlight colour green'));
     await layOut();
-    const layer = screen.getByTestId('highlight-layer');
+    return screen.getByTestId('select-layer');
+  };
 
+  it('Highlight in the bottom menu: drag over text to select it, then a colour highlights it', async () => {
+    const layer = await openTool();
+    expect(screen.getByText(/Drag over text, or tap a word/)).toBeTruthy();
     // From the first word of P1 to the first word of P2.
     await fireEvent(layer, 'responderGrant', ev(22, 65));
     await fireEvent(layer, 'responderMove', ev(60, 100));
     await fireEvent(layer, 'responderMove', ev(22, 125));
-    // While dragging, P1 is drawn with the highlight colour behind it.
-    const live = screen.container.queryAll((n) => n.props.children === 'Call' || (typeof n.props.children === 'string' && n.props.children.startsWith('Call me')));
-    expect(live.some((n) => [n.props.style].flat().some((st: { backgroundColor?: string } | null) => st?.backgroundColor))).toBe(true);
-    expect(highlights()).toEqual([]); // nothing saved until the finger lifts
-
     await fireEvent(layer, 'responderRelease', ev(22, 125));
+    // Selected, with handles and what can be done with it; nothing highlighted yet.
+    expect(marked('Call')).toBe(true);
+    expect(screen.getByTestId('selection-handle-end')).toBeTruthy();
+    for (const label of ['Note', 'Copy']) expect(screen.getByLabelText(label)).toBeTruthy();
+    expect(highlights()).toEqual([]);
+
+    await fireEvent.press(screen.getByLabelText('Highlight colour green'));
     expect(highlights()).toEqual([
       [1, P1, 'green'],
       [2, 'It', 'green'],
     ]);
   }, 30000);
 
-  it('a tap on a word highlights it; a tap on a highlight opens it; Done turns the tool off', async () => {
-    await openBook();
-    await fireEvent.press(shown(P1)[0], { nativeEvent: { pageX: W / 2, pageY: 300 } });
-    await fireEvent.press(screen.getByLabelText('Highlight'));
-    await layOut();
-    const layer = screen.getByTestId('highlight-layer');
+  it('a tap selects a word, a tap on a highlight selects it whole; Remove and Done', async () => {
+    const layer = await openTool();
     // A word on P2's first line (the outer 12% of the screen still turns pages).
     const x = W * 0.7;
     await fireEvent(layer, 'responderGrant', ev(x, 125));
     await fireEvent(layer, 'responderRelease', ev(x, 125));
+    await fireEvent.press(screen.getByLabelText('Highlight colour blue'));
     const added = highlights();
     expect(added).toHaveLength(1);
     expect(String(added[0][1]).split(' ')).toHaveLength(1); // one word
-    expect(added[0][2]).toBe('green'); // the colour picked last time is remembered
+    expect(added[0][2]).toBe('blue');
 
-    // Tapping it again (now a highlight) opens the selection sheet for it.
+    // Tapping the highlight selects it; Remove takes it away.
     await fireEvent(layer, 'responderGrant', ev(x, 125));
     await fireEvent(layer, 'responderRelease', ev(x, 125));
-    await waitFor(() => expect(screen.getByText(/Tap words to extend/)).toBeTruthy());
+    await fireEvent.press(screen.getByLabelText('Remove'));
+    expect(highlights()).toEqual([]);
 
     await fireEvent.press(screen.getByLabelText('Done highlighting'));
-    expect(screen.queryByTestId('highlight-layer')).toBeNull();
+    expect(screen.queryByTestId('select-layer')).toBeNull();
   }, 30000);
 });
 
@@ -191,9 +212,10 @@ describe('page numbers, back after a jump, auto page turn', () => {
   it('the footer shows the page number; the top shows the battery with its symbol', async () => {
     await openBook();
     await waitFor(() => expect(screen.getByText(/^1 of 1 · /)).toBeTruthy(), { timeout: 3000 });
-    const battery = await screen.findByLabelText('Battery 82%');
-    expect(screen.getByText('battery-full')).toBeTruthy(); // the icon (drawn as its name in tests)
-    expect(battery).toBeTruthy();
+    expect(await screen.findByLabelText('Battery 82%')).toBeTruthy();
+    // The battery symbol is filled to the level.
+    const fills = screen.getByTestId('battery-glyph').queryAll((n) => [n.props.style].flat().some((st: { width?: unknown } | null) => st?.width === '82%'));
+    expect(fills.length).toBeGreaterThan(0);
   }, 30000);
 
   it('after jumping from the contents, a chip goes back to where you were', async () => {
@@ -267,13 +289,23 @@ describe('Android back button', () => {
     expect(await press()).toBe(false);
   }, 30000);
 
+  it('ends a selection first', async () => {
+    await openBook();
+    await layOut();
+    await fireEvent(shown(P1)[0], 'longPress', { nativeEvent: { pageX: 28, pageY: 70 } });
+    expect(screen.getByLabelText('Copy')).toBeTruthy();
+    expect(await press()).toBe(true);
+    expect(screen.queryByLabelText('Copy')).toBeNull();
+    expect(await press()).toBe(false);
+  }, 30000);
+
   it('turns the highlight tool off, and stops auto page turn', async () => {
     await openBook();
     await fireEvent.press(shown(P1)[0], { nativeEvent: { pageX: W / 2, pageY: 300 } });
     await fireEvent.press(screen.getByLabelText('Highlight'));
-    expect(screen.getByTestId('highlight-layer')).toBeTruthy();
+    expect(screen.getByTestId('select-layer')).toBeTruthy();
     expect(await press()).toBe(true);
-    expect(screen.queryByTestId('highlight-layer')).toBeNull();
+    expect(screen.queryByTestId('select-layer')).toBeNull();
     await fireEvent.press(shown(P1)[0], { nativeEvent: { pageX: W / 2, pageY: 300 } });
     await fireEvent.press(screen.getByLabelText('Auto page turn'));
     expect(screen.getByText(/\d+ wpm/)).toBeTruthy();

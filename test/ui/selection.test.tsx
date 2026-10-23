@@ -1,93 +1,120 @@
 /// <reference types="jest" />
-import { act, fireEvent, render, screen } from '@testing-library/react-native';
-import type { Block } from '@/engine/types';
-import { getAnnotations } from '@/lib/annotations';
+// Text selected on the page and what can be done with it (see useSelection),
+// and definitions and translations shown in the app.
+
+import { act, fireEvent, render, renderHook, screen } from '@testing-library/react-native';
+import * as Clipboard from 'expo-clipboard';
+import { useState } from 'react';
+import { Alert, Share } from 'react-native';
+import { addHighlight, getAnnotations } from '@/lib/annotations';
 import { THEMES } from '@/lib/settings';
-import { SelectionSheet } from '@/reader/SelectionSheet';
+import type { LookupKind } from '@/reader/LookupCard';
+import { LookupSheet } from '@/reader/LookupSheet';
+import { selectionText } from '@/reader/selection';
+import { useSelection } from '@/reader/useSelection';
+import * as dialogs from '@/ui/dialogs';
 
 const TEXT = 'The quick brown fox jumps over the lazy dog';
-const block: Block = { k: 'p', r: [TEXT] };
 const theme = THEMES.light;
-const SELECTED = theme.accent + '55';
-
-const at = (word: string) => TEXT.indexOf(word) + 1;
+const textOf = (b: number) => (b === 0 ? TEXT : null);
+const at = (word: string) => ({ b: 0, o: TEXT.indexOf(word) + 1 });
 const highlights = (book: string) => getAnnotations(book).highlights.map((h) => [h.text, h.color]);
 
-async function open(book: string, pressed?: string) {
-  const onClose = jest.fn();
-  const target = { b: 0, block, at: pressed ? at(pressed) : undefined };
-  const utils = await render(<SelectionSheet bookId={book} bookTitle="Book" target={target} theme={theme} onClose={onClose} />);
-  return { ...utils, onClose };
+/** The selection hook for a one-paragraph book. */
+async function selecting(book: string) {
+  const hook = await renderHook(() => useSelection({ bookId: book, bookTitle: 'Book', textOf, chapterOf: () => undefined, color: 'yellow' }));
+  const run = (f: (s: typeof hook.result.current) => void) => act(async () => f(hook.result.current));
+  return { get: () => hook.result.current, run };
 }
 
-const bg = (word: string) => {
-  const style = [screen.getByText(word).props.style].flat();
-  return style.find((s) => s && 'backgroundColor' in s)?.backgroundColor;
-};
-
-describe('selection sheet', () => {
-  it('opens with the long-pressed word selected, and highlights only that word', async () => {
-    const { onClose } = await open('b1', 'fox');
-    expect(bg('fox')).toBe(SELECTED);
-    expect(bg('quick')).toBeUndefined();
-    await fireEvent.press(screen.getByLabelText('Highlight yellow'));
-    expect(highlights('b1')).toEqual([['fox', 'yellow']]);
-    expect(onClose).toHaveBeenCalled();
+describe('selected text', () => {
+  it('a long press selects the word; a colour highlights just it', async () => {
+    const { get, run } = await selecting('s1');
+    await run((s) => s.selectAt(at('fox'), false));
+    expect(selectionText(get().sel!, textOf)).toBe('fox');
+    await run((s) => s.highlight('green'));
+    expect(highlights('s1')).toEqual([['fox', 'green']]);
+    expect(get().sel).toBeNull(); // done with it
   });
 
-  it('extends the selection by tapping another word, and starts over by tapping inside it', async () => {
-    await open('b2', 'fox');
-    await fireEvent.press(screen.getByText('over'));
-    for (const w of ['fox', 'jumps', 'over']) expect(bg(w)).toBe(SELECTED);
-    await fireEvent.press(screen.getByText('jumps'));
-    expect(bg('jumps')).toBe(SELECTED);
-    expect(bg('fox')).toBeUndefined();
-    await fireEvent.press(screen.getByLabelText('Highlight green'));
-    expect(highlights('b2')).toEqual([['jumps', 'green']]);
-  });
-
-  it('a single word can be highlighted inside an already highlighted paragraph', async () => {
-    // First the whole paragraph in yellow...
-    const first = await open('b3');
-    await fireEvent.press(screen.getByLabelText('Highlight yellow'));
-    expect(highlights('b3')).toEqual([[TEXT, 'yellow']]);
-    await first.unmount();
-    // ...then long-press "fox" and make just that word blue.
-    await open('b3', 'fox');
-    expect(bg('fox')).toBe(SELECTED);
-    await fireEvent.press(screen.getByLabelText('Highlight blue'));
-    expect(highlights('b3')).toEqual([
-      ['The quick brown ', 'yellow'],
+  it('a word inside a highlighted paragraph can get its own colour', async () => {
+    addHighlight('s2', { b: 0, s: 0, e: TEXT.length, color: 'yellow', text: TEXT });
+    const { run } = await selecting('s2');
+    await run((s) => s.selectAt(at('fox'), false));
+    await run((s) => s.highlight('blue'));
+    expect(highlights('s2')).toEqual([
+      ['The quick brown', 'yellow'],
       ['fox', 'blue'],
-      [' jumps over the lazy dog', 'yellow'],
+      ['jumps over the lazy dog', 'yellow'],
     ]);
   });
 
-  it('"Remove" clears only the selected words', async () => {
-    const first = await open('b4');
-    await fireEvent.press(screen.getByLabelText('Highlight pink'));
-    await first.unmount();
-    await open('b4', 'lazy');
-    await fireEvent.press(screen.getByLabelText('Remove highlight'));
-    expect(highlights('b4')).toEqual([
-      ['The quick brown fox jumps over the ', 'pink'],
-      [' dog', 'pink'],
-    ]);
+  it('with the highlight tool, tapping a highlight selects all of it; a colour changes it', async () => {
+    addHighlight('s3', { b: 0, s: 4, e: 15, color: 'yellow', text: 'quick brown' });
+    const { get, run } = await selecting('s3');
+    await run((s) => s.selectAt(at('brown'), true));
+    expect(selectionText(get().sel!, textOf)).toBe('quick brown');
+    expect(get().exact).toBeTruthy();
+    await run((s) => s.highlight('pink'));
+    expect(highlights('s3')).toEqual([['quick brown', 'pink']]);
   });
 
-  it('"Select highlight" and "Whole paragraph" change the selection', async () => {
-    const first = await open('b5', 'brown');
-    await fireEvent.press(screen.getByText('fox'));
-    await fireEvent.press(screen.getByLabelText('Highlight yellow')); // "brown fox"
-    await first.unmount();
-    await open('b5', 'fox');
-    await act(() => fireEvent.press(screen.getByText('Select highlight')));
-    expect(bg('brown')).toBe(SELECTED);
-    await fireEvent.press(screen.getByText('Whole paragraph'));
-    expect(bg('The')).toBeUndefined(); // whole paragraph: no word marked
-    expect(screen.getByText(/Whole paragraph selected/)).toBeTruthy();
+  it('Remove clears only the selected words; a note goes only with its whole highlight, after asking', async () => {
+    const alert = jest.spyOn(Alert, 'alert').mockImplementation(() => {});
+    addHighlight('s4', { b: 0, s: 0, e: TEXT.length, color: 'pink', text: TEXT, note: 'Aesop?' });
+    const { run } = await selecting('s4');
+    await run((s) => s.selectAt(at('lazy'), false));
+    await run((s) => s.remove());
+    expect(alert).not.toHaveBeenCalled(); // trimmed, the note stays with what's left
+    expect(highlights('s4')).toEqual([
+      ['The quick brown fox jumps over the', 'pink'],
+      ['dog', 'pink'],
+    ]);
+    // The part with the note, whole: asks first.
+    await run((s) => s.selectAt(at('quick'), true));
+    await run((s) => s.remove());
+    expect(alert.mock.calls[0][0]).toBe('Delete highlight and its note?');
+    expect(getAnnotations('s4').highlights).toHaveLength(2);
+    alert.mockRestore();
+  });
+
+  it('a note on new text highlights it with the note', async () => {
+    const prompt = jest.spyOn(dialogs, 'showPrompt').mockImplementation((_t, o) => o.onSubmit('Remember this'));
+    const { run } = await selecting('s5');
+    await run((s) => s.selectAt(at('fox'), false));
+    await run((s) => s.note());
+    expect(getAnnotations('s5').highlights).toMatchObject([{ text: 'fox', color: 'yellow', note: 'Remember this' }]);
+    prompt.mockRestore();
+  });
+
+  it('copy and share take the selected text', async () => {
+    const share = jest.spyOn(Share, 'share').mockResolvedValue({ action: 'sharedAction', activityType: undefined });
+    const copy = jest.spyOn(Clipboard, 'setStringAsync');
+    const { get, run } = await selecting('s6');
+    await run((s) => s.selectAt(at('fox'), false));
+    await run((s) => s.copy());
+    expect(copy).toHaveBeenCalledWith('fox');
+    await run((s) => s.selectAt(at('dog'), false));
+    await run((s) => s.share());
+    expect(share).toHaveBeenCalledWith({ message: '“dog”\n— Book' });
+    expect(get().sel).toBeNull();
+  });
+
+  it('look up and translate show the selected text in the app', async () => {
+    const { get, run } = await selecting('s7');
+    await run((s) => s.selectAt(at('fox'), false));
+    expect(get().oneWord).toBe(true);
+    await run((s) => s.show('translate'));
+    expect(get().lookup).toEqual({ kind: 'translate', text: 'fox' });
   });
 });
+
+/** The look-up sheet as the reader shows it: the kind can be switched, Close closes it. */
+function LookupHarness({ kind, text }: { kind: LookupKind; text: string }) {
+  const [lookup, setLookup] = useState<{ kind: LookupKind; text: string } | null>({ kind, text });
+  return <LookupSheet lookup={lookup} theme={theme} onChange={setLookup} />;
+}
+const open = (kind: LookupKind, text: string) => render(<LookupHarness kind={kind} text={text} />);
 
 describe('look up and translate stay in the app', () => {
   const json = (body: unknown, status = 200) => Promise.resolve({ ok: status < 400, status, text: () => Promise.resolve(JSON.stringify(body)) });
@@ -103,22 +130,19 @@ describe('look up and translate stay in the app', () => {
         ? json({ en: [{ partOfSpeech: 'Noun', language: 'English', definitions: [{ definition: 'A wild <a href="/wiki/dog">dog</a>-like animal.' }] }] })
         : json(null, 500),
     );
-    await open('c1', 'fox');
-    await fireEvent.press(screen.getByLabelText('Look up'));
+    await open('define', 'fox');
     expect(await screen.findByText('A wild dog-like animal.')).toBeTruthy();
     expect(screen.getByText('Dictionary')).toBeTruthy();
     expect(fetchMock.mock.calls[0][0]).toContain('/page/definition/fox');
-    // Back to the selection, still selected.
-    await fireEvent.press(screen.getByLabelText('Back to selection'));
-    expect(bg('fox')).toBe(SELECTED);
+    await fireEvent.press(screen.getByLabelText('Close dictionary'));
+    expect(screen.queryByText('Dictionary')).toBeNull();
   });
 
   it('Translate shows the translation, and the chosen language is remembered', async () => {
     fetchMock.mockImplementation((url: string) =>
       json([[[url.includes('tl=tr') ? 'tilki' : 'лиса', 'fox', null, null, 3]], null, 'en']),
     );
-    await open('c2', 'fox');
-    await fireEvent.press(screen.getByLabelText('Translate'));
+    await open('translate', 'fox');
     expect(await screen.findByText('лиса')).toBeTruthy();
     expect(fetchMock.mock.calls[0][0]).toContain('tl=en'); // nothing chosen yet: the phone's language
     await fireEvent.press(screen.getByLabelText('Translate into Türkçe'));
@@ -127,16 +151,14 @@ describe('look up and translate stay in the app', () => {
     const { unmount } = screen;
     await unmount();
     fetchMock.mockClear();
-    await open('c2', 'fox');
-    await fireEvent.press(screen.getByLabelText('Translate'));
+    await open('translate', 'fox');
     expect(await screen.findByText('tilki')).toBeTruthy();
     expect(fetchMock.mock.calls[0][0]).toContain('tl=tr');
   });
 
   it('offline: says so and offers to try again', async () => {
     fetchMock.mockImplementation(() => Promise.reject(new TypeError('Network request failed')));
-    await open('c3', 'fox');
-    await fireEvent.press(screen.getByLabelText('Translate'));
+    await open('translate', 'fox');
     expect(await screen.findByText(/Couldn’t translate right now/)).toBeTruthy();
     fetchMock.mockImplementation(() => json([[['tilki', 'fox']], null, 'en']));
     await fireEvent.press(screen.getByLabelText('Try again'));
@@ -145,8 +167,7 @@ describe('look up and translate stay in the app', () => {
 
   it('a word no dictionary knows offers a translation instead', async () => {
     fetchMock.mockImplementation(() => json(null, 404));
-    await open('c4', 'fox');
-    await fireEvent.press(screen.getByLabelText('Look up'));
+    await open('define', 'fox');
     expect(await screen.findByText(/No dictionary entry/)).toBeTruthy();
     // "Translate instead" switches over without reading the empty definition as a translation.
     fetchMock.mockImplementation(() => json([[['tilki', 'fox']], null, 'en']));
@@ -160,8 +181,7 @@ describe('look up and translate stay in the app', () => {
         ? json({ en: [{ partOfSpeech: 'Noun', language: 'English', definitions: [{ definition: 'A small wild canine.' }] }] })
         : json([[['tilki', 'fox']], null, 'en']),
     );
-    await open('c5', 'fox');
-    await fireEvent.press(screen.getByLabelText('Translate'));
+    await open('translate', 'fox');
     expect(await screen.findByText('tilki')).toBeTruthy();
     await fireEvent.press(screen.getByLabelText('Show definition'));
     expect(await screen.findByText('A small wild canine.')).toBeTruthy();
@@ -171,8 +191,7 @@ describe('look up and translate stay in the app', () => {
 
   it('a service error is not reported as a missing connection', async () => {
     fetchMock.mockImplementation(() => json({}, 429));
-    await open('c6', 'fox');
-    await fireEvent.press(screen.getByLabelText('Translate'));
+    await open('translate', 'fox');
     expect(await screen.findByText(/service didn’t answer/)).toBeTruthy();
   });
 });

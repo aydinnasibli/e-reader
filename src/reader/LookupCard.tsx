@@ -18,6 +18,7 @@ interface Props {
   /** Language of the book, if known. */
   lang?: string;
   theme: Theme;
+  /** Close the card. */
   onBack(): void;
   /** Switch between definition and translation of the same text. */
   onSwitch(kind: LookupKind): void;
@@ -136,8 +137,8 @@ export function LookupCard({ kind, text, lang, theme, onBack, onSwitch }: Props)
   return (
     <View>
       <View style={styles.header}>
-        <Pressable onPress={onBack} hitSlop={12} accessibilityLabel="Back to selection" style={styles.back}>
-          <Ionicons name="chevron-back" size={22} color={theme.text} />
+        <Pressable onPress={onBack} hitSlop={12} accessibilityLabel={kind === 'define' ? 'Close dictionary' : 'Close translation'} style={styles.back}>
+          <Ionicons name="close" size={22} color={theme.text} />
         </Pressable>
         <Text style={[styles.title, { color: theme.text }]}>{kind === 'define' ? 'Dictionary' : 'Translation'}</Text>
         <Pressable

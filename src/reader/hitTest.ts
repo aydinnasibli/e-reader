@@ -52,3 +52,48 @@ export function hitText(text: string, lines: Line[], from: number, to: number, x
   const lineWidth = justified && !lastOfParagraph ? width : (line.w ?? width);
   return charAtFraction(text, line.start, line.end, lineWidth > 0 ? x / lineWidth : 0);
 }
+
+/** Where a caret sits in a paragraph's text: from its top-left, with the line's height. */
+export interface Caret {
+  x: number;
+  y: number;
+  h: number;
+}
+
+/**
+ * The reverse of hitText: where the caret before drawn character `i` sits
+ * (`edge` 'end': after character i - 1, so a selection's end stays on its
+ * last line), measured the same way, for the part [from, to) of a paragraph
+ * shown. Null if that character isn't shown.
+ */
+export function caretInText(
+  text: string,
+  lines: Line[],
+  from: number,
+  to: number,
+  i: number,
+  edge: 'start' | 'end',
+  width: number,
+  justified: boolean,
+): Caret | null {
+  const shown = lines.filter((l) => l.start >= from && l.start < to);
+  const at = edge === 'end' ? Math.max(i - 1, 0) : i;
+  let top = 0;
+  for (const line of shown) {
+    if (at >= line.start && (at < line.end || line === shown[shown.length - 1])) {
+      if (at >= line.end && line !== lines[lines.length - 1]) return null;
+      let total = 0;
+      let before = 0;
+      for (let k = line.start; k < line.end; k++) {
+        const w = weight(text[k]);
+        total += w;
+        if (k < at || (edge === 'end' && k === at)) before += w;
+      }
+      const lastOfParagraph = line === lines[lines.length - 1];
+      const lineWidth = justified && !lastOfParagraph ? width : (line.w ?? width);
+      return { x: total > 0 ? (before / total) * lineWidth : 0, y: top, h: line.height };
+    }
+    top += line.height;
+  }
+  return null;
+}

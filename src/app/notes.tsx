@@ -11,10 +11,9 @@ import { type Highlight, getAnnotations, removeHighlight, useAnnotationsVersion 
 import { exportFileName, notesMarkdown } from '@/lib/exportNotes';
 import { type BookEntry, useLibrary } from '@/lib/library';
 import { shareTextFile } from '@/lib/shareText';
-import { highlightColor } from '@/reader/SelectionSheet';
 import { confirmDeleteHighlight, hasNote } from '@/ui/confirm';
 import { showActions } from '@/ui/dialogs';
-import { useAppColors } from '@/ui/theme';
+import { highlightColor, useAppColors } from '@/ui/theme';
 
 interface Section {
   book: BookEntry;

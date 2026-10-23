@@ -12,7 +12,8 @@ import type { BookData } from './book';
 import { BlockImage, BlockText, Spacer } from './BlockText';
 import { Measurer } from './Measurer';
 import { swipeOutcome, tapZone } from './gestures';
-import { hitText } from './hitTest';
+import type { ReaderGeometry } from './geometry';
+import { type Caret, caretInText, hitText } from './hitTest';
 import { Battery, Clock } from './StatusInfo';
 import { charsPerPage, pageCount, pageNumber } from './pageNumbers';
 import { type Look, drawn, layoutKeyOf, toBlock, toDrawn } from './look';
@@ -66,12 +67,19 @@ interface Props {
   footerRight?: string;
   /** Called with the layout key once a page of that layout is on screen. */
   onLayoutReady?(key: string): void;
-  /** Highlight tool on: dragging over text reports the range instead of turning pages. */
-  highlighting?: boolean;
+  /**
+   * Selecting text (the highlight tool, or a selection on the page): touches
+   * select instead of turning pages.
+   */
+  selecting?: boolean;
+  /** While selecting, taps on the outer edges still turn pages. */
+  edgeTurns?: boolean;
   /** From where the drag started to the text under the finger now; null, null = cancelled. */
-  onHighlightDrag?(from: TextPoint | null, to: TextPoint | null, done: boolean): void;
-  /** A tap on text while highlighting. */
-  onHighlightTap?(at: TextPoint): void;
+  onSelectDrag?(from: TextPoint | null, to: TextPoint | null, done: boolean): void;
+  /** A tap while selecting: the text tapped, or null off the text. */
+  onSelectTap?(at: TextPoint | null): void;
+  /** Filled in with what's where on the page, for selection handles. */
+  geometry?: { current: ReaderGeometry | null };
   /** The page number shown, the (estimated) total, and characters per page. */
   onPageInfo?(info: PageInfo): void;
   /** Turn requests from outside (auto page turn); `n` increments per request. */
@@ -109,7 +117,7 @@ interface Cur {
   page: number | null;
 }
 
-export function PageReader({ book, settings, theme, start, startKey, version, onPosition, onTap, marksFor, onLongPressBlock, onLink, bookmarked, footerRight, onLayoutReady, highlighting, onHighlightDrag, onHighlightTap, onPageInfo, turn, onEnd }: Props) {
+export function PageReader({ book, settings, theme, start, startKey, version, onPosition, onTap, marksFor, onLongPressBlock, onLink, bookmarked, footerRight, onLayoutReady, selecting, edgeTurns, onSelectDrag, onSelectTap, geometry, onPageInfo, turn, onEnd }: Props) {
   const win = useWindowDimensions();
   const liveInsets = useSafeAreaInsets();
   // Showing/hiding the status bar can change the top inset on some iPhones;
@@ -500,16 +508,36 @@ export function PageReader({ book, settings, theme, start, startKey, version, on
     strip.push({ key: prevKey, at: slot - 1, content: prev === 'processing' ? renderPage(undefined, processingMsg) : renderPage(prev.pageData, undefined, prevKey) });
   const waitMsg = `Preparing the book up to where you left off… ${Math.round(book.progress * 100)}%`;
 
-  // ---- highlight tool: drag over text instead of turning pages ----
+  // ---- selecting: drag over text instead of turning pages ----
   const column = (pageX: number) => (spread ? (pageX >= textLeft + width + settings.margin / 2 ? `${curKey}:R` : `${curKey}:L`) : curKey);
   const textPoint = (pageX: number, pageY: number): TextPoint | null => {
     const p = pointAt(pageX, pageY, column(pageX), true);
     return p && p.o !== undefined ? { b: p.b, o: p.o } : null;
   };
+  /** Where the caret before/after a character on this page is, in window coordinates. */
+  const caretAt = (p: TextPoint, edge: 'start' | 'end'): Caret | null => {
+    for (const [k, box] of itemBoxes.current) {
+      if (box.it.b !== p.b || !(k.startsWith(curKey + '|') || k.startsWith(curKey + ':'))) continue;
+      const { it, laid: l } = box;
+      const i = it.b - l.first;
+      const blk = l.blocks[i];
+      const m = l.measures[i];
+      const look = l.looks[i];
+      if (!blk || m?.kind !== 'text') continue;
+      const d = drawn(blk, look);
+      const c = caretInText(d.text, m.lines, it.s, it.e, toDrawn(d, p.o), edge, width - look.paddingLeft, look.textAlign === 'justify');
+      if (!c) continue; // on the other column of a spread, or another page
+      const top = it.top || it.s > 0 ? 0 : look.marginTop;
+      const left = textLeft + (k.split('|')[0].endsWith(':R') ? width + settings.margin : 0) + look.paddingLeft;
+      return { x: left + c.x, y: viewportTop.current + box.y + top + c.y, h: c.h };
+    }
+    return null;
+  };
+  if (geometry) geometry.current = { pointAt: textPoint, caretAt };
   const stroke = useRef<{ x: number; y: number; from: TextPoint | null; moved: boolean }>({ x: 0, y: 0, from: null, moved: false });
-  const highlightLayer = highlighting && cur.page !== null && (
+  const selectLayer = selecting && cur.page !== null && (
     <View
-      testID="highlight-layer"
+      testID="select-layer"
       style={StyleSheet.absoluteFill}
       onStartShouldSetResponder={() => true}
       onMoveShouldSetResponder={() => true}
@@ -524,23 +552,23 @@ export function PageReader({ book, settings, theme, start, startKey, version, on
         if (!d.moved && Math.hypot(pageX - d.x, pageY - d.y) < 8) return;
         d.moved = true;
         const to = textPoint(pageX, pageY);
-        if (d.from && to) onHighlightDrag?.(d.from, to, false);
+        if (d.from && to) onSelectDrag?.(d.from, to, false);
       }}
       onResponderRelease={(e) => {
         const { pageX, pageY } = e.nativeEvent;
         const d = stroke.current;
         if (d.moved) {
           const to = textPoint(pageX, pageY);
-          onHighlightDrag?.(d.from, d.from && to ? to : null, true);
+          onSelectDrag?.(d.from, d.from && to ? to : null, true);
           return;
         }
-        // A tap: the outer edges still turn pages; on text it's for that word.
-        if (pageX < win.width * 0.12) return go(settings.tapForward ? 1 : -1);
-        if (pageX > win.width * 0.88) return go(1);
+        // A tap: the outer edges may still turn pages; otherwise it's for the text tapped (or none).
+        if (edgeTurns && pageX < win.width * 0.12) return go(settings.tapForward ? 1 : -1);
+        if (edgeTurns && pageX > win.width * 0.88) return go(1);
         const p = pointAt(pageX, pageY, column(pageX), false);
-        if (p && p.o !== undefined) onHighlightTap?.({ b: p.b, o: p.o });
+        onSelectTap?.(p && p.o !== undefined ? { b: p.b, o: p.o } : null);
       }}
-      onResponderTerminate={() => onHighlightDrag?.(null, null, true)}
+      onResponderTerminate={() => onSelectDrag?.(null, null, true)}
     />
   );
   strip.push({ key: curKey, at: slot, content: waitingForPlace ? renderPage(undefined, waitMsg) : renderPage(shown, undefined, curKey) });
@@ -603,7 +631,7 @@ export function PageReader({ book, settings, theme, start, startKey, version, on
             {content}
           </Animated.View>
         ))}
-        {highlightLayer}
+        {selectLayer}
         {measuring && (
           <View style={{ position: 'absolute', left: textLeft, top: 0 }}>
             <Measurer

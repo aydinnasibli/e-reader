@@ -8,9 +8,9 @@ import { type Bookmark, type Highlight, removeBookmark, removeHighlight, useAnno
 import type { Theme } from '@/lib/settings';
 import { confirmDeleteHighlight, hasNote } from '@/ui/confirm';
 import { Sheet } from '@/ui/Sheet';
+import { highlightColor } from '@/ui/theme';
 import type { BookData } from './book';
 import { type Hit, MAX_HITS, type SearchProgress, searchBook } from './search';
-import { highlightColor } from './SelectionSheet';
 
 const sheetColors = (t: Theme) => ({ bg: t.chrome, text: t.text, border: t.border });
 

@@ -7,7 +7,6 @@ import { Alert, type AlertButton } from 'react-native';
 import type { Block } from '@/engine/types';
 import { addBookmark, addHighlight, getAnnotations } from '@/lib/annotations';
 import { THEMES } from '@/lib/settings';
-import { SelectionSheet } from '@/reader/SelectionSheet';
 import { annotationsSummary, confirmRemoveBook } from '@/ui/confirm';
 import { DialogHost, showPrompt } from '@/ui/dialogs';
 
@@ -37,25 +36,6 @@ it('removing a book says which highlights, notes and bookmarks go with it', asyn
   expect(deleteBook).not.toHaveBeenCalled(); // nothing happens until confirmed
   await pressAlert('Remove');
   expect(deleteBook).toHaveBeenCalledWith('b1');
-});
-
-it('removing a highlight that has a note asks first; plain highlighting goes at once', async () => {
-  addHighlight('b2', { b: 0, s: 16, e: 19, color: 'yellow', text: 'fox', note: 'clever' });
-  addHighlight('b2', { b: 0, s: 40, e: 43, color: 'green', text: 'dog' });
-  const props = { bookId: 'b2', bookTitle: 'Book', theme: THEMES.light, onClose: () => {} };
-
-  const first = await render(<SelectionSheet {...props} target={{ b: 0, block, at: TEXT.indexOf('dog') }} />);
-  await fireEvent.press(screen.getByLabelText('Remove highlight'));
-  expect(alert).not.toHaveBeenCalled();
-  expect(getAnnotations('b2').highlights.map((h) => h.text)).toEqual(['fox']);
-  await first.unmount();
-
-  await render(<SelectionSheet {...props} target={{ b: 0, block, at: TEXT.indexOf('fox') }} />);
-  await fireEvent.press(screen.getByLabelText('Remove highlight'));
-  expect(alert.mock.calls[0][0]).toBe('Delete highlight and its note?');
-  expect(getAnnotations('b2').highlights).toHaveLength(1);
-  await pressAlert('Delete');
-  expect(getAnnotations('b2').highlights).toHaveLength(0);
 });
 
 it('a field that may be cleared saves empty; others ignore an empty save', async () => {
