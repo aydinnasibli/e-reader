@@ -19,7 +19,7 @@ import {
   toggleInCollection,
   useShelves,
 } from '@/lib/collections';
-import { type BookEntry, deleteBook, importBooks, updateBook, useLibrary, useLiveBook } from '@/lib/library';
+import { type BookEntry, deleteBook, importBooks, reprocessBook, updateBook, useLibrary, useLiveBook } from '@/lib/library';
 import { Cover } from '@/ui/Cover';
 import { showActions, showPrompt } from '@/ui/dialogs';
 import { formatBytes } from '@/ui/format';
@@ -154,8 +154,9 @@ export default function Library() {
   const open = (b: BookEntry) => {
     if (b.status === 'error') {
       Alert.alert("Couldn't open this book", b.error ?? 'Unknown error', [
-        { text: 'OK' },
+        { text: 'OK', style: 'cancel' },
         { text: 'Remove', style: 'destructive', onPress: () => deleteBook(b.id) },
+        { text: 'Try again', onPress: () => reprocessBook(b.id) },
       ]);
       return;
     }
