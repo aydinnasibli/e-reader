@@ -88,3 +88,65 @@ describe('selection sheet', () => {
     expect(screen.getByText(/Whole paragraph selected/)).toBeTruthy();
   });
 });
+
+describe('look up and translate stay in the app', () => {
+  const json = (body: unknown, status = 200) => Promise.resolve({ ok: status < 400, status, text: () => Promise.resolve(JSON.stringify(body)) });
+  const fetchMock = jest.fn();
+  beforeAll(() => {
+    (global as { fetch: unknown }).fetch = fetchMock;
+  });
+  beforeEach(() => fetchMock.mockReset());
+
+  it('Look up shows the definition in the sheet', async () => {
+    fetchMock.mockImplementation((url: string) =>
+      url.includes('wiktionary')
+        ? json({ en: [{ partOfSpeech: 'Noun', language: 'English', definitions: [{ definition: 'A wild <a href="/wiki/dog">dog</a>-like animal.' }] }] })
+        : json(null, 500),
+    );
+    open('c1', 'fox');
+    fireEvent.press(screen.getByLabelText('Look up'));
+    expect(await screen.findByText('A wild dog-like animal.')).toBeTruthy();
+    expect(screen.getByText('Dictionary')).toBeTruthy();
+    expect(fetchMock.mock.calls[0][0]).toContain('/page/definition/fox');
+    // Back to the selection, still selected.
+    fireEvent.press(screen.getByLabelText('Back to selection'));
+    expect(bg('fox')).toBe(SELECTED);
+  });
+
+  it('Translate shows the translation, and the chosen language is remembered', async () => {
+    fetchMock.mockImplementation((url: string) =>
+      json([[[url.includes('tl=tr') ? 'tilki' : 'лиса', 'fox', null, null, 3]], null, 'en']),
+    );
+    open('c2', 'fox');
+    fireEvent.press(screen.getByLabelText('Translate'));
+    expect(await screen.findByText('лиса')).toBeTruthy();
+    expect(fetchMock.mock.calls[0][0]).toContain('tl=en'); // nothing chosen yet: the phone's language
+    fireEvent.press(screen.getByLabelText('Translate into Türkçe'));
+    expect(await screen.findByText('tilki')).toBeTruthy();
+    // Next time it goes straight to Turkish.
+    const { unmount } = screen;
+    unmount();
+    fetchMock.mockClear();
+    open('c2', 'fox');
+    fireEvent.press(screen.getByLabelText('Translate'));
+    expect(await screen.findByText('tilki')).toBeTruthy();
+    expect(fetchMock.mock.calls[0][0]).toContain('tl=tr');
+  });
+
+  it('offline: says so and offers to try again', async () => {
+    fetchMock.mockImplementation(() => Promise.reject(new TypeError('Network request failed')));
+    open('c3', 'fox');
+    fireEvent.press(screen.getByLabelText('Translate'));
+    expect(await screen.findByText(/Couldn’t translate right now/)).toBeTruthy();
+    fetchMock.mockImplementation(() => json([[['tilki', 'fox']], null, 'en']));
+    fireEvent.press(screen.getByLabelText('Try again'));
+    expect(await screen.findByText('tilki')).toBeTruthy();
+  });
+
+  it('a word no dictionary knows offers a translation instead', async () => {
+    fetchMock.mockImplementation(() => json(null, 404));
+    open('c4', 'fox');
+    fireEvent.press(screen.getByLabelText('Look up'));
+    expect(await screen.findByText(/No dictionary entry/)).toBeTruthy();
+  });
+});

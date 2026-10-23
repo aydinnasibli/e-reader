@@ -248,6 +248,23 @@ function PageTab({ s, c }: { s: ReaderSettings; c: Theme }) {
           onPick={(rotation) => setSettings({ rotation })}
         />
       </Row>
+      <View style={styles.stack}>
+        <Text style={[styles.label, { color: c.text }]}>Keep the screen on</Text>
+        <Segment
+          c={c}
+          value={s.screenAwake}
+          options={['system', '2', '5', '10', 'always'] as const}
+          render={(v) => (v === 'system' ? 'Phone' : v === 'always' ? 'Always' : `${v} min`)}
+          onPick={(screenAwake) => setSettings({ screenAwake })}
+        />
+        <Text style={[styles.hint, { color: c.muted }]}>
+          {s.screenAwake === 'system'
+            ? 'The screen turns off after the phone’s usual time.'
+            : s.screenAwake === 'always'
+              ? 'The screen stays on while a book is open.'
+              : `The screen stays on while you read, and turns off ${s.screenAwake} minutes after the last page turn.`}
+        </Text>
+      </View>
       <Row c={c} label="Tap left side to go forward">
         <Switch value={s.tapForward} onValueChange={(tapForward) => setSettings({ tapForward })} />
       </Row>
@@ -403,6 +420,7 @@ const styles = StyleSheet.create({
   fonts: { gap: 10, paddingVertical: 10 },
   fontCard: { width: 112, height: 82, borderRadius: 12, borderWidth: 2, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 6 },
   row: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', minHeight: 50, gap: 12 },
+  stack: { paddingVertical: 8, gap: 8, alignItems: 'flex-start' },
   label: { fontSize: 15, flexShrink: 1 },
   segment: { flexDirection: 'row', borderRadius: 9, padding: 2 },
   segItem: { paddingHorizontal: 10, paddingVertical: 7, borderRadius: 7 },

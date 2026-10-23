@@ -1,5 +1,4 @@
 import * as Haptics from 'expo-haptics';
-import { useKeepAwake } from 'expo-keep-awake';
 import * as ScreenOrientation from 'expo-screen-orientation';
 import { type ErrorBoundaryProps, router, useLocalSearchParams } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
@@ -27,6 +26,7 @@ import { HighlightBar } from '@/reader/HighlightBar';
 import { TapZones } from '@/reader/TapZones';
 import { LivePreview } from '@/reader/LivePreview';
 import { NoteSheet } from '@/reader/NoteSheet';
+import { useScreenAwake } from '@/reader/screenAwake';
 import { NavigatorSheet, SearchSheet } from '@/reader/Sheets';
 import { ErrorScreen } from '@/ui/ErrorScreen';
 import { formatMinutes } from '@/ui/format';
@@ -37,7 +37,6 @@ const strictlyBefore = (a: Position, b: Position) => a.b < b.b || (a.b === b.b &
 export default function ReaderScreen() {
   // `b`/`o`: open at that place instead of where reading left off (from the highlights screen).
   const { id, b: atB, o: atO } = useLocalSearchParams<{ id: string; b?: string; o?: string }>();
-  useKeepAwake();
   const settings = useSettings();
   const theme = useReaderTheme(settings);
   // Rotation lock while reading; back to free rotation when leaving the book.
@@ -253,6 +252,8 @@ export default function ReaderScreen() {
   const autoWpm = settings.autoWpm || Math.max(60, Math.round(readingSpeed(id).cpm / CHARS_PER_WORD / 10) * 10);
   // Runs only while nothing else is in front of the page.
   const autoActive = !!auto?.running && !chrome && !sheet && !note && !selection && !highlighting;
+  // The screen stays on while reading (Display → Page), counted from the last page turn or tap.
+  useScreenAwake(settings.screenAwake, `${pos.b}:${pos.o}:${chrome}:${sheet}:${!!selection}:${note !== null}:${highlighting}`, autoActive);
   const [turn, setTurn] = useState<{ dir: 1 | -1; n: number } | undefined>(undefined);
   useEffect(() => {
     if (!autoActive || settings.mode !== 'page' || !book) return;

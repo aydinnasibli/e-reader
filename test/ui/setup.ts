@@ -35,7 +35,7 @@ jest.mock('expo-haptics', () => ({
   NotificationFeedbackType: { Success: 'success' },
 }));
 jest.mock('expo-clipboard', () => ({ setStringAsync: () => Promise.resolve(true) }));
-jest.mock('expo-web-browser', () => ({ openBrowserAsync: () => Promise.resolve() }));
+jest.mock('expo-keep-awake', () => ({ activateKeepAwakeAsync: jest.fn(() => Promise.resolve()), deactivateKeepAwake: jest.fn(() => Promise.resolve()) }));
 jest.mock('expo-localization', () => ({ getLocales: () => [{ languageCode: 'en' }] }));
 // Icons load their font asynchronously; draw them as their name instead.
 jest.mock('@expo/vector-icons/Ionicons', () => {

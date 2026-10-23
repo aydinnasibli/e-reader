@@ -8,6 +8,7 @@ import { useSyncExternalStore } from 'react';
 import { ingestBook, isSupportedName, titleFromFileName } from '@/engine/ingest';
 import type { BookFormat, Manifest, Position } from '@/engine/types';
 import { forgetAnnotations } from './annotations';
+import { fingerprintOf } from './fingerprint';
 import {
   FileSink,
   FileSource,
@@ -51,6 +52,8 @@ export interface BookEntry {
   attempts?: number;
   /** Title/author were edited by hand: conversion must not overwrite them. */
   titleEdited?: boolean;
+  /** Identity of the original file, to notice it being added again (see fingerprint.ts). */
+  fp?: string;
 }
 
 /** What the reader needs about a book that is still being converted. */
@@ -227,20 +230,71 @@ export interface ImportResult {
   skipped: string[];
   /** Couldn't be copied (usually storage full). */
   failed: string[];
+  /** Already on the shelf: [file name, title of the book on the shelf]. */
+  duplicates: [string, string][];
+}
+
+/** Fingerprint of a file, or undefined when it can't be read. */
+function fingerprintFile(file: File): string | undefined {
+  let src: FileSource | undefined;
+  try {
+    src = new FileSource(file);
+    return fingerprintOf(src);
+  } catch {
+    return undefined;
+  } finally {
+    src?.close();
+  }
+}
+
+/**
+ * The book on the shelf that is this file, if any. Books added by older
+ * versions get their fingerprint here, the first time a file of the same
+ * size comes in.
+ */
+function findDuplicate(fp: string, size: number): BookEntry | undefined {
+  for (const b of books) {
+    if (b.status === 'error') continue;
+    if (!b.fp && b.size === size) {
+      const f = fingerprintFile(sourceFile(b));
+      if (f) b.fp = f;
+    }
+    if (b.fp === fp) return b;
+  }
+  return undefined;
 }
 
 /** Let the user pick files and add them to the shelf. */
 export async function importBooks(): Promise<ImportResult> {
   const res = await DocumentPicker.getDocumentAsync({ type: '*/*', multiple: true, copyToCacheDirectory: true });
-  if (res.canceled) return { added: 0, skipped: [], failed: [] };
+  if (res.canceled) return { added: 0, skipped: [], failed: [], duplicates: [] };
   const skipped: string[] = [];
   const failed: string[] = [];
+  const duplicates: [string, string][] = [];
+  let backfilled = false;
   let added = 0;
   try {
     for (const asset of res.assets) {
       if (!isSupportedName(asset.name)) {
         skipped.push(asset.name);
         continue;
+      }
+      const picked = new File(asset.uri);
+      const size = asset.size ?? picked.size;
+      const fp = fingerprintFile(picked);
+      if (fp) {
+        const known = books.some((b) => !b.fp && b.size === size);
+        const dup = findDuplicate(fp, size);
+        backfilled ||= known;
+        if (dup) {
+          duplicates.push([asset.name, dup.title]);
+          try {
+            picked.delete(); // the picker's private copy
+          } catch {
+            // the cache is cleared by the system anyway
+          }
+          continue;
+        }
       }
       const id = newId();
       const dir = bookDir(id);
@@ -249,7 +303,6 @@ export async function importBooks(): Promise<ImportResult> {
         const lower = asset.name.toLowerCase();
         const ext = lower.endsWith('.fb2.zip') ? 'fb2.zip' : (lower.split('.').pop() ?? 'bin');
         const dest = new File(dir, `source.${ext}`);
-        const picked = new File(asset.uri);
         // The picker already made a private copy; moving it is instant even for huge files.
         try {
           picked.moveSync(dest);
@@ -268,6 +321,7 @@ export async function importBooks(): Promise<ImportResult> {
           openedAt: now,
           status: 'processing',
           progress: 0,
+          ...(fp ? { fp } : {}),
         });
         added++;
       } catch {
@@ -285,9 +339,9 @@ export async function importBooks(): Promise<ImportResult> {
       emit();
       flushLibrary();
       void runQueue();
-    }
+    } else if (backfilled) scheduleSave();
   }
-  return { added, skipped, failed };
+  return { added, skipped, failed, duplicates };
 }
 
 /** Edit a book's title and/or author; kept even if the book is converted again. */

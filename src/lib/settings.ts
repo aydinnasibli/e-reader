@@ -11,6 +11,8 @@ import { readJson, saveJson } from './storage';
 export type ThemeName = 'light' | 'paper' | 'sepia' | 'mint' | 'gray' | 'night' | 'dark' | 'black' | 'custom';
 export type ReadMode = 'page' | 'scroll';
 export type PageTurn = 'slide' | 'fade' | 'none';
+/** How long the screen stays on while reading without turning a page: minutes, 'always', or the phone's own setting. */
+export type ScreenAwake = 'system' | '2' | '5' | '10' | 'always';
 
 export interface ReaderSettings {
   mode: ReadMode;
@@ -44,6 +46,9 @@ export interface ReaderSettings {
   seenTapZones: boolean;
   /** Auto page turn / auto-scroll speed in words per minute; 0 = the reader's measured speed. */
   autoWpm: number;
+  screenAwake: ScreenAwake;
+  /** Language to translate into; '' = the phone's language. */
+  translateTo: string;
 }
 
 export interface Theme {
@@ -99,6 +104,8 @@ const DEFAULTS: ReaderSettings = {
   highlightColor: 'yellow',
   seenTapZones: false,
   autoWpm: 0,
+  translateTo: '',
+  screenAwake: '10',
 };
 
 const file = () => new File(Paths.document, 'settings.json');

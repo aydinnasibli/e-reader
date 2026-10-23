@@ -13,7 +13,6 @@ const blocks: Block[] = [{ k: 'p', r: ['First paragraph of the book.'] }, { k: '
 const mockUpdateBook = jest.fn();
 
 jest.mock('expo-router', () => ({ useLocalSearchParams: () => ({ id: 'big' }), router: { back: jest.fn() } }));
-jest.mock('expo-keep-awake', () => ({ useKeepAwake: () => {} }));
 jest.mock('expo-screen-orientation', () => ({ lockAsync: () => Promise.resolve(), OrientationLock: {} }));
 // Like the real store: the same object until something changes.
 const mockLive = { chunks: [[0, 0]], totalBlocks: 2, totalChars: 45, progress: 0.01 };

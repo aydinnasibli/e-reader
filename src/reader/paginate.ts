@@ -30,6 +30,8 @@ export interface PageItem {
 
 export interface Page {
   items: PageItem[];
+  /** A picture alone on its page: drawn in the middle of the page. */
+  center?: boolean;
 }
 
 /**
@@ -67,12 +69,57 @@ export function estimateLines(text: string, look: Look, width: number): Line[] {
   return out;
 }
 
+/** Lines of the paragraph after a heading that must fit on the heading's page. */
+const KEEP_LINES = 2;
+
+/**
+ * Height a run of headings starting at `i` needs on the current page: the
+ * headings, and the first lines (or the picture) that follow them. Null when
+ * the run would not fit even on an empty page, so keeping it together is moot.
+ */
+function headingRun(blocks: Block[], measures: Measure[], looks: Look[], i: number, pageHeight: number): number | null {
+  let need = 0;
+  let j = i;
+  for (; j < blocks.length && blocks[j].k === 'h'; j++) {
+    const m = measures[j];
+    if (m.kind !== 'text') return null;
+    need += (j > i ? looks[j].marginTop : 0) + m.lines.reduce((t, l) => t + l.height, 0) + looks[j].marginBottom;
+  }
+  // Empty lines and separators between the heading and the text go with it.
+  for (; j < blocks.length && measures[j].kind === 'box' && blocks[j].k !== 'img'; j++) {
+    need += (measures[j] as { height: number }).height;
+  }
+  const m = measures[j];
+  if (m) {
+    if (m.kind === 'box') need += looks[j].marginTop + Math.min(m.height, pageHeight);
+    else need += looks[j].marginTop + m.lines.slice(0, KEEP_LINES).reduce((t, l) => t + l.height, 0);
+  }
+  return need <= pageHeight ? need : null;
+}
+
+/**
+ * How many of a paragraph's remaining lines to put on the current page, given
+ * that `fit` of them would fit. Avoids a lone first line at the bottom of a
+ * page (orphan) and a lone last line at the top of the next (widow).
+ */
+function keepLines(fit: number, remaining: number, top: boolean): number {
+  if (fit >= remaining || fit === 0) return fit;
+  // Only one line would fit: move the paragraph to the next page.
+  if (fit === 1 && !top) return 0;
+  // One line would be left over for the next page: take one line fewer here.
+  if (remaining - fit === 1) {
+    if (fit - 1 >= 2) return fit - 1;
+    return top ? fit : 0;
+  }
+  return fit;
+}
+
 export function paginate(blocks: Block[], firstBlock: number, measures: Measure[], looks: Look[], pageHeight: number): Page[] {
   const pages: Page[] = [];
   let items: PageItem[] = [];
   let y = 0;
   const newPage = () => {
-    if (items.length) pages.push({ items });
+    if (items.length) pages.push(items.length === 1 && items[0].h !== undefined && blocks[items[0].b - firstBlock]?.k === 'img' ? { items, center: true } : { items });
     items = [];
     y = 0;
   };
@@ -90,6 +137,12 @@ export function paginate(blocks: Block[], firstBlock: number, measures: Measure[
       items.push({ b, s: 0, e: 0, top, h: Math.min(m.height, pageHeight) });
       continue;
     }
+    // A heading never sits alone at the bottom of a page: it goes to the next
+    // page when the text after it doesn't fit under it.
+    if (items.length && blocks[i].k === 'h' && (i === 0 || blocks[i - 1].k !== 'h')) {
+      const need = headingRun(blocks, measures, looks, i, pageHeight);
+      if (need !== null && y + look.marginTop + need > pageHeight) newPage();
+    }
     const lines = m.lines;
     let li = 0;
     let mt = look.marginTop;
@@ -103,6 +156,7 @@ export function paginate(blocks: Block[], firstBlock: number, measures: Measure[
         used += lines[li + n].height;
         n++;
       }
+      n = keepLines(n, lines.length - li, top);
       if (n === 0) {
         newPage();
         continue;

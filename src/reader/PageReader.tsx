@@ -406,7 +406,7 @@ export function PageReader({ book, settings, theme, start, startKey, version, on
     const column = (page: Page | undefined, colKey: string) => (
       <Pressable
         key={colKey}
-        style={spread ? { width } : styles.fill}
+        style={[spread ? { width } : styles.fill, page?.center && styles.middle]}
         onPress={(e) => tapPage(e.nativeEvent.pageX)}
         onLongPress={(e) => longPress(e.nativeEvent.pageX, e.nativeEvent.pageY, colKey)}
         delayLongPress={450}>
@@ -612,6 +612,7 @@ const styles = StyleSheet.create({
   meta: { fontSize: 12 },
   viewport: { flex: 1, overflow: 'hidden' },
   page: { position: 'absolute', left: 0, top: 0, overflow: 'hidden' },
+  middle: { justifyContent: 'center' },
   fill: { flex: 1 },
   row: { flex: 1, flexDirection: 'row' },
   center: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 24 },

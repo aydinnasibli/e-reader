@@ -26,7 +26,6 @@ const manifest: Manifest = {
 };
 
 jest.mock('expo-router', () => ({ useLocalSearchParams: () => ({ id: 'moby' }), router: { back: jest.fn() } }));
-jest.mock('expo-keep-awake', () => ({ useKeepAwake: () => {} }));
 jest.mock('expo-screen-orientation', () => ({ lockAsync: () => Promise.resolve(), OrientationLock: {} }));
 jest.mock('@/lib/library', () => {
   const entry = { id: 'moby', title: 'Moby-Dick', author: 'Melville', status: 'ready', format: 'txt', position: { b: 0, o: 0 } };
