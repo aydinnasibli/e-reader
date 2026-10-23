@@ -1,7 +1,6 @@
 // The time and battery level shown while reading (the phone's status bar is
 // hidden then).
 
-import Ionicons from '@expo/vector-icons/Ionicons';
 import { getBatteryLevelAsync } from 'expo-battery';
 import { useEffect, useRef, useState } from 'react';
 import { AppState, type StyleProp, StyleSheet, Text, type TextStyle, View } from 'react-native';
@@ -58,9 +57,25 @@ export function useBatteryLevel(): number {
   return level;
 }
 
-/** A battery symbol for a level, so the percentage isn't taken for the reading progress. */
-export function batteryIcon(level: number): 'battery-full' | 'battery-half' | 'battery-dead' {
-  return level >= 0.7 ? 'battery-full' : level >= 0.3 ? 'battery-half' : 'battery-dead';
+/** At or below this the battery's fill turns red, as on the phone's own. */
+export const BATTERY_LOW = 0.2;
+const LOW_COLOR = '#E5484D';
+
+/**
+ * A battery drawn filled to its level (so the percentage next to it isn't
+ * taken for the reading progress), red when it's low.
+ */
+export function BatteryGlyph({ level, color, height = 11 }: { level: number; color: string; height?: number }) {
+  const width = Math.round(height * 2);
+  const fill = Math.max(0, Math.min(1, level));
+  return (
+    <View style={styles.glyph} testID="battery-glyph">
+      <View style={[styles.body, { width, height, borderColor: color, borderRadius: height * 0.25 }]}>
+        <View style={[styles.fill, { width: `${fill * 100}%`, backgroundColor: fill <= BATTERY_LOW ? LOW_COLOR : color, borderRadius: height * 0.12 }]} />
+      </View>
+      <View style={[styles.nub, { height: height * 0.4, backgroundColor: color }]} />
+    </View>
+  );
 }
 
 /** Each piece is its own component, so the timers run only while shown. */
@@ -78,7 +93,7 @@ export function Battery({ style, color, maxScale }: { style?: StyleProp<TextStyl
   const text = formatBattery(level);
   return text ? (
     <View style={styles.battery} accessible accessibilityLabel={`Battery ${text}`}>
-      <Ionicons name={batteryIcon(level)} size={15} color={color} />
+      <BatteryGlyph level={level} color={color} />
       <Text numberOfLines={1} maxFontSizeMultiplier={maxScale} style={style}>
         {text}
       </Text>
@@ -86,7 +101,7 @@ export function Battery({ style, color, maxScale }: { style?: StyleProp<TextStyl
   ) : null;
 }
 
-/** "14:32 · ▭ 82%", inside a line of text. */
+/** "14:32 · [battery] 82%", inside a line of text. */
 export function ClockBattery({ color }: { color: string }) {
   const level = useBatteryLevel();
   const text = formatBattery(level);
@@ -96,7 +111,7 @@ export function ClockBattery({ color }: { color: string }) {
       {text ? (
         <>
           {' · '}
-          <Ionicons name={batteryIcon(level)} size={13} color={color} /> {text}
+          <BatteryGlyph level={level} color={color} height={9} /> {text}
         </>
       ) : null}
     </Text>
@@ -104,5 +119,9 @@ export function ClockBattery({ color }: { color: string }) {
 }
 
 const styles = StyleSheet.create({
-  battery: { flexDirection: 'row', alignItems: 'center', gap: 3 },
+  battery: { flexDirection: 'row', alignItems: 'center', gap: 4 },
+  glyph: { flexDirection: 'row', alignItems: 'center' },
+  body: { borderWidth: 1, padding: 1, opacity: 0.9 },
+  fill: { height: '100%' },
+  nub: { width: 1.5, marginLeft: 1, borderTopRightRadius: 1, borderBottomRightRadius: 1 },
 });

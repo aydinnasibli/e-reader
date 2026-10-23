@@ -191,9 +191,10 @@ describe('page numbers, back after a jump, auto page turn', () => {
   it('the footer shows the page number; the top shows the battery with its symbol', async () => {
     await openBook();
     await waitFor(() => expect(screen.getByText(/^1 of 1 · /)).toBeTruthy(), { timeout: 3000 });
-    const battery = await screen.findByLabelText('Battery 82%');
-    expect(screen.getByText('battery-full')).toBeTruthy(); // the icon (drawn as its name in tests)
-    expect(battery).toBeTruthy();
+    expect(await screen.findByLabelText('Battery 82%')).toBeTruthy();
+    // The battery symbol is filled to the level.
+    const fills = screen.getByTestId('battery-glyph').queryAll((n) => [n.props.style].flat().some((st: { width?: unknown } | null) => st?.width === '82%'));
+    expect(fills.length).toBeGreaterThan(0);
   }, 30000);
 
   it('after jumping from the contents, a chip goes back to where you were', async () => {
