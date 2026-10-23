@@ -42,6 +42,8 @@ export interface ReaderSettings {
   highlightColor: HighlightColor;
   /** The tap-zone guide has been shown. */
   seenTapZones: boolean;
+  /** Auto page turn / auto-scroll speed in words per minute; 0 = the reader's measured speed. */
+  autoWpm: number;
 }
 
 export interface Theme {
@@ -96,6 +98,7 @@ const DEFAULTS: ReaderSettings = {
   rotation: 'auto',
   highlightColor: 'yellow',
   seenTapZones: false,
+  autoWpm: 0,
 };
 
 const file = () => new File(Paths.document, 'settings.json');

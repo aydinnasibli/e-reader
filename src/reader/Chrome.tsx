@@ -15,8 +15,13 @@ interface Props {
   fraction: number;
   /** e.g. "2 h 10 min left in book" */
   info?: string;
+  /** "Page 412 of 830" for a slider position, in page mode. */
+  pageLabel?(fraction: number): string;
   bookmarked: boolean;
   onBack(): void;
+  /** Start auto page turn (page mode) or auto-scroll (scroll mode). */
+  onAuto(): void;
+  autoLabel: string;
   onSearch(): void;
   onBookmark(): void;
   onContents(): void;
@@ -61,7 +66,9 @@ export function Chrome(p: Props) {
         <Text numberOfLines={1} style={[styles.title, { color: theme.text }]}>
           {p.title}
         </Text>
-        <View style={styles.back} />
+        <Pressable onPress={p.onAuto} hitSlop={8} style={styles.back} accessibilityLabel={p.autoLabel}>
+          <Ionicons name="play-circle-outline" size={26} color={theme.text} />
+        </Pressable>
       </Animated.View>
       <Animated.View
         pointerEvents={p.visible ? 'auto' : 'none'}
@@ -81,8 +88,13 @@ export function Chrome(p: Props) {
           thumbTintColor={theme.accent}
         />
         <View style={styles.infoRow}>
-          <Text style={[styles.small, { color: theme.muted }]}>{(shown * 100).toFixed(1)}%</Text>
-          <Text style={[styles.small, { color: theme.muted }]}>{p.info ?? ''}</Text>
+          <Text style={[styles.small, { color: theme.muted }]}>
+            {p.pageLabel ? `${p.pageLabel(shown)} · ` : ''}
+            {(shown * 100).toFixed(1)}%
+          </Text>
+          <Text numberOfLines={1} style={[styles.small, styles.info, { color: theme.muted }]}>
+            {p.info ?? ''}
+          </Text>
         </View>
         <View style={[styles.tools, { borderColor: theme.border }]}>
           {tool('list', p.onContents, 'Contents')}
@@ -127,4 +139,5 @@ const styles = StyleSheet.create({
   slider: { alignSelf: 'stretch', height: 40 },
   infoRow: { flexDirection: 'row', justifyContent: 'space-between' },
   small: { fontSize: 12 },
+  info: { flexShrink: 1, textAlign: 'right', marginLeft: 12 },
 });

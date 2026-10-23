@@ -13,6 +13,7 @@ import { BlockImage, BlockText, Spacer } from './BlockText';
 import { Measurer } from './Measurer';
 import { swipeOutcome, tapZone } from './gestures';
 import { hitText } from './hitTest';
+import { charsPerPage, pageCount, pageNumber } from './pageNumbers';
 import { type Look, drawn, layoutKeyOf, toBlock, toDrawn } from './look';
 import type { Mark } from './marks';
 import { type Measure, type Page, type PageItem, pageOf, paginate } from './paginate';
@@ -65,6 +66,17 @@ interface Props {
   onHighlightDrag?(from: TextPoint | null, to: TextPoint | null, done: boolean): void;
   /** A tap on text while highlighting. */
   onHighlightTap?(at: TextPoint): void;
+  /** The page number shown, the (estimated) total, and characters per page. */
+  onPageInfo?(info: PageInfo): void;
+  /** Turn requests from outside (auto page turn); `n` increments per request. */
+  turn?: { dir: 1 | -1; n: number };
+}
+
+export interface PageInfo {
+  page: number;
+  total: number;
+  /** Characters per page at the current settings (for estimates like pages left). */
+  cpp: number;
 }
 
 interface Laid {
@@ -89,7 +101,7 @@ interface Cur {
   page: number | null;
 }
 
-export function PageReader({ book, settings, theme, start, startKey, version, onPosition, onTap, marksFor, onLongPressBlock, onLink, bookmarked, footerRight, onLayoutReady, highlighting, onHighlightDrag, onHighlightTap }: Props) {
+export function PageReader({ book, settings, theme, start, startKey, version, onPosition, onTap, marksFor, onLongPressBlock, onLink, bookmarked, footerRight, onLayoutReady, highlighting, onHighlightDrag, onHighlightTap, onPageInfo, turn }: Props) {
   const win = useWindowDimensions();
   const liveInsets = useSafeAreaInsets();
   // Showing/hiding the status bar can change the top inset on some iPhones;
@@ -273,6 +285,11 @@ export function PageReader({ book, settings, theme, start, startKey, version, on
       land();
     }
   };
+  const goRef = useRef(go);
+  goRef.current = go;
+  useEffect(() => {
+    if (turn) goRef.current(turn.dir);
+  }, [turn]);
   const layoutKeyRef = useRef(layoutKey);
   layoutKeyRef.current = layoutKey;
   const widthRef = useRef(win.width);
@@ -522,6 +539,21 @@ export function PageReader({ book, settings, theme, start, startKey, version, on
   const chapter = firstItem ? book.chapterAt(firstItem.b)?.t : undefined;
   const pct = firstItem ? book.fraction(lastPos.current) * 100 : 0;
 
+  // Page numbers: exact inside the laid-out chunks, estimated beyond them.
+  const cpp = charsPerPage([...laid.entries()].map(([c, l]) => ({ chars: book.chunkChars(c), pages: l.pages.length })));
+  const pageInfo =
+    cpp && current && cur.page !== null
+      ? (() => {
+          const total = pageCount(book.estimatedChars, cpp);
+          return { page: Math.min(total, pageNumber(book.chunks[cur.chunk]?.[1] ?? 0, cur.page, cpp)), total, cpp };
+        })()
+      : null;
+  const pageKeyInfo = pageInfo ? `${pageInfo.page}|${pageInfo.total}|${Math.round(pageInfo.cpp)}` : '';
+  useEffect(() => {
+    if (pageInfo) onPageInfo?.(pageInfo);
+  }, [pageKeyInfo]); // eslint-disable-line react-hooks/exhaustive-deps
+  const pageText = pageInfo ? `${pageInfo.page} of ${book.complete ? '' : '~'}${pageInfo.total} · ` : '';
+
   return (
     <View style={[styles.root, { backgroundColor: theme.bg, paddingTop: insets.top, paddingBottom: insets.bottom }]}>
       <View style={[styles.header, { paddingLeft: textLeft + 22, paddingRight: settings.margin + insets.right + 22 }]}>
@@ -564,7 +596,7 @@ export function PageReader({ book, settings, theme, start, startKey, version, on
       </View>
       <View style={[styles.footer, { paddingLeft: textLeft, paddingRight: settings.margin + insets.right }]}>
         <Text style={[styles.meta, { color: theme.muted }]}>
-          {book.complete ? `${pct.toFixed(1)}%` : `${pct.toFixed(1)}% · preparing ${Math.round(book.progress * 100)}%`}
+          {book.complete ? `${pageText}${pct.toFixed(1)}%` : `${pageText}${pct.toFixed(1)}% · preparing ${Math.round(book.progress * 100)}%`}
         </Text>
         <Text style={[styles.meta, { color: theme.muted }]}>{footerRight ?? ''}</Text>
       </View>

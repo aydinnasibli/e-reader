@@ -72,6 +72,13 @@ export class BookData {
     return i + 1 < this.chunks.length ? this.chunks[i + 1][0] : this.totalBlocks;
   }
 
+  /** Characters in chunk `i`. */
+  chunkChars(i: number): number {
+    const start = this.chunks[i]?.[1] ?? 0;
+    const end = i + 1 < this.chunks.length ? this.chunks[i + 1][1] : this.totalChars;
+    return Math.max(0, end - start);
+  }
+
   chunkOf(block: number): number {
     let lo = 0;
     let hi = this.chunks.length - 1;

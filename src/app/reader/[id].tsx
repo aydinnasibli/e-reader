@@ -4,20 +4,24 @@ import * as ScreenOrientation from 'expo-screen-orientation';
 import { type ErrorBoundaryProps, router, useLocalSearchParams } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ActivityIndicator, AppState, Pressable, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, AppState, Pressable, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
 import { type Block, type Position, blockText } from '@/engine/types';
 import { addBookmark, addHighlight, highlightsByBlock, removeBookmark, useAnnotations } from '@/lib/annotations';
 import { getBook, loadManifest, reprocessBook, updateBook, useBookStatus, useLiveBook } from '@/lib/library';
 import { useFontReady } from '@/lib/fonts';
 import { type ReaderSettings, setSettings, useReaderTheme, useSettings } from '@/lib/settings';
-import { ReadingTracker, charsPerMinute } from '@/lib/stats';
+import { ReadingTracker, charsPerMinute, readingSpeed } from '@/lib/stats';
 import { BookData } from '@/reader/book';
 import { Chrome } from '@/reader/Chrome';
 import type { Mark } from '@/reader/marks';
-import { PageReader } from '@/reader/PageReader';
+import { type PageInfo, PageReader } from '@/reader/PageReader';
+import { pagesBetween } from '@/reader/pageNumbers';
 import { ScrollReader } from '@/reader/ScrollReader';
 import { SelectionSheet, highlightColor } from '@/reader/SelectionSheet';
 import { type TextPoint, dragRanges } from '@/reader/selection';
+import { AutoBar } from '@/reader/AutoBar';
+import { CHARS_PER_WORD, pageDelay, scrollSpeed, stepWpm } from '@/reader/autoRead';
+import { BackChip } from '@/reader/BackChip';
 import { DisplayPanel } from '@/reader/DisplayPanel';
 import { HighlightBar } from '@/reader/HighlightBar';
 import { TapZones } from '@/reader/TapZones';
@@ -31,7 +35,8 @@ const before = (a: Position, b: Position) => a.b < b.b || (a.b === b.b && a.o <=
 const strictlyBefore = (a: Position, b: Position) => a.b < b.b || (a.b === b.b && a.o < b.o);
 
 export default function ReaderScreen() {
-  const { id } = useLocalSearchParams<{ id: string }>();
+  // `b`/`o`: open at that place instead of where reading left off (from the highlights screen).
+  const { id, b: atB, o: atO } = useLocalSearchParams<{ id: string; b?: string; o?: string }>();
   useKeepAwake();
   const settings = useSettings();
   const theme = useReaderTheme(settings);
@@ -82,7 +87,8 @@ export default function ReaderScreen() {
     if (status === 'ready') setVersion((v) => v + 1);
   }, [status]);
 
-  const startPos = useMemo<Position>(() => getBook(id)?.position ?? { b: 0, o: 0 }, [id]);
+  const savedPos = useMemo<Position>(() => getBook(id)?.position ?? { b: 0, o: 0 }, [id]);
+  const startPos = useMemo<Position>(() => (atB !== undefined ? { b: Number(atB) || 0, o: Number(atO) || 0 } : savedPos), [savedPos, atB, atO]);
   // Readers open at `latest`; bumping `jump.key` makes them jump there.
   const [jump, setJump] = useState({ pos: startPos, key: 0 });
   const [pos, setPos] = useState<Position>(startPos);
@@ -122,7 +128,10 @@ export default function ReaderScreen() {
       if (book) {
         const ch = book.charOffset(p);
         if (jumped.current) tracker.reset(ch);
-        else tracker.turn(ch);
+        else {
+          tracker.turn(ch);
+          setBack((bk) => (!bk ? bk : bk.turns >= 10 ? null : { ...bk, turns: bk.turns + 1 }));
+        }
         jumped.current = false;
       }
       if (saveTimer.current) clearTimeout(saveTimer.current);
@@ -146,7 +155,12 @@ export default function ReaderScreen() {
     };
   }, [save, tracker]);
 
-  const goTo = useCallback((p: Position, mark?: { s: number; e: number }) => {
+  // "Back to where I was": the place before the last jump, until used,
+  // dismissed, or read past (about ten page turns on).
+  // Opened at a highlight: offer the way back to where reading left off.
+  const [back, setBack] = useState<{ pos: Position; turns: number } | null>(atB !== undefined ? { pos: savedPos, turns: 0 } : null);
+  const goTo = useCallback((p: Position, mark?: { s: number; e: number }, remember = true) => {
+    if (remember) setBack({ pos: latest.current, turns: 0 });
     latest.current = p;
     jumped.current = true;
     setSearchMark(mark ? { b: p.b, ...mark } : null);
@@ -154,7 +168,15 @@ export default function ReaderScreen() {
     setSheet(null);
     setChrome(false);
   }, []);
-  const toggleChrome = useCallback(() => setChrome((c) => !c), []);
+  // Auto page turn (page mode) / auto-scroll (scroll mode). A tap in the
+  // middle of the page pauses it rather than opening the menu.
+  const [auto, setAuto] = useState<{ running: boolean } | null>(null);
+  const autoRunning = useRef(false);
+  autoRunning.current = !!auto?.running;
+  const toggleChrome = useCallback(() => {
+    if (autoRunning.current) setAuto({ running: false });
+    else setChrome((c) => !c);
+  }, []);
 
   // Display sliders: `draft` holds the values being dragged, drawn by
   // LivePreview. On release the values are saved and the preview stays until
@@ -195,6 +217,10 @@ export default function ReaderScreen() {
     if (draftTimer.current) clearTimeout(draftTimer.current);
   }, []);
 
+  // Page numbers (page mode only), reported by the page reader.
+  const [pageInfo, setPageInfo] = useState<PageInfo | null>(null);
+  useEffect(() => setPageInfo(null), [settings.mode]);
+
   // Highlight tool (bottom menu): while on, dragging over text highlights it.
   const [highlighting, setHighlighting] = useState(false);
   const [stroke, setStroke] = useState<{ from: TextPoint; to: TextPoint } | null>(null);
@@ -222,6 +248,28 @@ export default function ReaderScreen() {
     },
     [textOf, settings.highlightColor, id, book], // eslint-disable-line react-hooks/exhaustive-deps
   );
+
+  const win = useWindowDimensions();
+  const autoWpm = settings.autoWpm || Math.max(60, Math.round(readingSpeed(id).cpm / CHARS_PER_WORD / 10) * 10);
+  // Runs only while nothing else is in front of the page.
+  const autoActive = !!auto?.running && !chrome && !sheet && !note && !selection && !highlighting;
+  const [turn, setTurn] = useState<{ dir: 1 | -1; n: number } | undefined>(undefined);
+  useEffect(() => {
+    if (!autoActive || settings.mode !== 'page' || !book) return;
+    const from = book.charOffset(pos);
+    const to = end ? book.charOffset(end) : from + 1500;
+    const delay = pageDelay(Math.max(1, to - from), autoWpm);
+    // The last page: stop when it's read.
+    if (book.complete && to >= book.totalChars) {
+      const t = setTimeout(() => setAuto(null), delay);
+      return () => clearTimeout(t);
+    }
+    // Re-armed by every turn (and retried if a turn had to wait for text).
+    const t = setTimeout(() => setTurn((x) => ({ dir: 1, n: (x?.n ?? 0) + 1 })), delay);
+    return () => clearTimeout(t);
+  }, [autoActive, pos, end, autoWpm, settings.mode, book, turn]);
+  const textWidth = win.width - settings.margin * 2;
+  const autoScroll = autoActive && settings.mode === 'scroll' ? scrollSpeed(autoWpm, textWidth, settings.fontSize, Math.round(settings.fontSize * settings.lineSpacing)) : 0;
 
   // Highlights, the current search hit and a highlight being dragged, as drawable marks per block.
   const marks = useMemo(() => {
@@ -312,6 +360,15 @@ export default function ReaderScreen() {
   const chapterLeft = nextChapter ? (book.charOffset({ b: nextChapter.b, o: 0 }) - here) / speed : null;
   const bookLeft = (book.estimatedChars - here) / speed;
   const footerRight = chapterLeft !== null && chapterLeft > 0 ? `${formatMinutes(chapterLeft)} left in chapter` : `${formatMinutes(bookLeft)} left`;
+  const pagesLeftInChapter = pageInfo && nextChapter ? pagesBetween(here, book.charOffset({ b: nextChapter.b, o: 0 }), pageInfo.cpp) : null;
+  const pageLabel = pageInfo
+    ? (f: number) => `Page ${Math.min(pageInfo.total, Math.max(1, Math.round(f * pageInfo.total)))} of ${pageInfo.total}`
+    : undefined;
+  const chromeInfo = !book.complete
+    ? `Preparing book ${Math.round(book.progress * 100)}%`
+    : pagesLeftInChapter
+      ? `${pagesLeftInChapter} ${pagesLeftInChapter === 1 ? 'page' : 'pages'} left in chapter · ${formatMinutes(bookLeft)} left`
+      : `${formatMinutes(bookLeft)} left in book`;
 
   const Reader = settings.mode === 'page' ? PageReader : ScrollReader;
   return (
@@ -333,10 +390,30 @@ export default function ReaderScreen() {
         bookmarked={pageBookmarks.length > 0}
         footerRight={footerRight}
         onLayoutReady={onLayoutReady}
+        onPageInfo={setPageInfo}
+        turn={turn}
+        autoScroll={autoScroll}
+        onAutoInterrupt={() => setAuto({ running: false })}
         highlighting={highlighting}
         onHighlightDrag={onHighlightDrag}
         onHighlightTap={onHighlightTap}
       />
+      {back && !chrome && !highlighting && !sheet && !auto ? (
+        <BackChip
+          theme={theme}
+          label={
+            pageInfo
+              ? `Back to page ${Math.min(pageInfo.total, Math.floor(book.charOffset(back.pos) / pageInfo.cpp) + 1)}`
+              : `Back to ${Math.round(book.fraction(back.pos) * 100)}%`
+          }
+          onPress={() => {
+            const to = back.pos;
+            setBack(null);
+            goTo(to, undefined, false);
+          }}
+          onDismiss={() => setBack(null)}
+        />
+      ) : null}
       {draft ? <LivePreview book={book} settings={{ ...settings, ...draft }} theme={theme} pos={pos} /> : null}
       <Chrome
         visible={chrome && sheet !== 'display'}
@@ -344,9 +421,15 @@ export default function ReaderScreen() {
         title={book.entry.title}
         chapter={book.chapterAt(pos.b)?.t}
         fraction={book.fraction(pos)}
-        info={book.complete ? `${formatMinutes(bookLeft)} left in book` : `Preparing book ${Math.round(book.progress * 100)}%`}
+        info={chromeInfo}
+        pageLabel={pageLabel}
         bookmarked={pageBookmarks.length > 0}
         onBack={() => router.back()}
+        onAuto={() => {
+          setChrome(false);
+          setAuto({ running: true });
+        }}
+        autoLabel={settings.mode === 'page' ? 'Auto page turn' : 'Auto-scroll'}
         onSearch={() => setSheet('search')}
         onBookmark={toggleBookmark}
         onContents={() => setSheet('nav')}
@@ -359,6 +442,17 @@ export default function ReaderScreen() {
       />
       {settings.mode === 'page' && !settings.seenTapZones && !highlighting && !sheet ? (
         <TapZones theme={theme} tapForward={settings.tapForward} onDismiss={() => setSettings({ seenTapZones: true })} />
+      ) : null}
+      {auto && !chrome && !highlighting ? (
+        <AutoBar
+          theme={theme}
+          wpm={autoWpm}
+          running={auto.running}
+          onSlower={() => setSettings({ autoWpm: stepWpm(autoWpm, -1) })}
+          onFaster={() => setSettings({ autoWpm: stepWpm(autoWpm, 1) })}
+          onToggle={() => setAuto({ running: !auto.running })}
+          onStop={() => setAuto(null)}
+        />
       ) : null}
       {highlighting ? (
         <HighlightBar

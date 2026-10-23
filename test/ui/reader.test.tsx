@@ -186,3 +186,36 @@ describe('tap zones', () => {
     expect(screen.getByLabelText('Display')).toBeTruthy();
   }, 30000);
 });
+
+describe('page numbers, back after a jump, auto page turn', () => {
+  it('the footer shows the page number', async () => {
+    await openBook();
+    await waitFor(() => expect(screen.getByText(/^1 of 1 · /)).toBeTruthy(), { timeout: 3000 });
+  }, 30000);
+
+  it('after jumping from the contents, a chip goes back to where you were', async () => {
+    await openBook();
+    fireEvent.press(shown(P1)[0], { nativeEvent: { pageX: W / 2, pageY: 300 } });
+    fireEvent.press(screen.getByLabelText('Contents'));
+    // "Loomings" is also the page header and the heading; the contents entry is drawn last.
+    const entries = await screen.findAllByText('Loomings');
+    fireEvent.press(entries[entries.length - 1]);
+    const chip = await screen.findByLabelText(/^Back to page \d+$/);
+    fireEvent.press(chip);
+    await waitFor(() => expect(screen.queryByLabelText(/^Back to page/)).toBeNull());
+  }, 30000);
+
+  it('auto page turn: started from the menu, speed, pause and stop', async () => {
+    await openBook();
+    fireEvent.press(shown(P1)[0], { nativeEvent: { pageX: W / 2, pageY: 300 } });
+    fireEvent.press(screen.getByLabelText('Auto page turn'));
+    const speed = () => Number(/(\d+) wpm/.exec(screen.getByText(/\d+ wpm/).props.children.join(''))?.[1]);
+    const before = speed();
+    fireEvent.press(screen.getByLabelText('Faster'));
+    expect(speed()).toBeGreaterThan(before);
+    fireEvent.press(screen.getByLabelText('Pause'));
+    expect(screen.getByLabelText('Resume')).toBeTruthy();
+    fireEvent.press(screen.getByLabelText('Stop'));
+    expect(screen.queryByText(/\d+ wpm/)).toBeNull();
+  }, 30000);
+});

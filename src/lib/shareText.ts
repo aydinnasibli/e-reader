@@ -1,0 +1,21 @@
+// Share text as a file (so it can be saved to Files, mailed, sent...), or
+// as plain text where file sharing isn't available.
+
+import { File, Paths } from 'expo-file-system';
+import * as Sharing from 'expo-sharing';
+import { Share } from 'react-native';
+
+export async function shareTextFile(fileName: string, text: string, mimeType = 'text/markdown') {
+  try {
+    if (await Sharing.isAvailableAsync()) {
+      const f = new File(Paths.cache, fileName);
+      if (f.exists) f.delete();
+      f.write(text);
+      await Sharing.shareAsync(f.uri, { mimeType, UTI: 'net.daringfireball.markdown', dialogTitle: fileName });
+      return;
+    }
+  } catch {
+    // fall back to sharing the text itself
+  }
+  await Share.share({ message: text, title: fileName });
+}

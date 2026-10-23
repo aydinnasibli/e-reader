@@ -49,6 +49,8 @@ export interface BookEntry {
   finished?: boolean;
   /** Conversions started and not finished; a book that keeps killing the app stops being retried. */
   attempts?: number;
+  /** Title/author were edited by hand: conversion must not overwrite them. */
+  titleEdited?: boolean;
 }
 
 /** What the reader needs about a book that is still being converted. */
@@ -288,6 +290,21 @@ export async function importBooks(): Promise<ImportResult> {
   return { added, skipped, failed };
 }
 
+/** Edit a book's title and/or author; kept even if the book is converted again. */
+export function renameBook(id: string, patch: { title?: string; author?: string }) {
+  const title = patch.title?.trim();
+  const author = patch.author?.trim();
+  updateBook(id, { ...(title ? { title } : {}), ...(author !== undefined ? { author } : {}), titleEdited: true });
+}
+
+/** Go back to the title and author the book file itself gives. */
+export function restoreBookTitle(id: string) {
+  const m = loadManifest(id);
+  const b = getBook(id);
+  if (!b) return;
+  updateBook(id, { title: m?.title || titleFromFileName(b.fileName), author: m?.author ?? '', titleEdited: false });
+}
+
 /** Convert a book again from its original file (after damage or an engine upgrade). */
 export function reprocessBook(id: string) {
   updateBook(id, { status: 'processing', progress: 0, error: undefined, attempts: 0 });
@@ -395,8 +412,9 @@ async function convert(book: BookEntry) {
         fallbackTitle: book.title,
         meta: (info) => {
           const patch: Partial<BookEntry> = {};
-          if (info.title) patch.title = info.title;
-          if (info.author) patch.author = info.author;
+          const edited = getBook(id)?.titleEdited;
+          if (info.title && !edited) patch.title = info.title;
+          if (info.author && !edited) patch.author = info.author;
           if (info.coverFile) patch.coverFile = info.coverFile;
           updateBook(id, patch);
         },
@@ -405,12 +423,12 @@ async function convert(book: BookEntry) {
     );
     writeJson(manifestFile(id), manifest);
     const coverRef = manifest.cover ? manifest.images[manifest.cover] : undefined;
+    const edited = getBook(id)?.titleEdited;
     updateBook(id, {
       status: 'ready',
       progress: 1,
       attempts: undefined,
-      title: manifest.title,
-      author: manifest.author,
+      ...(edited ? {} : { title: manifest.title, author: manifest.author }),
       format: manifest.format,
       coverFile: coverRef && 'file' in coverRef ? coverRef.file : getBook(id)?.coverFile,
     });

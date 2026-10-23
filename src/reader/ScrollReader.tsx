@@ -34,6 +34,10 @@ interface Props {
   highlighting?: boolean;
   onHighlightDrag?(from: TextPoint | null, to: TextPoint | null, done: boolean): void;
   onHighlightTap?(at: TextPoint): void;
+  /** Auto-scroll speed in points per second; 0 or missing = off. */
+  autoScroll?: number;
+  /** The reader touched the list while it was auto-scrolling. */
+  onAutoInterrupt?(): void;
 }
 
 interface Win {
@@ -42,7 +46,7 @@ interface Win {
   start: number; // first block shown
 }
 
-export function ScrollReader({ book, settings, theme, start, startKey, version, onPosition, onTap, marksFor, onLongPressBlock, onLink, footerRight, highlighting, onHighlightDrag, onHighlightTap }: Props) {
+export function ScrollReader({ book, settings, theme, start, startKey, version, onPosition, onTap, marksFor, onLongPressBlock, onLink, footerRight, highlighting, onHighlightDrag, onHighlightTap, autoScroll, onAutoInterrupt }: Props) {
   const win = useWindowDimensions();
   const insets = useSafeAreaInsets();
   // Clear of a landscape notch on either side.
@@ -191,6 +195,31 @@ export function ScrollReader({ book, settings, theme, start, startKey, version, 
     });
   };
 
+  // ---- auto-scroll ----
+  const list = useRef<FlatList<number>>(null);
+  const offset = useRef(0);
+  /** Where the list really is (it stops at the end of what's loaded). */
+  const actual = useRef(0);
+  useEffect(() => {
+    if (!autoScroll) return;
+    let frame = 0;
+    let last = Date.now();
+    offset.current = actual.current;
+    const step = () => {
+      const now = Date.now();
+      // Frames can be late (busy JS thread): move by elapsed time, not per frame.
+      const dt = Math.min(0.25, (now - last) / 1000);
+      last = now;
+      // Never run ahead of the list: at the end of the loaded text it can't
+      // move, and new text arriving must not make it jump.
+      offset.current = Math.min(offset.current + autoScroll * dt, actual.current + 120);
+      list.current?.scrollToOffset({ offset: offset.current, animated: false });
+      frame = requestAnimationFrame(step);
+    };
+    frame = requestAnimationFrame(step);
+    return () => cancelAnimationFrame(frame);
+  }, [autoScroll]);
+
   // ---- highlight tool ----
   // Scrolling is paused while it's on, so where each paragraph sits on screen
   // is measured once (and again if the list changes) and hit testing is instant.
@@ -312,8 +341,15 @@ export function ScrollReader({ book, settings, theme, start, startKey, version, 
       )}
       {w && (
         <FlatList
+          ref={list}
           key={startKey}
           scrollEnabled={!highlighting}
+          onScroll={(e) => {
+            actual.current = e.nativeEvent.contentOffset.y;
+            if (!autoScroll) offset.current = actual.current;
+          }}
+          scrollEventThrottle={32}
+          onScrollBeginDrag={() => autoScroll && onAutoInterrupt?.()}
           data={data}
           keyExtractor={(b) => String(b)}
           renderItem={renderItem}

@@ -102,6 +102,7 @@ export default function Library() {
     Haptics.selectionAsync().catch(() => {});
     const finished = isFinished(b);
     showActions(b.title, [
+      { label: 'Details', icon: 'information-circle-outline', onPress: () => router.push({ pathname: '/book/[id]', params: { id: b.id } }) },
       { label: 'Add to collection…', icon: 'albums-outline', onPress: () => collectionsMenu(b) },
       {
         label: finished ? 'Mark as unread' : 'Mark as finished',
@@ -227,6 +228,9 @@ export default function Library() {
           },
           headerRight: () => (
             <View style={styles.headerButtons}>
+              <Pressable onPress={() => router.push('/notes')} hitSlop={10} accessibilityLabel="Highlights and notes">
+                <Ionicons name="color-wand-outline" size={22} color={c.text} />
+              </Pressable>
               <Pressable onPress={() => setStatsOpen(true)} hitSlop={10} accessibilityLabel="Reading stats">
                 <Ionicons name="stats-chart-outline" size={22} color={c.text} />
               </Pressable>
