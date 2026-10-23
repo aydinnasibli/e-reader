@@ -3,7 +3,7 @@ import * as ScreenOrientation from 'expo-screen-orientation';
 import { type ErrorBoundaryProps, router, useLocalSearchParams } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ActivityIndicator, Alert, AppState, BackHandler, Pressable, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
+import { ActivityIndicator, AppState, BackHandler, Pressable, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
 import { type Block, type Position, blockText } from '@/engine/types';
 import { addBookmark, addHighlight, highlightsByBlock, removeBookmark, useAnnotations } from '@/lib/annotations';
 import { getBook, loadManifest, reprocessBook, updateBook, useBookStatus, useLiveBook } from '@/lib/library';
@@ -411,7 +411,7 @@ export default function ReaderScreen() {
         message={failed ?? getBook(id)?.error ?? 'Its prepared data is missing or damaged.'}
         actions={[
           {
-            label: 'Prepare it again',
+            label: 'Try again',
             primary: true,
             onPress: () => {
               reprocessBook(id);
@@ -441,8 +441,8 @@ export default function ReaderScreen() {
   // Time left, from this reader's measured speed.
   const speed = charsPerMinute(id);
   const here = book.charOffset(pos);
-  const prevChapter = chapterTarget(book.toc, pos.b, -1);
-  const nextChapter = chapterTarget(book.toc, pos.b, 1);
+  const prevChapter = chapterTarget(book.toc, pos, -1);
+  const nextChapter = chapterTarget(book.toc, pos, 1);
   const chapterLeft = nextChapter !== null ? (book.charOffset({ b: nextChapter, o: 0 }) - here) / speed : null;
   const bookLeft = (book.estimatedChars - here) / speed;
   const footerRight = chapterLeft !== null && chapterLeft > 0 ? `${formatMinutes(chapterLeft)} left in chapter` : `${formatMinutes(bookLeft)} left`;
@@ -463,11 +463,9 @@ export default function ReaderScreen() {
       placeholder: pages ? `Page 1–${pages}, or a percentage like 45%` : 'A percentage, like 45%',
       confirm: 'Go',
       numbers: true,
-      onSubmit: async (text) => {
-        const f = parseGoTo(text, pages);
-        if (f === null) return Alert.alert(pages ? `Enter a page from 1 to ${pages}, or a percentage.` : 'Enter a percentage from 0 to 100.');
-        goTo(await book.positionAt(f));
-      },
+      validate: (text) =>
+        parseGoTo(text, pages) !== null ? null : pages ? `Enter a page from 1 to ${pages}, or a percentage.` : 'Enter a percentage from 0 to 100.',
+      onSubmit: async (text) => goTo(await book.positionAt(parseGoTo(text, pages)!)),
     });
   };
   return (

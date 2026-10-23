@@ -16,9 +16,22 @@ export interface Action {
   onPress(): void;
 }
 
-type Dialog =
-  | { kind: 'actions'; title?: string; actions: Action[] }
-  | { kind: 'prompt'; title: string; initial: string; placeholder?: string; confirm: string; multiline?: boolean; allowEmpty?: boolean; numbers?: boolean; onSubmit(text: string): void };
+export interface PromptOptions {
+  initial?: string;
+  placeholder?: string;
+  /** The button's label; "Save" if not given. */
+  confirm?: string;
+  multiline?: boolean;
+  /** Saving an empty field is allowed (it clears the value); otherwise it does nothing. */
+  allowEmpty?: boolean;
+  /** A keyboard for numbers (and "%"). */
+  numbers?: boolean;
+  /** Checks what was typed: a message shown under the field (the dialog stays open), or null if it's fine. */
+  validate?(text: string): string | null;
+  onSubmit(text: string): void;
+}
+
+type Dialog = { kind: 'actions'; title?: string; actions: Action[] } | ({ kind: 'prompt'; title: string } & PromptOptions);
 
 let current: Dialog | null = null;
 let listener: ((d: Dialog | null) => void) | null = null;
@@ -32,35 +45,20 @@ export function showActions(title: string | undefined, actions: Action[]) {
   open({ kind: 'actions', title, actions });
 }
 
-export function showPrompt(
-  title: string,
-  /**
-   * `allowEmpty`: saving an empty field is allowed (it clears the value); otherwise it does nothing.
-   * `numbers`: a keyboard for numbers (and "%").
-   */
-  opts: { initial?: string; placeholder?: string; confirm?: string; multiline?: boolean; allowEmpty?: boolean; numbers?: boolean; onSubmit(text: string): void },
-) {
-  open({
-    kind: 'prompt',
-    title,
-    initial: opts.initial ?? '',
-    placeholder: opts.placeholder,
-    confirm: opts.confirm ?? 'Save',
-    multiline: opts.multiline,
-    allowEmpty: opts.allowEmpty,
-    numbers: opts.numbers,
-    onSubmit: opts.onSubmit,
-  });
+export function showPrompt(title: string, opts: PromptOptions) {
+  open({ kind: 'prompt', title, ...opts });
 }
 
 export function DialogHost() {
   const c = useAppColors();
   const [dialog, setDialog] = useState<Dialog | null>(current);
   const [text, setText] = useState('');
+  const [problem, setProblem] = useState<string | null>(null);
   useEffect(() => {
     listener = (d) => {
       setDialog(d);
-      if (d?.kind === 'prompt') setText(d.initial);
+      setProblem(null);
+      if (d?.kind === 'prompt') setText(d.initial ?? '');
     };
     return () => {
       listener = null;
@@ -68,7 +66,11 @@ export function DialogHost() {
   }, []);
   const close = () => open(null);
   const submit = () => {
-    if (dialog?.kind === 'prompt' && (text.trim() || dialog.allowEmpty)) dialog.onSubmit(text.trim());
+    if (dialog?.kind !== 'prompt') return;
+    const value = text.trim();
+    const wrong = dialog.validate?.(value) ?? null;
+    if (wrong) return setProblem(wrong);
+    if (value || dialog.allowEmpty) dialog.onSubmit(value);
     close();
   };
   const colors = { bg: c.elevated, text: c.text, border: c.border };
@@ -95,7 +97,10 @@ export function DialogHost() {
           <TextInput
             autoFocus
             value={text}
-            onChangeText={setText}
+            onChangeText={(t) => {
+              setText(t);
+              setProblem(null);
+            }}
             placeholder={dialog.placeholder}
             placeholderTextColor={c.secondary}
             multiline={dialog.multiline}
@@ -105,16 +110,15 @@ export function DialogHost() {
             keyboardType={dialog.numbers && Platform.OS === 'ios' ? 'numbers-and-punctuation' : 'default'}
             returnKeyType="done"
           />
+          {problem ? <Text style={{ color: c.danger, fontSize: 14 }}>{problem}</Text> : null}
           <View style={styles.buttons}>
             <Pressable onPress={close} style={[styles.btn, { backgroundColor: c.chip }]}>
               <Text style={{ color: c.text, fontSize: 16 }}>Cancel</Text>
             </Pressable>
             <Pressable
-              onPress={() => {
-                submit();
-              }}
+              onPress={submit}
               style={[styles.btn, { backgroundColor: c.accent }]}>
-              <Text style={{ color: c.accentText, fontSize: 16, fontWeight: '600' }}>{dialog.confirm}</Text>
+              <Text style={{ color: c.accentText, fontSize: 16, fontWeight: '600' }}>{dialog.confirm ?? 'Save'}</Text>
             </Pressable>
           </View>
         </View>
@@ -127,9 +131,10 @@ const styles = StyleSheet.create({
   row: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 20, minHeight: 52 },
   icon: { width: 32 },
   label: { flex: 1, fontSize: 17 },
-  prompt: { paddingHorizontal: 20, paddingTop: 4, gap: 14 },
+  // The text box gives way first when the card has to shrink (small screens, keyboard up).
+  prompt: { paddingHorizontal: 20, paddingTop: 4, gap: 14, flexShrink: 1 },
   input: { borderWidth: StyleSheet.hairlineWidth, borderRadius: 10, paddingHorizontal: 14, paddingVertical: 12, fontSize: 17 },
-  multiline: { minHeight: 110, maxHeight: 220, textAlignVertical: 'top' },
+  multiline: { minHeight: 64, height: 110, flexShrink: 1, textAlignVertical: 'top' },
   buttons: { flexDirection: 'row', gap: 10 },
   btn: { flex: 1, alignItems: 'center', paddingVertical: 12, borderRadius: 10 },
 });

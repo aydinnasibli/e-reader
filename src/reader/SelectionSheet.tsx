@@ -181,8 +181,8 @@ export function SelectionSheet({ bookId, bookTitle, lang, target, theme, onClose
                     clearHighlightRange(bookId, target.b, range[0], range[1]);
                     close();
                   };
-                  // A note goes with its highlight: ask first. Plain highlighting is cleared at once.
-                  if (highlights.some((h) => hasNote(h) && h.s < range[1] && range[0] < h.e)) confirmDeleteHighlight(true, clear);
+                  // A note goes when its whole highlight does (one that is only trimmed keeps it): ask first.
+                  if (highlights.some((h) => hasNote(h) && range[0] <= h.s && h.e <= range[1])) confirmDeleteHighlight(true, clear);
                   else clear();
                 }}
                 style={styles.dotBtn}

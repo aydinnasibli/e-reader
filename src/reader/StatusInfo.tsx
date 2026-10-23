@@ -1,9 +1,9 @@
 // The time and battery level shown while reading (the phone's status bar is
 // hidden then).
 
-import { useBatteryLevel } from 'expo-battery';
+import { getBatteryLevelAsync } from 'expo-battery';
 import { useEffect, useState } from 'react';
-import { type StyleProp, Text, type TextStyle } from 'react-native';
+import { AppState, type StyleProp, Text, type TextStyle } from 'react-native';
 
 export function formatClock(now: Date): string {
   return now.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
@@ -14,30 +14,47 @@ export function formatBattery(level: number): string | null {
   return level >= 0 ? `${Math.round(level * 100)}%` : null;
 }
 
-/** The current time, updated on the minute. */
-export function useClock(): string {
-  const [now, setNow] = useState(() => new Date());
+/**
+ * Calls `onTick` now, just after every minute starts, and when the app comes
+ * back to the screen (timers stand still while the phone sleeps).
+ */
+function useMinuteTick(onTick: () => void) {
   useEffect(() => {
     let timer: ReturnType<typeof setTimeout>;
-    const schedule = () => {
+    const tick = () => {
+      clearTimeout(timer);
+      onTick();
       const d = new Date();
-      // Just after the next minute starts.
-      timer = setTimeout(() => {
-        setNow(new Date());
-        schedule();
-      }, 60_050 - (d.getSeconds() * 1000 + d.getMilliseconds()));
+      timer = setTimeout(tick, 60_050 - (d.getSeconds() * 1000 + d.getMilliseconds()));
     };
-    schedule();
-    return () => clearTimeout(timer);
-  }, []);
+    tick();
+    const sub = AppState.addEventListener('change', (s) => s === 'active' && tick());
+    return () => {
+      clearTimeout(timer);
+      sub.remove();
+    };
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+}
+
+export function useClock(): string {
+  const [now, setNow] = useState(() => new Date());
+  useMinuteTick(() => setNow(new Date()));
   return formatClock(now);
 }
 
+/**
+ * The battery level, read every minute: the battery hook only updates on
+ * Android when the battery gets low or okay again, not as it drains.
+ */
 export function useBattery(): string | null {
-  return formatBattery(useBatteryLevel());
+  const [level, setLevel] = useState(-1);
+  useMinuteTick(() => {
+    getBatteryLevelAsync().then(setLevel, () => {});
+  });
+  return formatBattery(level);
 }
 
-/** Each piece is its own component, so the timer and battery listener run only while shown. */
+/** Each piece is its own component, so the timers run only while shown. */
 export function Clock({ style, maxScale }: { style?: StyleProp<TextStyle>; maxScale?: number }) {
   return (
     <Text numberOfLines={1} maxFontSizeMultiplier={maxScale} style={style}>
@@ -55,8 +72,8 @@ export function Battery({ style, maxScale }: { style?: StyleProp<TextStyle>; max
   ) : null;
 }
 
-/** "14:32 · 82%" in one line. */
-export function ClockBattery({ style }: { style?: StyleProp<TextStyle> }) {
+/** "14:32 · 82%", inside a line of text. */
+export function ClockBattery() {
   const level = useBattery();
-  return <Text style={style}>{useClock() + (level ? ` · ${level}` : '')}</Text>;
+  return <Text>{useClock() + (level ? ` · ${level}` : '')}</Text>;
 }

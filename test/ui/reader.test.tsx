@@ -4,7 +4,7 @@
 // a word and highlight it.
 
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react-native';
-import { Alert, BackHandler, Dimensions } from 'react-native';
+import { BackHandler, Dimensions } from 'react-native';
 import type { Block, Manifest } from '@/engine/types';
 import { getAnnotations } from '@/lib/annotations';
 import { setSettings } from '@/lib/settings';
@@ -294,7 +294,6 @@ describe('the end of the book', () => {
 
 describe('getting around from the menu', () => {
   it('Go to page takes a page number or a percentage, and says what to type otherwise', async () => {
-    const alert = jest.spyOn(Alert, 'alert').mockImplementation(() => {});
     render(
       <>
         <ReaderScreen />
@@ -305,10 +304,15 @@ describe('getting around from the menu', () => {
     fireEvent.press(shown(P1)[0], { nativeEvent: { pageX: W / 2, pageY: 300 } });
     await waitFor(() => expect(screen.getByText(/^1 of 1 · /)).toBeTruthy(), { timeout: 3000 });
     fireEvent.press(screen.getByLabelText('Go to page'));
-    fireEvent.changeText(screen.getByPlaceholderText('Page 1–1, or a percentage like 45%'), '7');
+    const field = screen.getByPlaceholderText('Page 1–1, or a percentage like 45%');
+    fireEvent.changeText(field, '7');
     fireEvent.press(screen.getByText('Go'));
-    await waitFor(() => expect(alert).toHaveBeenCalledWith('Enter a page from 1 to 1, or a percentage.'));
-    alert.mockRestore();
+    // Said right there, and the dialog stays open to fix it.
+    expect(screen.getByText('Enter a page from 1 to 1, or a percentage.')).toBeTruthy();
+    fireEvent.changeText(field, '50%');
+    expect(screen.queryByText('Enter a page from 1 to 1, or a percentage.')).toBeNull();
+    fireEvent.press(screen.getByText('Go'));
+    await waitFor(() => expect(screen.queryByPlaceholderText('Page 1–1, or a percentage like 45%')).toBeNull());
   }, 30000);
 
   it('chapter buttons: none before the first chapter or after the last', async () => {

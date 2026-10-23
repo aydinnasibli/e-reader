@@ -564,14 +564,20 @@ export function PageReader({ book, settings, theme, start, startKey, version, on
   return (
     <View style={[styles.root, { backgroundColor: theme.bg, paddingTop: insets.top, paddingBottom: insets.bottom }]}>
       {/* Clock, chapter, battery; the right edge is kept clear for the bookmark ribbon. */}
-      <View style={[styles.header, { paddingLeft: textLeft, paddingRight: settings.margin + insets.right + 22 }]}>
-        <View style={styles.side}>{settings.showClock ? <Clock maxScale={META_SCALE} style={[styles.meta, { color: theme.muted }]} /> : null}</View>
+      <View style={[styles.header, { paddingLeft: textLeft + (settings.showClock ? 0 : 22), paddingRight: settings.margin + insets.right + 22 }]}>
+        {settings.showClock ? (
+          <View style={styles.side}>
+            <Clock maxScale={META_SCALE} style={[styles.meta, { color: theme.muted }]} />
+          </View>
+        ) : null}
         <Text numberOfLines={1} maxFontSizeMultiplier={META_SCALE} style={[styles.meta, styles.headerTitle, { color: theme.muted }]}>
           {chapter ?? book.entry.title}
         </Text>
-        <View style={[styles.side, styles.sideRight]}>
-          {settings.showClock ? <Battery maxScale={META_SCALE} style={[styles.meta, { color: theme.muted }]} /> : null}
-        </View>
+        {settings.showClock ? (
+          <View style={[styles.side, styles.sideRight]}>
+            <Battery maxScale={META_SCALE} style={[styles.meta, { color: theme.muted }]} />
+          </View>
+        ) : null}
         {bookmarked ? <Ionicons name="bookmark" size={20} color={theme.accent} style={styles.ribbon} /> : null}
       </View>
       <View

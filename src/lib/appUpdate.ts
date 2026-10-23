@@ -24,7 +24,8 @@ export interface AvailableUpdate {
 export type UpdateState =
   | { kind: 'idle' }
   | { kind: 'checking' }
-  | { kind: 'available'; update: AvailableUpdate }
+  /** `tried`: the installer was opened and the app is still the old version. */
+  | { kind: 'available'; update: AvailableUpdate; tried?: boolean }
   | { kind: 'downloading'; update: AvailableUpdate; progress: number }
   | { kind: 'installing'; update: AvailableUpdate }
   | { kind: 'error'; message: string; update?: AvailableUpdate };
@@ -165,8 +166,9 @@ export async function installUpdate(update: AvailableUpdate) {
       flags: GRANT_READ,
       type: 'application/vnd.android.package-archive',
     });
-    // If the person backs out of the installer, offer the update again.
-    set({ kind: 'available', update });
+    // Still here: the person backed out, or Android asked to allow installs
+    // from this app first. Offer the update again, with what to do.
+    set({ kind: 'available', update, tried: true });
   } catch (e) {
     set({ kind: 'error', message: updateErrorMessage(e, step), update });
   }

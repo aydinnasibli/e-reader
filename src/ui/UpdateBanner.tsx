@@ -57,16 +57,16 @@ export function UpdateBanner() {
         <Text style={[styles.title, { color: c.text }]}>
           {s.kind === 'downloading' ? `Downloading… ${Math.round(s.progress * 100)}%` : s.kind === 'installing' ? 'Opening installer…' : 'New version available'}
         </Text>
-        {s.kind === 'installing' ? (
-          <Text style={{ color: c.secondary, fontSize: 13 }}>
-            If Android asks, tap Settings, allow installing from this app, then go back and tap Install.
-          </Text>
-        ) : null}
+
         {s.kind === 'downloading' ? (
           <View style={[styles.track, { backgroundColor: c.border }]}>
             <View style={[styles.fill, { width: `${Math.round(s.progress * 100)}%`, backgroundColor: c.accent }]} />
           </View>
-        ) : s.kind === 'installing' ? null : (
+        ) : s.kind === 'available' && s.tried ? (
+          <Text style={{ color: c.secondary, fontSize: 13 }}>
+            Not installed yet. If Android asked, tap Settings, allow installing from this app, then go back and tap Update again.
+          </Text>
+        ) : (
           <Text numberOfLines={2} style={{ color: c.secondary, fontSize: 13 }}>
             {`Version 1.0.${update.build} · ${formatBytes(update.size)}`}
             {update.notes ? ` · ${update.notes.split('\n')[0]}` : ''}
