@@ -22,7 +22,7 @@ import { AutoBar } from '@/reader/AutoBar';
 import { CHARS_PER_WORD, pageDelay, scrollSpeed, stepWpm } from '@/reader/autoRead';
 import { BackChip } from '@/reader/BackChip';
 import { backLayer } from '@/reader/backLayer';
-import { storyEnd } from '@/reader/finish';
+import { finishesBook, storyEnd } from '@/reader/finish';
 import { chapterTarget, parseGoTo } from '@/reader/navigate';
 import { DisplayPanel } from '@/reader/DisplayPanel';
 import { HighlightBar } from '@/reader/HighlightBar';
@@ -111,9 +111,17 @@ export default function ReaderScreen() {
   }, [book]);
 
   // The end of the book: its last page, or the back matter after the story,
-  // reached by turning pages (not by jumping there). Marks the book finished.
-  const storyEndBlock = useRef<number | null>(null);
-  storyEndBlock.current = book?.complete ? storyEnd(book.toc, book.totalBlocks) : null;
+  // reached by turning pages from the story (not by jumping there, e.g. to
+  // read a note, and not by laying the same page out again). Marks the book finished.
+  const storyEndBlock = useMemo(
+    () => (book?.complete ? storyEnd(book.toc, (b) => book.chunks[book.chunkOf(b)]?.[1] ?? 0, book.totalChars) : null),
+    [book, version], // eslint-disable-line react-hooks/exhaustive-deps
+  );
+  const storyEndRef = useRef(storyEndBlock);
+  storyEndRef.current = storyEndBlock;
+  /** Where reading started since the last jump, and whether the last position shown was the book's last page. */
+  const runStart = useRef<Position | null>(null);
+  const wasLast = useRef(false);
   const finishedHere = useRef(false);
   const [endChip, setEndChip] = useState(false);
   const markFinished = useCallback(() => {
@@ -125,6 +133,12 @@ export default function ReaderScreen() {
   const reachEnd = useCallback(() => {
     if (!finishedHere.current) markFinished();
   }, [markFinished]);
+  // Scroll mode: the end came into view while reading on from the story.
+  const onScrolledToEnd = useCallback(() => {
+    const start = runStart.current?.b;
+    const storyEnd = storyEndRef.current;
+    if (start !== undefined && (storyEnd === null || start < storyEnd)) reachEnd();
+  }, [reachEnd]);
 
   // Reading time: page turns feed the tracker; jumps reset it.
   const tracker = useRef(new ReadingTracker(id)).current;
@@ -141,11 +155,22 @@ export default function ReaderScreen() {
   }, [book, id]);
   const onPosition = useCallback(
     (p: Position, e?: Position, last?: boolean) => {
+      const prev = latest.current;
       latest.current = p;
       setPos(p);
       setEnd(e);
       if (book) {
-        if (!jumped.current && (last || (storyEndBlock.current !== null && p.b >= storyEndBlock.current))) reachEnd();
+        const step = {
+          runStart: jumped.current ? null : (runStart.current?.b ?? null),
+          prev: prev.b,
+          now: p.b,
+          last: !!last,
+          wasLast: wasLast.current,
+          storyEnd: storyEndRef.current,
+        };
+        if (finishesBook(step)) reachEnd();
+        if (jumped.current) runStart.current = p;
+        wasLast.current = !!last;
         const ch = book.charOffset(p);
         if (jumped.current) tracker.reset(ch);
         else {
@@ -470,7 +495,7 @@ export default function ReaderScreen() {
         onAutoInterrupt={() => setAuto({ running: false })}
         onEnd={pastEnd}
         onAutoEnd={stopAuto}
-        onReachEnd={reachEnd}
+        onReachEnd={onScrolledToEnd}
         highlighting={highlighting}
         onHighlightDrag={onHighlightDrag}
         onHighlightTap={onHighlightTap}
