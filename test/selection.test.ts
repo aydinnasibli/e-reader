@@ -214,3 +214,17 @@ describe('selection with handles', () => {
   });
 });
 
+
+describe('Chinese and Japanese (no spaces between words)', () => {
+  it('a long press selects one character, not the whole sentence', () => {
+    const zh = '我们在海上航行。The ship 很大';
+    const t = tokenize(zh);
+    expect(t[wordAt(t, 1)].text).toBe('们');
+    expect(t[wordAt(t, 9)].text).toBe('The');
+    expect(t.filter((x) => x.word).map((x) => x.text)).toEqual(['我', '们', '在', '海', '上', '航', '行', '。', 'The', 'ship', '很', '大']);
+    const ja = 'ひらがなとカタカナ';
+    expect(tokenize(ja).map((x) => x.text)).toHaveLength(ja.length);
+    // Offsets still line up with the text.
+    for (const x of tokenize(zh)) expect(zh.slice(x.start, x.start + x.text.length)).toBe(x.text);
+  });
+});

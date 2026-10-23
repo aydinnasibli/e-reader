@@ -3,7 +3,7 @@
 // 500 MB EPUB full of images costs the same to open as a 1 MB one.
 
 import { Inflate, inflateSync } from 'fflate';
-import { type ByteSource, READ_SLICE } from './io';
+import { BookError, type ByteSource, READ_SLICE } from './io';
 import { decodeUtf8, looksLikeUtf8 } from './decode';
 
 export interface ZipEntry {
@@ -14,6 +14,19 @@ export interface ZipEntry {
   /** Offset of the local file header. */
   offset: number;
 }
+
+/**
+ * Largest entry read whole into memory (package files, tables of contents,
+ * images). The size comes from the file itself, so a damaged or hostile one
+ * claiming 4 GB must be refused before anything is allocated.
+ */
+export const MAX_READ_BYTES = 64 * 1024 * 1024;
+/** Largest entry streamed (a chapter); the biggest real ones are tens of MB. */
+export const MAX_ENTRY_BYTES = 512 * 1024 * 1024;
+/** How far a streamed entry may inflate past the size it declares before it counts as a zip bomb. */
+const SIZE_SLACK = 1024 * 1024;
+
+const TOO_BIG = 'This book is damaged: part of it is far bigger than a book can be.';
 
 const EOCD_SIG = 0x06054b50;
 const ZIP64_LOCATOR_SIG = 0x07064b50;
@@ -124,6 +137,7 @@ export class ZipArchive {
 
   /** Read and decompress a whole entry. Use for small files (OPF, NCX, images). */
   read(e: ZipEntry): Uint8Array {
+    if (e.size > MAX_READ_BYTES || e.compressedSize > MAX_READ_BYTES) throw new BookError(TOO_BIG);
     const data = this.src.read(this.dataOffset(e), e.compressedSize);
     if (e.method === 0) return data;
     if (e.method === 8) return inflateSync(data, { out: new Uint8Array(e.size) });
@@ -138,8 +152,18 @@ export class ZipArchive {
   async stream(e: ZipEntry, onData: (bytes: Uint8Array) => void, between?: (doneFraction: number) => Promise<void>) {
     const start = this.dataOffset(e);
     const total = e.compressedSize;
+    // Real entries inflate to the size they declare; one that keeps going is a
+    // zip bomb that would fill the phone with converted text.
+    const limit = Math.min(MAX_ENTRY_BYTES, e.size + SIZE_SLACK);
+    if (e.size > MAX_ENTRY_BYTES) throw new BookError(TOO_BIG);
+    let out = 0;
     let inflater: Inflate | null = null;
-    if (e.method === 8) inflater = new Inflate((chunk) => onData(chunk));
+    if (e.method === 8)
+      inflater = new Inflate((chunk) => {
+        out += chunk.length;
+        if (out > limit) throw new BookError(TOO_BIG);
+        onData(chunk);
+      });
     else if (e.method !== 0) throw new Error(`Unsupported compression method ${e.method}`);
     for (let pos = 0; pos < total; ) {
       const n = Math.min(READ_SLICE, total - pos);
@@ -155,6 +179,7 @@ export class ZipArchive {
 
 /** Static helper for raw reads of a stored/deflated entry located by manifest data. */
 export function readZipData(src: ByteSource, offset: number, compressedSize: number, size: number, method: number): Uint8Array {
+  if (size > MAX_READ_BYTES || compressedSize > MAX_READ_BYTES) throw new BookError(TOO_BIG);
   const h = src.read(offset, 30);
   const start = offset + 30 + u16(h, 26) + u16(h, 28);
   const data = src.read(start, compressedSize);

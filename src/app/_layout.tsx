@@ -2,6 +2,7 @@ import { DarkTheme, DefaultTheme, type ErrorBoundaryProps, Stack, ThemeProvider 
 import { StatusBar } from 'expo-status-bar';
 import { ErrorScreen } from '@/ui/ErrorScreen';
 import { AppState, Platform } from 'react-native';
+import { flushAnnotations } from '@/lib/annotations';
 import { flushLibrary, loadLibrary } from '@/lib/library';
 import { useSharedFileNavigation } from '@/lib/openWith';
 import { flushStats } from '@/lib/stats';
@@ -17,6 +18,7 @@ if (Platform.OS !== 'web') {
     if (s !== 'active') Promise.resolve().then(() => {
       flushLibrary();
       flushStats();
+      flushAnnotations();
     });
   });
 }

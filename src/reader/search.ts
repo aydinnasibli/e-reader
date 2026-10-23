@@ -73,16 +73,18 @@ export function searchBook(book: BookData, query: string, onUpdate: (p: SearchPr
     let lastPublish = 0;
     const count = book.chunkCount;
     for (let i = 0; i < count && !cancelled && hits.length < MAX_HITS; i++) {
-      let raw: string;
+      // Every chunk is parsed (well under a millisecond each): matching the raw
+      // JSON would miss words split across style runs, like a bold first letter.
+      // A missing or damaged chunk is skipped; the rest of the book is still searched.
+      let blocks: Block[];
       try {
-        raw = await chunkFile(book.entry.id, i).text();
+        const raw = await chunkFile(book.entry.id, i).text();
+        if (cancelled) return;
+        blocks = (JSON.parse(raw) as ChunkFile).b;
+        if (!Array.isArray(blocks)) continue;
       } catch {
         continue;
       }
-      if (cancelled) return;
-      // Every chunk is parsed (well under a millisecond each): matching the raw
-      // JSON would miss words split across style runs, like a bold first letter.
-      const blocks = (JSON.parse(raw) as ChunkFile).b;
       const first = book.chunkStart(i);
       for (let k = 0; k < blocks.length && hits.length < MAX_HITS; k++) findInBlock(blocks[k], first + k, q, hits, MAX_HITS);
       const now = Date.now();

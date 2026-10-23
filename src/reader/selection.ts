@@ -7,9 +7,16 @@ export interface Token {
   word: boolean;
 }
 
+/**
+ * Words are runs between spaces, except in Chinese and Japanese, which don't
+ * put spaces between words: there each character is a word of its own, so a
+ * long press selects one character (and its dictionary entry) rather than the
+ * whole sentence.
+ */
 export function tokenize(text: string): Token[] {
   const out: Token[] = [];
-  const re = /\s+|[^\s]+/g;
+  // CJK punctuation and full-width forms (。、！) stand alone too.
+  const re = /\s+|[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\u3000-\u303f\uff00-\uffef]|[^\s\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\u3000-\u303f\uff00-\uffef]+/gu;
   let m: RegExpExecArray | null;
   while ((m = re.exec(text))) out.push({ text: m[0], start: m.index, word: !/^\s/.test(m[0]) });
   return out;

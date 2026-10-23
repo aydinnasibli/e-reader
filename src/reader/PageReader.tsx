@@ -23,6 +23,13 @@ import { type Measure, type Page, type PageItem, pageOf, paginate } from './pagi
 import type { TextPoint } from './selection';
 
 export const HEADER = 30;
+const PAGE_ACTIONS = [
+  { name: 'increment', label: 'Next page' },
+  { name: 'decrement', label: 'Previous page' },
+  { name: 'nextPage', label: 'Next page' },
+  { name: 'previousPage', label: 'Previous page' },
+  { name: 'activate', label: 'Show menu' },
+];
 export const FOOTER = 30;
 /** The header and footer have a fixed height (pages are cut to fit between them): their text grows with the phone's text size only this far. */
 const META_SCALE = 1.4;
@@ -432,7 +439,20 @@ export function PageReader({ book, settings, theme, start, startKey, version, on
         style={[spread ? { width } : styles.fill, page?.center && styles.middle]}
         onPress={(e) => tapPage(e.nativeEvent.pageX)}
         onLongPress={(e) => longPress(e.nativeEvent.pageX, e.nativeEvent.pageY, colKey)}
-        delayLongPress={450}>
+        delayLongPress={450}
+        // Screen readers take swipes and taps for themselves: the page is an
+        // adjustable element, swipe up/down (VoiceOver) or the volume-style
+        // actions (TalkBack) turn it, double tap shows the menu.
+        accessibilityRole="adjustable"
+        accessibilityValue={pageText ? { text: pageText.replace(/ · $/, '') } : undefined}
+        accessibilityHint="Swipe up or down to turn the page. Double tap for the menu."
+        accessibilityActions={PAGE_ACTIONS}
+        onAccessibilityAction={(e) => {
+          const name = e.nativeEvent.actionName;
+          if (name === 'increment' || name === 'nextPage') go(1);
+          else if (name === 'decrement' || name === 'previousPage') go(-1);
+          else if (name === 'activate') onTap();
+        }}>
         {page ? renderItems(data.laid, page, colKey) : null}
       </Pressable>
     );
@@ -485,6 +505,20 @@ export function PageReader({ book, settings, theme, start, startKey, version, on
 
   const current = cur.page !== null && curLaid && curLaid.pages[cur.page] ? { laid: curLaid, index: cur.page } : undefined;
   const ready = !!current;
+  // Page numbers: exact inside the laid-out chunks, estimated beyond them.
+  const cpp = charsPerPage([...laid.entries()].map(([c, l]) => ({ chars: book.chunkChars(c), pages: l.pages.length })));
+  const pageInfo =
+    cpp && current && cur.page !== null
+      ? (() => {
+          const total = pageCount(book.estimatedChars, cpp);
+          return { page: Math.min(total, pageNumber(book.chunks[cur.chunk]?.[1] ?? 0, book.chunkChars(cur.chunk), cur.page, cpp)), total, cpp };
+        })()
+      : null;
+  const pageKeyInfo = pageInfo ? `${pageInfo.page}|${pageInfo.total}|${Math.round(pageInfo.cpp)}` : '';
+  useEffect(() => {
+    if (pageInfo) onPageInfo?.(pageInfo);
+  }, [pageKeyInfo]); // eslint-disable-line react-hooks/exhaustive-deps
+  const pageText = pageInfo ? `${pageInfo.page} of ${book.complete ? '' : '~'}${pageInfo.total} · ` : '';
   useEffect(() => {
     if (ready) onLayoutReady?.(layoutKey);
   }, [ready, layoutKey]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -585,20 +619,6 @@ export function PageReader({ book, settings, theme, start, startKey, version, on
   const chapter = firstItem ? book.chapterAt(firstItem.b)?.t : undefined;
   const pct = firstItem ? book.fraction(lastPos.current) * 100 : 0;
 
-  // Page numbers: exact inside the laid-out chunks, estimated beyond them.
-  const cpp = charsPerPage([...laid.entries()].map(([c, l]) => ({ chars: book.chunkChars(c), pages: l.pages.length })));
-  const pageInfo =
-    cpp && current && cur.page !== null
-      ? (() => {
-          const total = pageCount(book.estimatedChars, cpp);
-          return { page: Math.min(total, pageNumber(book.chunks[cur.chunk]?.[1] ?? 0, book.chunkChars(cur.chunk), cur.page, cpp)), total, cpp };
-        })()
-      : null;
-  const pageKeyInfo = pageInfo ? `${pageInfo.page}|${pageInfo.total}|${Math.round(pageInfo.cpp)}` : '';
-  useEffect(() => {
-    if (pageInfo) onPageInfo?.(pageInfo);
-  }, [pageKeyInfo]); // eslint-disable-line react-hooks/exhaustive-deps
-  const pageText = pageInfo ? `${pageInfo.page} of ${book.complete ? '' : '~'}${pageInfo.total} · ` : '';
 
   return (
     <View style={[styles.root, { backgroundColor: theme.bg, paddingTop: insets.top, paddingBottom: insets.bottom }]}>
@@ -627,6 +647,9 @@ export function PageReader({ book, settings, theme, start, startKey, version, on
         {strip.map(({ key, at, content }) => (
           <Animated.View
             key={key}
+            // The pages either side wait off screen: not for screen readers.
+            accessibilityElementsHidden={at !== slot}
+            importantForAccessibility={at !== slot ? 'no-hide-descendants' : 'auto'}
             style={[
               styles.page,
               { width: win.width, height: pageHeight, paddingLeft: textLeft, paddingRight: settings.margin + insets.right, backgroundColor: theme.bg },

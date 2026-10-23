@@ -1,0 +1,51 @@
+# Device end-to-end flow (Maestro, https://maestro.dev): add a book from the
+# system file picker, turn pages, highlight a word, kill the app, reopen it and
+# check the book opens on the same page with the highlight listed.
+#
+# Needs a release or development build installed and an EPUB named
+# the-sea.epub in the device's Downloads folder:
+#   adb push the-sea.epub /sdcard/Download/
+#   maestro test .maestro/import-read-highlight-reopen.yaml
+# The picker steps are Android's (DocumentsUI); iOS needs the file in
+# Files > On My iPhone instead.
+appId: com.nec.ebookreader
+---
+- launchApp:
+    clearState: true
+- tapOn: "Add books"
+- tapOn: "the-sea.epub"
+- extendedWaitUntil:
+    visible: "The Sea"
+    timeout: 60000
+- tapOn: "The Sea"
+- extendedWaitUntil:
+    visible: "1 of .*"
+    timeout: 20000
+# Dismiss the first-run tap-zone guide.
+- tapOn:
+    point: "50%,50%"
+- swipe:
+    direction: LEFT
+- swipe:
+    direction: LEFT
+- assertVisible: "3 of .*"
+# Menu → Highlight → tap a word → green → Done.
+- tapOn:
+    point: "50%,50%"
+- tapOn: "Highlight"
+- tapOn:
+    point: "50%,30%"
+- tapOn: "Highlight colour green"
+- tapOn: "Done highlighting"
+# Leave, background and kill the app.
+- back
+- pressKey: Home
+- stopApp
+- launchApp
+- tapOn: "The Sea"
+- assertVisible: "3 of .*"
+- tapOn:
+    point: "50%,50%"
+- tapOn: "Back to library"
+- tapOn: "Highlights and notes"
+- assertVisible: "The Sea"

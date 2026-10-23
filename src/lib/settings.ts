@@ -3,8 +3,8 @@
 
 import { File, Paths } from 'expo-file-system';
 import { useSyncExternalStore } from 'react';
-import { Appearance, useColorScheme } from 'react-native';
-import type { HighlightColor } from '@/ui/theme';
+import { Appearance, PixelRatio, useColorScheme } from 'react-native';
+import { HIGHLIGHT_COLORS, type HighlightColor } from '@/ui/theme';
 import type { Weight } from './fonts';
 import { readJson, saveJson } from './storage';
 
@@ -126,12 +126,66 @@ function migrate(raw: Record<string, unknown>): Partial<ReaderSettings> {
   return s;
 }
 
+const THEME_NAMES = [...Object.keys(THEMES), 'custom'];
+const CHOICES: Partial<Record<keyof ReaderSettings, readonly string[]>> = {
+  mode: ['page', 'scroll'],
+  theme: THEME_NAMES,
+  nightTheme: THEME_NAMES,
+  weight: ['regular', 'medium'],
+  align: ['justify', 'left'],
+  pageTurn: ['slide', 'fade', 'none'],
+  rotation: ['auto', 'portrait', 'landscape'],
+  highlightColor: Object.keys(HIGHLIGHT_COLORS),
+  screenAwake: ['system', '2', '5', '10', 'always'],
+};
+const RANGES: Partial<Record<keyof ReaderSettings, { min: number; max: number }>> = {
+  fontSize: FONT_SIZE,
+  lineSpacing: LINE_SPACING,
+  letterSpacing: LETTER_SPACING,
+  paraSpacing: PARA_SPACING,
+  margin: MARGIN,
+  autoWpm: { min: 0, max: 2000 },
+};
+const COLOR = /^#(?:[0-9a-f]{3}|[0-9a-f]{6})$/i;
+
+/**
+ * Settings from disk, checked field by field: a damaged file, a value from
+ * another version or a hand edit falls back to the default instead of
+ * reaching the layout code (an unknown theme name would crash the reader).
+ */
+export function sanitizeSettings(raw: Partial<Record<keyof ReaderSettings, unknown>>, defaults: ReaderSettings = DEFAULTS): ReaderSettings {
+  const out = { ...defaults } as Record<keyof ReaderSettings, unknown>;
+  for (const key of Object.keys(defaults) as (keyof ReaderSettings)[]) {
+    const v = raw[key];
+    const d = defaults[key];
+    if (v === undefined || typeof v !== typeof d) continue;
+    if (typeof v === 'number') {
+      const r = RANGES[key];
+      if (!Number.isFinite(v)) continue;
+      out[key] = r ? Math.min(r.max, Math.max(r.min, v)) : v;
+    } else if (typeof v === 'string') {
+      const allowed = CHOICES[key];
+      if (allowed && !allowed.includes(v)) continue;
+      if ((key === 'customBg' || key === 'customText') && !COLOR.test(v)) continue;
+      out[key] = v;
+    } else out[key] = v;
+  }
+  return out as unknown as ReaderSettings;
+}
+
+/** First run: the book text starts as large as the phone's own text size setting asks. */
+export function firstRunFontSize(scale: number): number {
+  return Math.round(Math.min(FONT_SIZE.max, Math.max(DEFAULTS.fontSize, DEFAULTS.fontSize * (Number.isFinite(scale) ? scale : 1))));
+}
+
 function current(): ReaderSettings {
   if (!settings) {
     const saved = readJson<Record<string, unknown>>(file());
-    // First run: start in a dark theme if the phone is in dark mode.
-    const first = saved ? {} : { theme: (Appearance.getColorScheme() === 'dark' ? 'dark' : 'light') as ThemeName };
-    settings = { ...DEFAULTS, ...first, ...(saved ? migrate(saved) : {}) };
+    // First run: start in a dark theme if the phone is in dark mode, at the phone's text size.
+    const first: ReaderSettings = saved
+      ? DEFAULTS
+      : { ...DEFAULTS, theme: Appearance.getColorScheme() === 'dark' ? 'dark' : 'light', fontSize: firstRunFontSize(PixelRatio.getFontScale()) };
+    settings = saved && typeof saved === 'object' ? sanitizeSettings(migrate(saved), first) : first;
   }
   return settings;
 }

@@ -20,7 +20,7 @@ import {
   toggleInCollection,
   useShelves,
 } from '@/lib/collections';
-import { type BookEntry, deleteBook, importBooks, reprocessBook, updateBook, useLibrary, useLiveBook } from '@/lib/library';
+import { type BookEntry, importBooks, reprocessBook, updateBook, useLibrary, useLiveBook } from '@/lib/library';
 import { useAddingSharedFile } from '@/lib/openWith';
 import { Cover } from '@/ui/Cover';
 import { confirmRemoveBook } from '@/ui/confirm';
@@ -167,7 +167,8 @@ export default function Library() {
     if (b.status === 'error') {
       Alert.alert("Couldn't open this book", b.error ?? 'Unknown error', [
         { text: 'OK', style: 'cancel' },
-        { text: 'Remove', style: 'destructive', onPress: () => deleteBook(b.id) },
+        // The usual confirmation: it says what else goes (highlights, notes).
+        { text: 'Remove', style: 'destructive', onPress: () => confirmRemoveBook(b) },
         { text: 'Try again', onPress: () => reprocessBook(b.id) },
       ]);
       return;

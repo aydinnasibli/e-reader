@@ -4,6 +4,7 @@
 
 import { File, Paths } from 'expo-file-system';
 import { useSyncExternalStore } from 'react';
+import { Alert } from 'react-native';
 import type { HighlightColor } from '@/ui/theme';
 import { cutRange } from './highlightRanges';
 import { readJson, writeJson } from './storage';
@@ -57,14 +58,49 @@ export function getAnnotations(bookId: string): Annotations {
   return a;
 }
 
+/** Books whose latest annotations aren't on disk yet (a save failed: storage full, file locked). */
+const unsaved = new Set<string>();
+/** Told the person that saving fails; not again until a save works. */
+let warned = false;
+
+function write(bookId: string): boolean {
+  const a = cache.get(bookId);
+  if (!a) return true;
+  try {
+    writeJson(file(bookId), a);
+    unsaved.delete(bookId);
+    return true;
+  } catch {
+    // The book was deleted meanwhile: nothing to keep.
+    if (!file(bookId).parentDirectory.exists) {
+      unsaved.delete(bookId);
+      return true;
+    }
+    unsaved.add(bookId);
+    return false;
+  }
+}
+
+/**
+ * Write annotations whose earlier save failed. Called before every save and
+ * when the app goes to the background. Returns whether everything is saved.
+ */
+export function flushAnnotations(): boolean {
+  for (const id of [...unsaved]) write(id);
+  if (!unsaved.size) warned = false;
+  return unsaved.size === 0;
+}
+
 function save(bookId: string, a: Annotations) {
   cache.set(bookId, a);
   byBlock.delete(bookId);
-  try {
-    writeJson(file(bookId), a);
-  } catch {
-    // the book may have been deleted meanwhile
-  }
+  // The change stays in memory (and on screen) and is written again later:
+  // a highlight must not vanish when the app is next closed.
+  flushAnnotations();
+  if (!write(bookId) && !warned) {
+    warned = true;
+    Alert.alert('Couldn’t save', 'Your highlights and bookmarks couldn’t be saved, probably because the phone is out of space. They’re kept while the app is open and saved as soon as there’s room.');
+  } else if (!unsaved.size) warned = false;
   version++;
   listeners.forEach((l) => l());
 }
@@ -144,6 +180,7 @@ export function removeHighlight(bookId: string, id: string) {
 }
 
 export function forgetAnnotations(bookId: string) {
+  unsaved.delete(bookId);
   cache.delete(bookId);
   byBlock.delete(bookId);
 }
