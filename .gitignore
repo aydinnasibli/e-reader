@@ -44,3 +44,6 @@ example
 
 # benchmark output
 bench/.out/
+
+# Temporary working copies used while developing
+.claude/worktrees/
