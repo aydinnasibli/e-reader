@@ -93,9 +93,8 @@ export interface Step {
   /** Block of the page shown before, and now. */
   prev: number;
   now: number;
-  /** This is the book's last page; the page shown before was too (laid out again, not turned to). */
-  last: boolean;
-  wasLast: boolean;
+  /** A page turn arrived at the book's last page (not a layout change showing it). */
+  turnedToLast: boolean;
   /** First block of the back matter, if the book has any (see storyEnd). */
   storyEnd: number | null;
 }
@@ -108,6 +107,6 @@ export interface Step {
 export function finishesBook(s: Step): boolean {
   if (s.runStart === null) return false; // a jump
   if (s.storyEnd !== null && s.runStart >= s.storyEnd) return false; // reading notes, not the story
-  if (s.last && !s.wasLast) return true;
+  if (s.turnedToLast) return true;
   return s.storyEnd !== null && s.prev < s.storyEnd && s.now >= s.storyEnd;
 }

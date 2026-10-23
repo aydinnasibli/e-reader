@@ -3,7 +3,7 @@
 // line breaks at all is fed to the writer in slices, never as one string.
 
 import { createDecoder, detectBom, sniffEncoding } from './decode';
-import { type IngestContext, READ_SLICE } from './io';
+import { type IngestContext, READ_SLICE, UNTITLED } from './io';
 import type { Manifest } from './types';
 import { BookWriter } from './writer';
 
@@ -69,6 +69,8 @@ export async function ingestTxt(ctx: IngestContext): Promise<Manifest> {
   // Paragraph state. The first line is held back until we know whether it's a heading.
   let firstLine: string | null = null;
   let lineCount = 0;
+  // The book's first words: its title when the file came without a name.
+  let opening: string | null = null;
 
   const flushPara = () => {
     if (lineCount === 1 && firstLine !== null && isHeadingLine(firstLine)) {
@@ -93,6 +95,7 @@ export async function ingestTxt(ctx: IngestContext): Promise<Manifest> {
       flushPara();
       return;
     }
+    opening ??= t;
     if (mode === 'line' || (mode === 'indent' && startsIndented(raw))) flushPara();
     if (lineCount === 0) firstLine = t;
     else {
@@ -117,6 +120,7 @@ export async function ingestTxt(ctx: IngestContext): Promise<Manifest> {
   // current line has already been written.
   let inLine = false;
   const addFragment = (frag: string) => {
+    opening ??= frag.trim() || null;
     if (!inLine) {
       if (mode === 'line' || (mode === 'indent' && startsIndented(frag))) flushPara();
       releaseFirst();
@@ -167,7 +171,7 @@ export async function ingestTxt(ctx: IngestContext): Promise<Manifest> {
   return {
     v: 1,
     format: 'txt',
-    title: ctx.fallbackTitle,
+    title: ctx.fallbackTitle === UNTITLED && opening ? shortTitle(opening) : ctx.fallbackTitle,
     author: '',
     totalBlocks: w.totalBlocks,
     totalChars: w.totalChars,
@@ -175,4 +179,11 @@ export async function ingestTxt(ctx: IngestContext): Promise<Manifest> {
     toc: w.headings,
     images: {},
   };
+}
+
+/** A line of text as a title: at most about 60 characters, cut between words. */
+export function shortTitle(line: string): string {
+  if (line.length <= 60) return line;
+  const cut = line.lastIndexOf(' ', 60);
+  return (cut > 20 ? line.slice(0, cut) : line.slice(0, 60)).replace(/[\s,;:–—-]+$/, '') + '…';
 }

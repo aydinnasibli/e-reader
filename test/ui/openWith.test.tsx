@@ -125,17 +125,19 @@ const epub = makeEpub('Call me Ishmael. ');
 const png = Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 13, 0x49, 0x48, 0x44, 0x52, 0, 0, 1, 0]);
 let shares = 0;
 /**
- * Another app shares a file: a content:// URI, ending in `name` (WhatsApp:
- * often no extension), and the name its provider reports (by default the same).
+ * Another app shares a file: a content:// URI (or a file:// one, when `from`
+ * says so), ending in `name` (WhatsApp: often just an id), and the name its
+ * provider reports (by default the same).
  */
 function share(data: Uint8Array, name: string, { from = 'com.whatsapp.provider.media/item', reported = name } = {}) {
-  const uri = `content://${from}/${++shares}/${encodeURIComponent(name)}`;
+  const base = from.includes('://') ? from : `content://${from}`;
+  const uri = `${base}/${++shares}/${encodeURIComponent(name)}`;
   mockFiles.set(uri, data);
   mockNames.set(uri, reported);
   return uri;
 }
-/** A file manager's provider, which can be read in place. */
-const FILES = 'com.android.externalstorage.documents/document';
+/** A plain file (from a file manager), which is read in place. */
+const FILES = 'file:///storage/emulated/0/Download';
 const booksOnShelf = () => new Set([...mockFiles.keys()].filter((k) => k.startsWith('doc/books/')).map((k) => k.split('/')[2])).size;
 const tempLeft = () => [...mockFiles.keys()].filter((k) => k.startsWith('cache/'));
 const settle = () => act(() => new Promise((r) => setTimeout(r, 20)));
@@ -169,8 +171,8 @@ it('a cold start waits for the first screen, then opens the new book', async () 
     expect(mockPush).toHaveBeenCalledTimes(1);
     const id = mockPush.mock.calls[0][0].params.id;
     expect(mockPush.mock.calls[0][0].pathname).toBe('/reader/[id]');
-    // No extension from WhatsApp: recognised as an EPUB from its bytes.
-    expect(getFreshBook(id)).toMatchObject({ fileName: 'document.epub', sourceName: 'source.epub', status: 'processing' });
+    // Only an id from WhatsApp: recognised as an EPUB from its bytes; its own title is used once it's prepared.
+    expect(getFreshBook(id)).toMatchObject({ fileName: 'Untitled.epub', sourceName: 'source.epub', status: 'processing' });
     expect(mockFiles.has(`doc/books/${id}/source.epub`)).toBe(true);
     expect(tempLeft()).toEqual([]);
     expect(freshAlert).not.toHaveBeenCalled();
@@ -198,9 +200,12 @@ it('a book that failed to prepare, shared again, is not added again: its reader 
   expect(mockPush).toHaveBeenCalledWith({ pathname: '/reader/[id]', params: { id } });
 });
 
-it('a text file with a number for a name, and a name with spaces', async () => {
+it('a file shared under an id gets no made-up name; a real file name is kept', async () => {
+  // The text's first line becomes its title when it's prepared (see txt.ts).
   const txt = await importSharedFile(share(strToU8('It was the best of times, it was the worst of times.\n'), '1712345678'));
-  expect('book' in txt && txt.book.fileName).toBe('1712345678.txt');
+  expect('book' in txt && txt.book.fileName).toBe('Untitled.txt');
+  const download = await importSharedFile(share(strToU8('Text.\n'), 'msf:1000001234'));
+  expect('book' in download && download.book.fileName).toBe('Untitled.txt');
   const named = await importSharedFile(share(zipSync({ 'War and Peace.fb2': strToU8('<FictionBook/>') }), 'War and Peace.zip'));
   expect('book' in named && named.book).toMatchObject({ fileName: 'War and Peace.fb2.zip', title: 'War and Peace', sourceName: 'source.fb2.zip' });
 });
@@ -211,9 +216,9 @@ it('a hostile file name can neither write outside the app’s folder for shared 
   const res = await importSharedFile(uri);
   expect(mockCopies.find(([from]) => from === uri)?.[1]).toMatch(/^cache\/incoming\/[a-z0-9]+$/);
   expect([...mockFiles.keys()].filter((k) => !k.startsWith('content://') && !k.startsWith('doc/books/'))).toEqual([]);
-  expect('book' in res && res.book).toMatchObject({ fileName: 'library.json.epub', sourceName: 'source.epub' });
+  expect('book' in res && res.book).toMatchObject({ fileName: 'Untitled.epub', sourceName: 'source.epub' });
 
-  const odd = await importSharedFile(share(makeEpub('Odd. '), '..\\..\\Bad\u0007\nName' + 'x'.repeat(300) + '.epub'));
+  const odd = await importSharedFile(share(makeEpub('Odd. '), '..\\..\\Bad\u0007\nName' + 'x'.repeat(80) + '.epub'));
   const fileName = 'book' in odd ? odd.book.fileName : '';
   expect(fileName).toMatch(/^BadNamex+\.epub$/);
   expect(fileName.length).toBeLessThanOrEqual(125);
@@ -234,7 +239,7 @@ it('a file that is not a book is refused with a clear message, without copying i
 });
 
 it('a book from a file manager is recognised in place and added', async () => {
-  const res = await importSharedFile(share(makeEpub('In place. '), 'Emma', { from: FILES }));
+  const res = await importSharedFile(share(makeEpub('In place. '), 'Emma.epub', { from: FILES }));
   expect('book' in res && res.book.fileName).toBe('Emma.epub');
   expect(tempLeft()).toEqual([]);
 });
@@ -257,30 +262,33 @@ it('the library knows while a shared file is being added', async () => {
   expect(result.current).toBe(false);
 });
 
-it('the share that started the app is not taken again when Android brings the app back', async () => {
+it('the file that started the app, given again (back from recent apps, or opened again later), opens its book', async () => {
   Object.defineProperty(Platform, 'OS', { value: 'android', configurable: true });
-  const uri = share(makeEpub('Launch. '), 'launch.epub');
+  const data = makeEpub('Launch. ');
+  const uri = share(data, 'launch.epub');
   expect(redirectSystemPath({ path: uri, initial: true })).toBe('/');
   await settle();
   expect(mockPush).toHaveBeenCalledTimes(1);
   const id = mockPush.mock.calls[0][0].params.id;
-  deleteBook(id);
   const before = booksOnShelf();
 
-  // Killed in the background and reopened from recent apps: the same launch URL again.
+  // Killed in the background and brought back from recent apps: the same launch URL, which the
+  // app it came from may no longer let us read. The book opens as it is on the shelf.
+  mockFiles.delete(uri);
   expect(redirectSystemPath({ path: uri, initial: true })).toBe('/');
   await settle();
-  expect(mockPush).toHaveBeenCalledTimes(1);
-  expect(booksOnShelf()).toBe(before);
-  expect(getBook(id)).toBeUndefined();
-
-  // Another file starting the app is opened, and so is the first one shared again while the app runs.
-  expect(redirectSystemPath({ path: share(makeEpub('Next. '), 'next.epub'), initial: true })).toBe('/');
-  await settle();
   expect(mockPush).toHaveBeenCalledTimes(2);
-  expect(redirectSystemPath({ path: uri, initial: false })).toBeNull();
+  expect(mockPush.mock.calls[1][0].params.id).toBe(id);
+  expect(alert).not.toHaveBeenCalled();
+  expect(booksOnShelf()).toBe(before);
+
+  // Removed since, and that file opened again: added again.
+  deleteBook(id);
+  mockFiles.set(uri, data);
+  redirectSystemPath({ path: uri, initial: true });
   await settle();
   expect(mockPush).toHaveBeenCalledTimes(3);
+  expect(mockPush.mock.calls[2][0].params.id).not.toBe(id);
 });
 
 it('a file shared while the app runs keeps the current screen until it is opened, or refused', async () => {

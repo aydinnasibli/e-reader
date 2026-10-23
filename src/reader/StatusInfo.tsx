@@ -2,7 +2,7 @@
 // hidden then).
 
 import { getBatteryLevelAsync } from 'expo-battery';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { AppState, type StyleProp, Text, type TextStyle } from 'react-native';
 
 export function formatClock(now: Date): string {
@@ -19,11 +19,13 @@ export function formatBattery(level: number): string | null {
  * back to the screen (timers stand still while the phone sleeps).
  */
 function useMinuteTick(onTick: () => void) {
+  const latest = useRef(onTick);
+  latest.current = onTick;
   useEffect(() => {
     let timer: ReturnType<typeof setTimeout>;
     const tick = () => {
       clearTimeout(timer);
-      onTick();
+      latest.current();
       const d = new Date();
       timer = setTimeout(tick, 60_050 - (d.getSeconds() * 1000 + d.getMilliseconds()));
     };
@@ -33,7 +35,7 @@ function useMinuteTick(onTick: () => void) {
       clearTimeout(timer);
       sub.remove();
     };
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  }, []);
 }
 
 export function useClock(): string {

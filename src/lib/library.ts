@@ -395,9 +395,11 @@ export type SharedFileResult =
 export async function importSharedFile(uri: string): Promise<SharedFileResult> {
   loadLibrary();
   const shared = new File(uri);
-  // Recognised in place when the sending app allows it (file managers,
-  // document providers), so that a huge video isn't copied just to be refused.
-  let format = sniffFile(shared);
+  // A plain file is recognised where it is, so that a huge video isn't copied
+  // just to be refused. Anything from another app is copied first: reading it
+  // in place can mean waiting for a download (a cloud file) with the app frozen,
+  // and some apps hand over a stream whose size isn't known.
+  let format = /^file:/i.test(uri) ? sniffFile(shared) : undefined;
   if (format === null) return { unsupported: true };
   // Copied under a name of our own. Copied into a folder, the file would get
   // the name the sending app reports, which could be "../../files/library.json".
@@ -433,7 +435,8 @@ function sniffFile(file: File): SniffedFormat | null | undefined {
   let src: FileSource | undefined;
   try {
     src = new FileSource(file);
-    return sniffFormat(src);
+    // A size of 0 can also mean "unknown" (a pipe): not readable here.
+    return src.size > 0 ? sniffFormat(src) : undefined;
   } catch {
     return undefined;
   } finally {
@@ -444,7 +447,9 @@ function sniffFile(file: File): SniffedFormat | null | undefined {
 /**
  * A name for a shared file to show as its title, from the end of its URI
  * ("My%20Book.epub"): no folders, control characters or leading dots, and
- * not endless.
+ * not endless. Many apps share a file under an id ("…/item/48213",
+ * "msf:1000001234") rather than its name: then none (the book's own title,
+ * or a text's first line, is used instead).
  */
 function sharedFileName(file: File): string {
   let name = file.name;
@@ -453,7 +458,8 @@ function sharedFileName(file: File): string {
   } catch {
     // not percent-encoded after all
   }
-  return (name.split(/[/\\]/).pop() ?? '').replace(/\p{Cc}/gu, '').replace(/^[.\s]+/, '').slice(0, 120);
+  const clean = (name.split(/[/\\]/).pop() ?? '').replace(/\p{Cc}/gu, '').replace(/^[.\s]+/, '').slice(0, 120);
+  return bookExtension(clean) ? clean : '';
 }
 
 /** Edit a book's title and/or author; kept even if the book is converted again. */

@@ -4,7 +4,7 @@ import { createDecoder, detectBom, sniffEncoding } from './decode';
 import { ingestEpub } from './epub';
 import { ingestFb2 } from './fb2';
 import { ingestMobi, isMobi } from './mobi';
-import { BookError, type ByteSource, type IngestContext } from './io';
+import { BookError, type ByteSource, type IngestContext, UNTITLED } from './io';
 import { ingestTxt } from './txt';
 import type { Manifest } from './types';
 import { ZipArchive, type ZipEntry } from './zip';
@@ -51,7 +51,7 @@ export function sniffFormat(src: ByteSource): SniffedFormat | null {
  * ("document" -> "document.epub", "book.zip" -> "book.fb2.zip").
  */
 export function bookFileName(name: string, format: SniffedFormat): string {
-  const n = name.trim() || 'Untitled';
+  const n = name.trim() || UNTITLED;
   const ext = bookExtension(n);
   const kindle = format === 'mobi' || format === 'azw3';
   if (ext === format || (kindle && ext && KINDLE_EXTENSIONS.includes(ext))) return n;
@@ -137,7 +137,7 @@ function looksLikeFb2(head: Uint8Array): boolean {
 }
 
 export function titleFromFileName(name: string): string {
-  return name.replace(BOOK_EXTENSION, '').replace(/[_]+/g, ' ').trim() || 'Untitled';
+  return name.replace(BOOK_EXTENSION, '').replace(/[_]+/g, ' ').trim() || UNTITLED;
 }
 
 const GENERIC_FAILURE = 'This book couldn’t be prepared. The file may be damaged or in a form this app can’t read.';

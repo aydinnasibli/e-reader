@@ -3,11 +3,11 @@
 // route: it's added, then the reader opens it.
 
 import { Platform } from 'react-native';
-import { isRepeatedLaunch, isSharedFileUrl, openSharedFile } from '@/lib/openWith';
+import { isSharedFileUrl, openSharedFile } from '@/lib/openWith';
 
 export function redirectSystemPath({ path, initial }: { path: string; initial: boolean }): string | null {
   if (Platform.OS === 'android' && isSharedFileUrl(path)) {
-    if (!initial || !isRepeatedLaunch(path)) openSharedFile(path).catch(() => {});
+    openSharedFile(path, initial).catch(() => {});
     // Starting up: the library is the first screen. Already running: stay on
     // the current screen (null), so an open book isn't closed for a file
     // that may turn out not to be a book.

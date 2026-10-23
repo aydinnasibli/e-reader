@@ -119,9 +119,8 @@ export default function ReaderScreen() {
   );
   const storyEndRef = useRef(storyEndBlock);
   storyEndRef.current = storyEndBlock;
-  /** Where reading started since the last jump, and whether the last position shown was the book's last page. */
+  /** Where reading started since the last jump. */
   const runStart = useRef<Position | null>(null);
-  const wasLast = useRef(false);
   const finishedHere = useRef(false);
   const [endChip, setEndChip] = useState(false);
   const markFinished = useCallback(() => {
@@ -134,11 +133,15 @@ export default function ReaderScreen() {
     if (!finishedHere.current) markFinished();
   }, [markFinished]);
   // Scroll mode: the end came into view while reading on from the story.
-  const onScrolledToEnd = useCallback(() => {
+  /** Reading since the last jump started in the story (not in notes jumped to). */
+  const readingStory = useCallback(() => {
     const start = runStart.current?.b;
     const storyEnd = storyEndRef.current;
-    if (start !== undefined && (storyEnd === null || start < storyEnd)) reachEnd();
-  }, [reachEnd]);
+    return start !== undefined && (storyEnd === null || start < storyEnd);
+  }, []);
+  const onScrolledToEnd = useCallback(() => {
+    if (readingStory()) reachEnd();
+  }, [readingStory, reachEnd]);
 
   // Reading time: page turns feed the tracker; jumps reset it.
   const tracker = useRef(new ReadingTracker(id)).current;
@@ -154,7 +157,7 @@ export default function ReaderScreen() {
     updateBook(id, { position: latest.current, percent: book.fraction(latest.current), openedAt: Date.now() });
   }, [book, id]);
   const onPosition = useCallback(
-    (p: Position, e?: Position, last?: boolean) => {
+    (p: Position, e?: Position, turnedToLast?: boolean) => {
       const prev = latest.current;
       latest.current = p;
       setPos(p);
@@ -164,13 +167,11 @@ export default function ReaderScreen() {
           runStart: jumped.current ? null : (runStart.current?.b ?? null),
           prev: prev.b,
           now: p.b,
-          last: !!last,
-          wasLast: wasLast.current,
+          turnedToLast: !!turnedToLast,
           storyEnd: storyEndRef.current,
         };
         if (finishesBook(step)) reachEnd();
         if (jumped.current) runStart.current = p;
-        wasLast.current = !!last;
         const ch = book.charOffset(p);
         if (jumped.current) tracker.reset(ch);
         else {
@@ -232,8 +233,8 @@ export default function ReaderScreen() {
   // Turning past the last page: the book is read; say so (instead of nothing happening).
   const pastEnd = useCallback(() => {
     setAuto(null);
-    markFinished();
-  }, [markFinished]);
+    if (readingStory()) markFinished();
+  }, [readingStory, markFinished]);
   const toggleChrome = useCallback(() => {
     if (autoRunning.current) setAuto({ running: false });
     else setChrome((c) => !c);

@@ -12,7 +12,7 @@ import { File, Paths } from 'expo-file-system';
 import { router } from 'expo-router';
 import { useEffect, useSyncExternalStore } from 'react';
 import { Alert } from 'react-native';
-import { importSharedFile } from './library';
+import { getBook, importSharedFile, loadLibrary } from './library';
 import { readJson, saveJson } from './storage';
 
 /** A file handed over by another app, rather than a link into this one. */
@@ -33,17 +33,17 @@ export function useSharedFileNavigation() {
 const launchFile = () => new File(Paths.document, 'launch.json');
 
 /**
- * Whether this URL started the app before. Android keeps the intent that
- * launched the app and gives it again as the initial URL when the app,
- * killed in the background, is brought back from recent apps: without
- * this, a book removed since would come back, or be opened once more.
- * (Opening that very same file again from a fresh start is skipped too:
- * the library shows, and the book is on it unless it was removed.)
+ * The book a file that started the app became, if this same file started it
+ * before. Android keeps the intent that launched the app and gives it again
+ * when the app, killed in the background, is brought back from recent apps,
+ * by which time the app it came from may no longer let it be read. So the
+ * book is opened as it is on the shelf, without reading the file again. (The
+ * same goes for opening that very file again later: it is the same book.)
  */
-export function isRepeatedLaunch(url: string): boolean {
-  if (readJson<{ url: string }>(launchFile())?.url === url) return true;
-  saveJson(launchFile(), { url });
-  return false;
+function launchedBefore(url: string): string | null {
+  loadLibrary(); // this can run before the app has loaded it
+  const last = readJson<{ url: string; bookId: string }>(launchFile());
+  return last?.url === url && getBook(last.bookId) ? last.bookId : null;
 }
 
 const inFlight = new Set<string>();
@@ -66,12 +66,22 @@ export function useAddingSharedFile(): boolean {
   );
 }
 
-/** Add and open a shared file, telling the user if it isn't a book. Never throws. */
-export async function openSharedFile(url: string): Promise<void> {
+/**
+ * Add and open a shared file, telling the user if it isn't a book. `initial`:
+ * the file started the app. Never throws.
+ */
+export async function openSharedFile(url: string, initial = false): Promise<void> {
   if (inFlight.has(url)) return;
+  const known = initial ? launchedBefore(url) : null;
+  if (known) {
+    await navigationReady;
+    router.push({ pathname: '/reader/[id]', params: { id: known } });
+    return;
+  }
   setInFlight(url, true);
   try {
     const res = await importSharedFile(url).catch(() => ({ failed: true }) as const);
+    if (initial && 'book' in res) saveJson(launchFile(), { url, bookId: res.book.id });
     await navigationReady;
     // A book that failed to prepare before opens too: the reader explains and offers to try again.
     if ('book' in res) router.push({ pathname: '/reader/[id]', params: { id: res.book.id } });

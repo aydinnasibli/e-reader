@@ -93,6 +93,15 @@ describe('TXT headings', () => {
     expect(r.manifest.toc.map((t) => t.t)).toEqual(['Chapter 12', 'Part II: The Return', 'Глава первая']);
   });
 
+  it('a text with no name (shared under an id) is titled by its first line', async () => {
+    const r = await ingestBytes(enc('\n  The Old Man and the Sea  \n\nHe was an old man who fished alone.\n'), 'Untitled');
+    expect(r.manifest.title).toBe('The Old Man and the Sea');
+    const long = await ingestBytes(enc('It was the best of times, it was the worst of times, it was the age of wisdom, it was the age of foolishness.\n'), 'Untitled');
+    expect(long.manifest.title).toBe('It was the best of times, it was the worst of times, it was…');
+    // A real name is kept.
+    expect((await ingestBytes(enc('First line.\n'), 'Notes from Underground')).manifest.title).toBe('Notes from Underground');
+  });
+
   it('a long run without spaces never splits an emoji in half', async () => {
     const r = await ingestBytes(enc('a' + '😀'.repeat(5000)), 'e.txt');
     for (const t of texts(r)) {

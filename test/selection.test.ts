@@ -50,6 +50,12 @@ describe('highlight ranges', () => {
     expect(out[1].id).not.toBe('p');
   });
 
+  it('a note stays with one piece when its highlight is split', () => {
+    const fs = TEXT.indexOf('fox');
+    const out = cutRange([{ ...h('p', 0, TEXT.length), note: 'Aesop?' }], 0, fs, fs + 3, id);
+    expect(out.map((x) => x.note)).toEqual(['Aesop?', undefined]);
+  });
+
   it('trims overlapping edges, drops covered highlights, leaves others alone', () => {
     const list = [h('a', 0, 9), h('b', 10, 15), h('c', 16, 25), h('other-block', 0, 5, 1)];
     const out = cutRange(list, 0, 4, 20, id);

@@ -57,7 +57,6 @@ export function UpdateBanner() {
         <Text style={[styles.title, { color: c.text }]}>
           {s.kind === 'downloading' ? `Downloading… ${Math.round(s.progress * 100)}%` : s.kind === 'installing' ? 'Opening installer…' : 'New version available'}
         </Text>
-
         {s.kind === 'downloading' ? (
           <View style={[styles.track, { backgroundColor: c.border }]}>
             <View style={[styles.fill, { width: `${Math.round(s.progress * 100)}%`, backgroundColor: c.accent }]} />

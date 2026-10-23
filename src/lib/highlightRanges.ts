@@ -8,12 +8,14 @@ export interface Ranged {
   e: number;
   /** The highlighted text: the block text from s to e. */
   text: string;
+  note?: string;
 }
 
 /**
  * Remove [s, e) of block `b` from every highlight. Highlights inside the range
  * disappear; ones overlapping an edge are trimmed; one spanning the whole
- * range is split in two (the right part gets `newId()`).
+ * range is split in two: the right part gets `newId()`, and the note stays
+ * with the left one (it would be shown twice otherwise).
  */
 export function cutRange<T extends Ranged>(list: T[], b: number, s: number, e: number, newId: () => string): T[] {
   const out: T[] = [];
@@ -26,7 +28,7 @@ export function cutRange<T extends Ranged>(list: T[], b: number, s: number, e: n
     const left = h.s < s;
     const right = e < h.e;
     if (left) out.push(part(h.s, s, h.id));
-    if (right) out.push(part(e, h.e, left ? newId() : h.id));
+    if (right) out.push(left ? { ...part(e, h.e, newId()), note: undefined } : part(e, h.e, h.id));
   }
   return out;
 }

@@ -49,8 +49,11 @@ interface Props {
   startKey: number;
   /** Bumped whenever the book grows (still converting) or finishes. */
   version: number;
-  /** Called with the first and last position shown, and whether this is the book's last page. */
-  onPosition(pos: Position, end?: Position, last?: boolean): void;
+  /**
+   * Called with the first and last position shown, and whether a page turn
+   * just arrived at the book's last page (not a layout change showing it).
+   */
+  onPosition(pos: Position, end?: Position, turnedToLast?: boolean): void;
   onTap(): void;
   /** Highlights and search hits for a block. */
   marksFor?(b: number): Mark[] | undefined;
@@ -202,7 +205,8 @@ export function PageReader({ book, settings, theme, start, startKey, version, on
     for (const c of laid.keys()) if (Math.abs(c - cur.chunk) > 2) laid.delete(c);
   }, [cur.chunk, laid, book]);
 
-  // Report the reading position.
+  // Report the reading position. `turned`: the next position comes from a page turn.
+  const turned = useRef(false);
   useEffect(() => {
     if (cur.page === null || !curLaid) return;
     const item = curLaid.pages[cur.page]?.items[0];
@@ -219,7 +223,9 @@ export function PageReader({ book, settings, theme, start, startKey, version, on
     // The end is exclusive: where the next page starts.
     const lastText = curLaid.measures[last.b - curLaid.first]?.kind === 'text';
     const lastPage = book.complete && cur.chunk + 1 >= book.chunkCount && cur.page + step >= curLaid.pages.length;
-    onPosition(pos, lastText ? { b: last.b, o: bookOffset(last.b, last.e) } : { b: last.b + 1, o: 0 }, lastPage);
+    const byTurn = turned.current;
+    turned.current = false;
+    onPosition(pos, lastText ? { b: last.b, o: bookOffset(last.b, last.e) } : { b: last.b + 1, o: 0 }, lastPage && byTurn);
   }, [cur, curLaid, onPosition, step, book]);
 
   /** The page one step away, or why there isn't one. */
@@ -270,6 +276,7 @@ export function PageReader({ book, settings, theme, start, startKey, version, on
       // which the layout change has already re-targeted.
       if (layoutKeyRef.current !== keyAtStart) return;
       staleOk.current = false;
+      turned.current = true;
       if (n.cur.page === null) target.current = { pos: { b: book.chunkStart(n.cur.chunk), o: 0 }, last: dir < 0 };
       setCur(n.cur);
     };
