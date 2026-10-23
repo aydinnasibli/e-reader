@@ -10,8 +10,9 @@ import type { ReaderSettings, Theme } from '@/lib/settings';
 import type { BookData } from './book';
 import { ClockBattery } from './StatusInfo';
 import { BlockImage, BlockText, Spacer } from './BlockText';
-import { hitText } from './hitTest';
-import { drawn, lookOf, toBlock } from './look';
+import type { ReaderGeometry } from './geometry';
+import { type Caret, caretInText, hitText } from './hitTest';
+import { drawn, lookOf, toBlock, toDrawn } from './look';
 import type { Mark } from './marks';
 import { type Line, lineRanges } from './paginate';
 import type { TextPoint } from './selection';
@@ -31,10 +32,16 @@ interface Props {
   onLongPressBlock?(b: number, at?: number): void;
   onLink?(target: string): void;
   footerRight?: string;
-  /** Highlight tool on: scrolling pauses and dragging over text reports the range. */
-  highlighting?: boolean;
-  onHighlightDrag?(from: TextPoint | null, to: TextPoint | null, done: boolean): void;
-  onHighlightTap?(at: TextPoint): void;
+  /** Selecting text (the highlight tool, or a selection on the page): scrolling stops and touches select. */
+  selecting?: boolean;
+  /** From where the drag started to the text under the finger now; null, null = cancelled. */
+  onSelectDrag?(from: TextPoint | null, to: TextPoint | null, done: boolean): void;
+  /** A tap while selecting: the text tapped, or null off the text. */
+  onSelectTap?(at: TextPoint | null): void;
+  /** Filled in with what's where on screen, for selection handles. */
+  geometry?: { current: ReaderGeometry | null };
+  /** What's where on screen changed (paragraphs measured), after `geometry` is first usable. */
+  onGeometryChange?(): void;
   /** Auto-scroll speed in points per second; 0 or missing = off. */
   autoScroll?: number;
   /** The reader touched the list while it was auto-scrolling. */
@@ -56,7 +63,7 @@ interface Win {
   start: number; // first block shown
 }
 
-export function ScrollReader({ book, settings, theme, start, startKey, version, onPosition, onTap, marksFor, onLongPressBlock, onLink, footerRight, highlighting, onHighlightDrag, onHighlightTap, autoScroll, onAutoInterrupt, onAutoEnd, onReachEnd }: Props) {
+export function ScrollReader({ book, settings, theme, start, startKey, version, onPosition, onTap, marksFor, onLongPressBlock, onLink, footerRight, selecting, onSelectDrag, onSelectTap, geometry, onGeometryChange, autoScroll, onAutoInterrupt, onAutoEnd, onReachEnd }: Props) {
   const win = useWindowDimensions();
   const insets = useSafeAreaInsets();
   // Clear of a landscape notch on either side.
@@ -252,11 +259,19 @@ export function ScrollReader({ book, settings, theme, start, startKey, version, 
   // Scrolling is paused while it's on, so where each paragraph sits on screen
   // is measured once (and again if the list changes) and hit testing is instant.
   const rects = useRef(new Map<number, { x: number; y: number; h: number }>()).current;
+  const geometryChanged = useRef(onGeometryChange);
+  geometryChanged.current = onGeometryChange;
   useEffect(() => {
     rects.clear();
-    if (!highlighting) return;
-    for (const [b, v] of views) v.measureInWindow((x, y, _w, h) => rects.set(b, { x, y, h }));
-  }, [highlighting, data, settings, rects, views]);
+    if (!selecting) return;
+    let left = views.size;
+    for (const [b, v] of views)
+      v.measureInWindow((x, y, _w, h) => {
+        rects.set(b, { x, y, h });
+        // All measured: handles can be placed now.
+        if (--left === 0) geometryChanged.current?.();
+      });
+  }, [selecting, data, settings, rects, views]);
   const blockAt = (b: number) => {
     const c = book.chunkOf(b);
     return blocks.get(c)?.[b - book.chunkStart(c)];
@@ -283,9 +298,21 @@ export function ScrollReader({ book, settings, theme, start, startKey, version, 
     return { b: best, o: toBlock(d, at) };
   };
   const stroke = useRef<{ x: number; y: number; from: TextPoint | null; moved: boolean }>({ x: 0, y: 0, from: null, moved: false });
-  const highlightLayer = highlighting && (
+  /** Where the caret before/after a character is, in window coordinates (while selecting). */
+  const caretAt = (p: TextPoint, edge: 'start' | 'end'): Caret | null => {
+    const blk = blockAt(p.b);
+    const r = rects.get(p.b);
+    const ls = lines.get(p.b);
+    if (!blk || !r || !ls) return null;
+    const look = lookOf(blk, settings, book.manifest?.lang);
+    const d = drawn(blk, look);
+    const c = caretInText(d.text, ls, 0, d.text.length, toDrawn(d, p.o), edge, width - look.paddingLeft, look.textAlign === 'justify');
+    return c && { x: r.x + padLeft + look.paddingLeft + c.x, y: r.y + look.marginTop + c.y, h: c.h };
+  };
+  if (geometry) geometry.current = { pointAt: (x, y) => textPoint(x, y, true), caretAt };
+  const selectLayer = selecting && (
     <View
-      testID="highlight-layer"
+      testID="select-layer"
       style={StyleSheet.absoluteFill}
       onStartShouldSetResponder={() => true}
       onMoveShouldSetResponder={() => true}
@@ -300,20 +327,19 @@ export function ScrollReader({ book, settings, theme, start, startKey, version, 
         if (!st.moved && Math.hypot(pageX - st.x, pageY - st.y) < 8) return;
         st.moved = true;
         const to = textPoint(pageX, pageY, true);
-        if (st.from && to) onHighlightDrag?.(st.from, to, false);
+        if (st.from && to) onSelectDrag?.(st.from, to, false);
       }}
       onResponderRelease={(e) => {
         const { pageX, pageY } = e.nativeEvent;
         const st = stroke.current;
         if (st.moved) {
           const to = textPoint(pageX, pageY, true);
-          onHighlightDrag?.(st.from, st.from && to ? to : null, true);
+          onSelectDrag?.(st.from, st.from && to ? to : null, true);
           return;
         }
-        const p = textPoint(pageX, pageY, false);
-        if (p) onHighlightTap?.(p);
+        onSelectTap?.(textPoint(pageX, pageY, false));
       }}
-      onResponderTerminate={() => onHighlightDrag?.(null, null, true)}
+      onResponderTerminate={() => onSelectDrag?.(null, null, true)}
     />
   );
 
@@ -357,7 +383,7 @@ export function ScrollReader({ book, settings, theme, start, startKey, version, 
       onTouchStart={(e) => (touch.current = { x: e.nativeEvent.pageX, y: e.nativeEvent.pageY, t: Date.now() })}
       onTouchEnd={(e) => {
         const t = touch.current;
-        if (highlighting) return;
+        if (selecting) return;
         if (Math.abs(e.nativeEvent.pageX - t.x) < 10 && Math.abs(e.nativeEvent.pageY - t.y) < 10 && Date.now() - t.t < 300) {
           // Link presses are delivered around the same time; check after they had their turn.
           setTimeout(() => Date.now() - lastLink.current > 400 && onTap(), 0);
@@ -372,7 +398,7 @@ export function ScrollReader({ book, settings, theme, start, startKey, version, 
         <FlatList
           ref={list}
           key={startKey}
-          scrollEnabled={!highlighting}
+          scrollEnabled={!selecting}
           onScroll={(e) => {
             const { contentOffset, layoutMeasurement, contentSize } = e.nativeEvent;
             actual.current = contentOffset.y;
@@ -405,7 +431,7 @@ export function ScrollReader({ book, settings, theme, start, startKey, version, 
           }
         />
       )}
-      {highlightLayer}
+      {selectLayer}
       <View pointerEvents="none" style={[styles.badge, { bottom: insets.bottom + 6, backgroundColor: theme.bg }]}>
         <Text style={{ color: theme.muted, fontSize: 12 }} numberOfLines={1} maxFontSizeMultiplier={1.4}>
           {settings.showClock ? <ClockBattery color={theme.muted} /> : null}

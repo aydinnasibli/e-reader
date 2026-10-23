@@ -2,10 +2,10 @@ import * as Haptics from 'expo-haptics';
 import * as ScreenOrientation from 'expo-screen-orientation';
 import { type ErrorBoundaryProps, router, useLocalSearchParams } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react';
 import { ActivityIndicator, AppState, BackHandler, Pressable, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
-import { type Block, type Position, blockText } from '@/engine/types';
-import { addBookmark, addHighlight, highlightsByBlock, removeBookmark, useAnnotations } from '@/lib/annotations';
+import { type Position, blockText } from '@/engine/types';
+import { addBookmark, highlightsByBlock, removeBookmark, useAnnotations } from '@/lib/annotations';
 import { getBook, loadManifest, reprocessBook, updateBook, useBookStatus, useLiveBook } from '@/lib/library';
 import { useFontReady } from '@/lib/fonts';
 import { type ReaderSettings, setSettings, useReaderTheme, useSettings } from '@/lib/settings';
@@ -16,8 +16,12 @@ import type { Mark } from '@/reader/marks';
 import { type PageInfo, PageReader } from '@/reader/PageReader';
 import { pagesBetween } from '@/reader/pageNumbers';
 import { ScrollReader } from '@/reader/ScrollReader';
-import { SelectionSheet, highlightColor } from '@/reader/SelectionSheet';
-import { type TextPoint, dragRanges } from '@/reader/selection';
+import type { ReaderGeometry } from '@/reader/geometry';
+import { LookupSheet } from '@/reader/LookupSheet';
+import { type TextPoint, selectionRanges } from '@/reader/selection';
+import { SelectionHandles, selectionCarets } from '@/reader/SelectionHandles';
+import { SelectionMenu } from '@/reader/SelectionMenu';
+import { useSelection } from '@/reader/useSelection';
 import { AutoBar } from '@/reader/AutoBar';
 import { CHARS_PER_WORD, pageDelay, scrollSpeed, stepWpm } from '@/reader/autoRead';
 import { BackChip } from '@/reader/BackChip';
@@ -34,6 +38,7 @@ import { useScreenAwake } from '@/reader/screenAwake';
 import { NavigatorSheet, SearchSheet } from '@/reader/Sheets';
 import { ErrorScreen } from '@/ui/ErrorScreen';
 import { formatMinutes } from '@/ui/format';
+import { highlightColor } from '@/ui/theme';
 
 const before = (a: Position, b: Position) => a.b < b.b || (a.b === b.b && a.o <= b.o);
 const strictlyBefore = (a: Position, b: Position) => a.b < b.b || (a.b === b.b && a.o < b.o);
@@ -98,7 +103,6 @@ export default function ReaderScreen() {
   const [end, setEnd] = useState<Position | undefined>(undefined);
   const [chrome, setChrome] = useState(false);
   const [sheet, setSheet] = useState<'nav' | 'search' | 'display' | 'goto' | null>(null);
-  const [selection, setSelection] = useState<{ b: number; block: Block; chapter?: string; at?: number } | null>(null);
   const [searchMark, setSearchMark] = useState<{ b: number; s: number; e: number } | null>(null);
   const [failed, setFailed] = useState<string | null>(null);
   const [note, setNote] = useState<string | null>(null);
@@ -280,9 +284,10 @@ export default function ReaderScreen() {
   }, []);
 
 
-  // Highlight tool (bottom menu): while on, dragging over text highlights it.
+  // Selecting text: a long press selects a word, with a menu to copy, look
+  // up, translate or share it; the highlight tool (bottom menu) selects text
+  // to highlight, note, copy or remove. Handles at both ends move them.
   const [highlighting, setHighlighting] = useState(false);
-  const [stroke, setStroke] = useState<{ from: TextPoint; to: TextPoint } | null>(null);
   const textOf = useCallback(
     (b: number) => {
       const blk = book?.block(b);
@@ -290,43 +295,55 @@ export default function ReaderScreen() {
     },
     [book],
   );
-  const saveHighlights = (ranges: { b: number; s: number; e: number }[]) => {
-    if (!ranges.length) return;
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {});
-    for (const r of ranges) {
-      const text = textOf(r.b) ?? '';
-      addHighlight(id, { ...r, color: settings.highlightColor, text: text.slice(r.s, r.e), chapter: book?.chapterAt(r.b)?.t });
-    }
-  };
-  const onHighlightDrag = useCallback(
-    (from: TextPoint | null, to: TextPoint | null, done: boolean) => {
-      if (!from || !to) return setStroke(null);
-      if (!done) return setStroke({ from, to });
-      setStroke(null);
-      saveHighlights(dragRanges(from, to, textOf));
+  const selection = useSelection({
+    bookId: id,
+    bookTitle: book?.entry.title ?? '',
+    textOf,
+    chapterOf: (b) => book?.chapterAt(b)?.t,
+    color: settings.highlightColor,
+  });
+  const { sel, setSel } = selection;
+  // A jump (contents, search, a note...) leaves the selection behind.
+  useEffect(() => setSel(null), [jump.key, setSel]);
+  // Where text is on screen, from the page or scroll view; handles redraw when it changes.
+  const geometry = useRef<ReaderGeometry | null>(null);
+  const [, redrawHandles] = useReducer((n: number) => n + 1, 0);
+  const selectionRef = useRef(selection);
+  selectionRef.current = selection;
+  const onSelectDrag = useCallback((from: TextPoint | null, to: TextPoint | null) => {
+    if (from && to) selectionRef.current.selectDrag(from, to);
+  }, []);
+  // A tap while selecting: with the highlight tool it selects the word or
+  // highlight tapped; otherwise it ends the selection.
+  const onSelectTap = useCallback(
+    (p: TextPoint | null) => {
+      if (highlighting && p) selectionRef.current.selectAt(p, true);
+      else selectionRef.current.clear();
     },
-    [textOf, settings.highlightColor, id, book], // eslint-disable-line react-hooks/exhaustive-deps
+    [highlighting],
   );
 
   const win = useWindowDimensions();
   const autoWpm = settings.autoWpm || Math.max(60, Math.round(readingSpeed(id).cpm / CHARS_PER_WORD / 10) * 10);
   // Runs only while nothing else is in front of the page.
-  const autoActive = !!auto?.running && !chrome && !sheet && !note && !selection && !highlighting;
+  const autoActive = !!auto?.running && !chrome && !sheet && !note && !sel && !highlighting;
   // The screen stays on while reading (Display → Page), counted from the last page turn or tap.
-  useScreenAwake(settings.screenAwake, `${pos.b}:${pos.o}:${chrome}:${sheet}:${!!selection}:${note !== null}:${highlighting}`, autoActive);
+  useScreenAwake(settings.screenAwake, `${pos.b}:${pos.o}:${chrome}:${sheet}:${!!sel}:${note !== null}:${highlighting}`, autoActive);
   // First time in page mode: the tap zones are shown.
   const showGuide = settings.mode === 'page' && !settings.seenTapZones && !highlighting && !sheet;
   // Android back closes what's drawn over the page first, then leaves the book.
   const closeTop = useRef<() => boolean>(() => false);
   closeTop.current = () => {
     const layer = backLayer({
+      selection: !!sel,
       display: sheet === 'display',
       highlighting,
       menu: chrome,
       auto: !!auto,
       guide: showGuide,
     });
-    if (layer === 'display') {
+    if (layer === 'selection') setSel(null);
+    else if (layer === 'display') {
       setSheet(null);
       setChrome(false);
     } else if (layer === 'highlight') setHighlighting(false);
@@ -370,29 +387,22 @@ export default function ReaderScreen() {
     const add = (b: number, mark: Mark) => m.set(b, [...(m.get(b) ?? []), mark]);
     for (const [b, list] of highlightsByBlock(id)) m.set(b, list.map((h) => ({ s: h.s, e: h.e, color: highlightColor(h.color, theme.dark) })));
     if (searchMark) add(searchMark.b, { s: searchMark.s, e: searchMark.e, color: theme.accent + '55' });
-    if (stroke) for (const r of dragRanges(stroke.from, stroke.to, textOf)) add(r.b, { s: r.s, e: r.e, color: highlightColor(settings.highlightColor, theme.dark) });
+    // Selected text, over its highlighting.
+    if (sel) for (const r of selectionRanges(sel, textOf)) add(r.b, { s: r.s, e: r.e, color: theme.accent + '55' });
     return m;
     // `ann` changes whenever highlights do.
-  }, [id, ann, searchMark, stroke, settings.highlightColor, theme.dark, theme.accent]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [id, ann, searchMark, sel, textOf, theme.dark, theme.accent]); // eslint-disable-line react-hooks/exhaustive-deps
   const marksFor = useCallback((b: number) => marks.get(b), [marks]);
 
-  const onLongPressBlock = useCallback(
-    (b: number, at?: number) => {
-      const block = book?.block(b);
-      if (!block || !block.r) return;
-      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(() => {});
-      setChrome(false);
-      setSelection({ b, block, chapter: book?.chapterAt(b)?.t, at });
-    },
-    [book],
-  );
-
-  // A tap while highlighting: on a highlight it opens it (colour, note,
-  // remove); on plain text it highlights that word.
-  const onHighlightTap = (p: TextPoint) => {
-    if (ann.highlights.some((h) => h.b === p.b && h.s <= p.o && p.o < h.e)) return onLongPressBlock(p.b, p.o);
-    saveHighlights(dragRanges(p, p, textOf));
-  };
+  // A long press selects the word pressed (with the highlight tool too).
+  const onLongPressBlock = useCallback((b: number, at?: number) => {
+    if (at === undefined || !textOfRef.current(b)) return;
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(() => {});
+    setChrome(false);
+    selectionRef.current.selectAt({ b, o: at }, false);
+  }, []);
+  const textOfRef = useRef(textOf);
+  textOfRef.current = textOf;
 
   // Bookmarks on the visible page.
   // `end` is where the next page starts, so it isn't part of this page.
@@ -491,11 +501,14 @@ export default function ReaderScreen() {
         onEnd={pastEnd}
         onAutoEnd={stopAuto}
         onReachEnd={onScrolledToEnd}
-        highlighting={highlighting}
-        onHighlightDrag={onHighlightDrag}
-        onHighlightTap={onHighlightTap}
+        selecting={highlighting || !!sel}
+        edgeTurns={highlighting && !sel}
+        onSelectDrag={onSelectDrag}
+        onSelectTap={onSelectTap}
+        geometry={geometry}
+        onGeometryChange={redrawHandles}
       />
-      {endChip && !chrome && !highlighting && !sheet ? (
+      {endChip && !chrome && !highlighting && !sel && !sheet ? (
         <BackChip
           theme={theme}
           icon="checkmark-done"
@@ -503,7 +516,7 @@ export default function ReaderScreen() {
           onPress={() => router.back()}
           onDismiss={() => setEndChip(false)}
         />
-      ) : back && !chrome && !highlighting && !sheet && !auto ? (
+      ) : back && !chrome && !highlighting && !sel && !sheet && !auto ? (
         <BackChip
           theme={theme}
           label={
@@ -555,7 +568,7 @@ export default function ReaderScreen() {
       {showGuide ? (
         <TapZones theme={theme} tapForward={settings.tapForward} onDismiss={() => setSettings({ seenTapZones: true })} />
       ) : null}
-      {auto && !chrome && !highlighting ? (
+      {auto && !chrome && !highlighting && !sel ? (
         <AutoBar
           theme={theme}
           wpm={autoWpm}
@@ -571,8 +584,28 @@ export default function ReaderScreen() {
         <HighlightBar
           theme={theme}
           color={settings.highlightColor}
-          onColor={(highlightColor) => setSettings({ highlightColor })}
-          onDone={() => setHighlighting(false)}
+          selected={!!sel}
+          hasNote={!!selection.exact?.note}
+          canRemove={selection.touched}
+          onColor={selection.highlight}
+          onNote={selection.note}
+          onCopy={selection.copy}
+          onRemove={selection.remove}
+          onDone={() => {
+            setHighlighting(false);
+            setSel(null);
+          }}
+        />
+      ) : null}
+      {sel ? <SelectionHandles sel={sel} geometry={geometry} textOf={textOf} theme={theme} onChange={setSel} /> : null}
+      {sel && !highlighting ? (
+        <SelectionMenu
+          {...selectionCarets(sel, geometry.current)}
+          canLookUp={selection.oneWord}
+          onCopy={selection.copy}
+          onLookUp={() => selection.show('define')}
+          onTranslate={() => selection.show('translate')}
+          onShare={selection.share}
         />
       ) : null}
       <NavigatorSheet visible={sheet === 'nav'} onClose={() => setSheet(null)} theme={theme} book={book} currentBlock={pos.b} onGo={goTo} />
@@ -606,14 +639,7 @@ export default function ReaderScreen() {
           goTo(p);
         }}
       />
-      <SelectionSheet
-        bookId={id}
-        bookTitle={book.entry.title}
-        lang={book.manifest?.lang}
-        target={selection}
-        theme={theme}
-        onClose={() => setSelection(null)}
-      />
+      <LookupSheet lookup={selection.lookup} lang={book.manifest?.lang} theme={theme} onChange={selection.setLookup} />
     </View>
   );
 }

@@ -57,3 +57,8 @@ export const HIGHLIGHT_COLORS = {
 } as const;
 
 export type HighlightColor = keyof typeof HIGHLIGHT_COLORS;
+
+/** A highlight colour as drawn on a light or dark page. */
+export function highlightColor(color: HighlightColor, dark: boolean): string {
+  return HIGHLIGHT_COLORS[color][dark ? 'dark' : 'light'];
+}

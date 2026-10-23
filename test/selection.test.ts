@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { cutRange } from '../src/lib/highlightRanges';
-import { charAtFraction, hitText } from '../src/reader/hitTest';
+import { caretInText, charAtFraction, hitText } from '../src/reader/hitTest';
 import type { Line } from '../src/reader/paginate';
-import { dragRanges, tapWord, tokenize, tokensFor, wordAt } from '../src/reader/selection';
+import { dragRanges, selectBetween, selectionRanges, selectionText, tapWord, tokenize, tokensFor, wordAt } from '../src/reader/selection';
 
 const TEXT = 'The quick brown fox jumps over the lazy dog';
 
@@ -45,7 +45,8 @@ describe('highlight ranges', () => {
     const whole = h('p', 0, TEXT.length);
     const fs = TEXT.indexOf('fox');
     const out = cutRange([whole], 0, fs, fs + 3, id);
-    expect(out.map((x) => x.text)).toEqual(['The quick brown ', ' jumps over the lazy dog']);
+    // The pieces left don't keep the spaces at their cut ends.
+    expect(out.map((x) => x.text)).toEqual(['The quick brown', 'jumps over the lazy dog']);
     expect(out[0].id).toBe('p');
     expect(out[1].id).not.toBe('p');
   });
@@ -60,7 +61,7 @@ describe('highlight ranges', () => {
     const list = [h('a', 0, 9), h('b', 10, 15), h('c', 16, 25), h('other-block', 0, 5, 1)];
     const out = cutRange(list, 0, 4, 20, id);
     expect(out.map((x) => [x.id, x.s, x.e, x.text])).toEqual([
-      ['a', 0, 4, 'The '],
+      ['a', 0, 3, 'The'],
       ['c', 20, 25, 'jumps'],
       ['other-block', 0, 5, 'The q'],
     ]);
@@ -134,3 +135,61 @@ describe('drag to highlight', () => {
     expect(dragRanges({ b: 0, o: 3 }, { b: 0, o: 5 }, textOf)).toEqual([{ b: 0, s: 4, e: 9 }]);
   });
 });
+
+describe('where a character is on screen (for selection handles)', () => {
+  const text = 'The quick brown fox jumps over';
+  const lines: Line[] = [
+    { start: 0, end: 16, height: 20, w: 150 },
+    { start: 16, end: 30, height: 20, w: 120 },
+  ];
+
+  it('the start of a line is at its left, on that line', () => {
+    expect(caretInText(text, lines, 0, 30, 0, 'start', 200, false)).toEqual({ x: 0, y: 0, h: 20 });
+    expect(caretInText(text, lines, 0, 30, 16, 'start', 200, false)).toEqual({ x: 0, y: 20, h: 20 });
+  });
+
+  it("a selection's end stays after its last character, on that line", () => {
+    // After "brown " (the end of line 1), not at the start of line 2.
+    const c = caretInText(text, lines, 0, 30, 16, 'end', 200, false)!;
+    expect(c.y).toBe(0);
+    expect(c.x).toBeCloseTo(150);
+  });
+
+  it('agrees with hit testing: the character found at a caret is that character', () => {
+    for (const i of [4, 10, 20, 26]) {
+      const c = caretInText(text, lines, 0, 30, i, 'start', 200, false)!;
+      // Just right of the caret is character i.
+      expect(hitText(text, lines, 0, 30, c.x + 1, c.y + 5, 200, false)).toBe(i);
+    }
+  });
+
+  it('only the lines shown on this page count', () => {
+    expect(caretInText(text, lines, 16, 30, 20, 'start', 200, false)!.y).toBe(0);
+    expect(caretInText(text, lines, 16, 30, 4, 'start', 200, false)).toBeNull();
+  });
+});
+
+describe('selection with handles', () => {
+  const texts: Record<number, string | null> = { 0: 'The quick brown fox', 1: null, 2: 'jumps over the lazy dog' };
+  const textOf = (b: number) => texts[b] ?? null;
+
+  it('a long-press selects the word under the finger', () => {
+    const sel = selectBetween({ b: 0, o: 6 }, { b: 0, o: 6 }, textOf)!;
+    expect(selectionText(sel, textOf)).toBe('quick');
+  });
+
+  it('dragging a handle across paragraphs (and past the other one) keeps whole words in order', () => {
+    // The end handle dragged into the next paragraph...
+    let sel = selectBetween({ b: 0, o: 4 }, { b: 2, o: 7 }, textOf)!;
+    expect(selectionText(sel, textOf)).toBe('quick brown fox\njumps over');
+    // ...then the start handle dragged past it: the selection turns around.
+    sel = selectBetween(sel.z, { b: 2, o: 20 }, textOf)!;
+    expect(selectionText(sel, textOf)).toBe('over the lazy dog');
+    expect(selectionRanges(sel, textOf)).toEqual([{ b: 2, s: 6, e: 23 }]);
+  });
+
+  it('only spaces is no selection', () => {
+    expect(selectBetween({ b: 0, o: 3 }, { b: 0, o: 3 }, textOf)).toBeNull();
+  });
+});
+
