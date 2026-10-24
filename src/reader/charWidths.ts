@@ -3,6 +3,11 @@
 // how wide each laid-out line is; a hidden text with one character per line
 // (see CharProbe) gives the widths, and positions along a line follow from
 // them. Until a character is measured, an estimate stands in.
+//
+// Whole words are measured too, when a selection needs them: letters drawn
+// together are tucked closer than their widths add up to (kerning, "fi"
+// ligatures), and a selection handle placed by letter widths alone drifts
+// sideways along the line.
 
 import type { TextStyle } from 'react-native';
 
@@ -34,8 +39,13 @@ function measurable(ch: string) {
 
 /** Measured widths at PROBE_SIZE, per face. */
 const known = new Map<string, Map<string, number>>();
-/** Characters waiting to be measured, per face. */
-const wanted = new Map<string, { face: Face; chars: Set<string> }>();
+/** Measured word widths at PROBE_SIZE, per face; NaN: couldn't be measured. */
+const knownWords = new Map<string, Map<string, number>>();
+/** Characters and words waiting to be measured, per face. */
+const wanted = new Map<string, { face: Face; chars: Set<string>; words: Set<string> }>();
+
+/** Words worth measuring: more than one character, measurable, short enough not to wrap in the probe. */
+const measurableWord = (w: string) => w.length > 1 && w.length <= 40 && !/\s/.test(w) && [...w].every(measurable);
 const listeners = new Set<() => void>();
 let version = 0;
 let scheduled = false;
@@ -51,9 +61,14 @@ function changed() {
   }, 0);
 }
 
-function want(face: Face, key: string, ch: string) {
+function wantedFor(face: Face, key: string) {
   let w = wanted.get(key);
-  if (!w) wanted.set(key, (w = { face, chars: new Set() }));
+  if (!w) wanted.set(key, (w = { face, chars: new Set(), words: new Set() }));
+  return w;
+}
+
+function want(face: Face, key: string, ch: string) {
+  const w = wantedFor(face, key);
   if (w.chars.has(ch)) return;
   w.chars.add(ch);
   changed();
@@ -66,6 +81,23 @@ export function charWidth(face: Face, ch: string, size: number): number {
   if (w !== undefined) return (w * size) / PROBE_SIZE;
   if (measurable(ch)) want(face, key, ch);
   return estimate(ch) * size;
+}
+
+/**
+ * Width of `word` (no spaces) drawn in `face` at `size`, as the text engine
+ * lays it out; undefined until measured (it's asked for) or if it can't be.
+ */
+export function wordWidth(face: Face, word: string, size: number): number | undefined {
+  const key = faceKey(face);
+  const w = knownWords.get(key)?.get(word);
+  if (w !== undefined) return Number.isNaN(w) ? undefined : (w * size) / PROBE_SIZE;
+  if (!measurableWord(word)) return undefined;
+  const pending = wantedFor(face, key);
+  if (!pending.words.has(word)) {
+    pending.words.add(word);
+    changed();
+  }
+  return undefined;
 }
 
 /** Have every character of `text` measured in `face` (ahead of need). */
@@ -84,33 +116,44 @@ export function subscribeWidths(l: () => void) {
 export const widthsVersion = () => version;
 
 /** What is waiting to be measured. */
-export function wantedWidths(): { key: string; face: Face; chars: string[] }[] {
-  return [...wanted].filter(([, w]) => w.chars.size).map(([key, w]) => ({ key, face: w.face, chars: [...w.chars] }));
+export function wantedWidths(): { key: string; face: Face; chars: string[]; words: string[] }[] {
+  return [...wanted].filter(([, w]) => w.chars.size || w.words.size).map(([key, w]) => ({ key, face: w.face, chars: [...w.chars], words: [...w.words] }));
 }
 
 /**
- * The probe laid out `chars` (a line of bars first, then one line per
- * character) and the lines came out this wide. Null widths: it couldn't be
- * measured, so the estimate stays (and isn't asked for again).
+ * The probe laid out `chars` and `words` (a line of bars first, then one line
+ * per character, then one per word) and the lines came out this wide. Null
+ * widths: they couldn't be measured, so estimates stay (and aren't asked for again).
  */
-export function recordWidths(key: string, chars: string[], lineWidths: number[] | null) {
+export function recordWidths(key: string, chars: string[], lineWidths: number[] | null, words: string[] = []) {
   let have = known.get(key);
   if (!have) known.set(key, (have = new Map()));
-  const ok = lineWidths && lineWidths.length === chars.length + 1;
+  let haveWords = knownWords.get(key);
+  if (!haveWords) knownWords.set(key, (haveWords = new Map()));
+  const ok = lineWidths && lineWidths.length === chars.length + words.length + 1;
   chars.forEach((ch, i) => {
     const w = ok ? (lineWidths[i + 1] - lineWidths[0]) / PROBE_REPEAT : NaN;
     have.set(ch, Number.isFinite(w) && w >= 0 ? w : estimate(ch) * PROBE_SIZE);
   });
+  words.forEach((word, i) => {
+    const w = ok ? lineWidths[chars.length + i + 1] - lineWidths[0] : NaN;
+    haveWords.set(word, Number.isFinite(w) && w > 0 ? w : NaN);
+  });
   const w = wanted.get(key);
-  if (w) for (const ch of chars) w.chars.delete(ch);
+  if (w) {
+    for (const ch of chars) w.chars.delete(ch);
+    for (const word of words) w.words.delete(word);
+  }
   changed();
 }
 
-/** The probe's text for these characters. */
-export const probeText = (chars: string[]) => ['||', ...chars.map((c) => `|${c.repeat(PROBE_REPEAT)}|`)].join('\n');
+/** The probe's text for these characters and words. */
+export const probeText = (chars: string[], words: string[] = []) =>
+  ['||', ...chars.map((c) => `|${c.repeat(PROBE_REPEAT)}|`), ...words.map((w) => `|${w}|`)].join('\n');
 
 /** For tests: forget everything measured. */
 export function resetWidths() {
   known.clear();
+  knownWords.clear();
   wanted.clear();
 }

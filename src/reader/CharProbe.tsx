@@ -1,5 +1,6 @@
-// Measures the characters charWidths asks for: an invisible text per font,
-// one character per line, whose line widths the text engine reports.
+// Measures the characters and words charWidths asks for: an invisible text
+// per font, one character (or word) per line, whose line widths the text
+// engine reports.
 
 import { useEffect, useSyncExternalStore } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
@@ -18,20 +19,20 @@ export function CharProbe({ onMeasured }: { onMeasured(): void }) {
   useEffect(() => {
     if (!batches.length) return;
     const timer = setTimeout(() => {
-      for (const b of wantedWidths()) recordWidths(b.key, b.chars, null);
+      for (const b of wantedWidths()) recordWidths(b.key, b.chars, null, b.words);
     }, TIMEOUT_MS);
     return () => clearTimeout(timer);
   }, [version, batches.length]);
   if (!batches.length) return null;
   return (
     <View pointerEvents="none" style={styles.hidden}>
-      {batches.map(({ key, face, chars }) => (
+      {batches.map(({ key, face, chars, words }) => (
         <Text
-          key={`${key}|${chars.join('')}`}
+          key={`${key}|${chars.join('')}|${words.join(' ')}`}
           allowFontScaling={false}
           style={[face, styles.text]}
-          onTextLayout={(e) => recordWidths(key, chars, e.nativeEvent.lines.map((l) => l.width))}>
-          {probeText(chars)}
+          onTextLayout={(e) => recordWidths(key, chars, e.nativeEvent.lines.map((l) => l.width), words)}>
+          {probeText(chars, words)}
         </Text>
       ))}
     </View>
