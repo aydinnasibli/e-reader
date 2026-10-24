@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { cutRange } from '../src/lib/highlightRanges';
-import { PROBE_SIZE, charWidth, estimate, recordWidths, resetWidths, wantedWidths } from '../src/reader/charWidths';
+import { PROBE_SIZE, charWidth, estimate, probeText, recordWidths, resetWidths, wantedWidths, wordWidth } from '../src/reader/charWidths';
 import { type Metrics, caretInText, hitText } from '../src/reader/hitTest';
 import type { Line } from '../src/reader/paginate';
 import { dragRanges, selectBetween, selectionRanges, selectionText, tapWord, tokenize, tokensFor, wordAt } from '../src/reader/selection';
@@ -226,5 +226,59 @@ describe('Chinese and Japanese (no spaces between words)', () => {
     expect(tokenize(ja).map((x) => x.text)).toHaveLength(ja.length);
     // Offsets still line up with the text.
     for (const x of tokenize(zh)) expect(zh.slice(x.start, x.start + x.text.length)).toBe(x.text);
+  });
+});
+
+describe('selection handles sit where the text is drawn', () => {
+  // "AVATAR ok" on one line: letters 10 wide on their own, but the phone draws
+  // "AVATAR" 12 narrower (kerning), as the probe measured.
+  const text = 'AVATAR ok';
+  const one: Line[] = [{ start: 0, end: 9, height: 20, w: 78 }];
+  const kerned = (align: Metrics['align']): Metrics => ({
+    advance: () => 10,
+    hyphen: 10,
+    align,
+    word: (s, e) => (text.slice(s, e) === 'AVATAR' ? 48 : undefined),
+  });
+
+  it('after a kerned word, the handle is at its measured end, not where the letters add up to', () => {
+    // Without the word's width, the caret after AVATAR would be at 60.
+    expect(caretInText(text, one, 0, 9, 6, 'start', 200, kerned('left'))!.x).toBeCloseTo(48);
+    // Letters inside it share the narrowing.
+    expect(caretInText(text, one, 0, 9, 3, 'start', 200, kerned('left'))!.x).toBeCloseTo(24);
+    // The next word starts after its space.
+    expect(caretInText(text, one, 0, 9, 7, 'start', 200, kerned('left'))!.x).toBeCloseTo(58);
+  });
+
+  it('a justified line with one long word is not stretched: justifying only widens spaces', () => {
+    const word = 'Unbelievably';
+    const lines: Line[] = [
+      { start: 0, end: 12, height: 20, w: 120 },
+      { start: 12, end: 15, height: 20, w: 30 },
+    ];
+    const t = word + 'end';
+    const m: Metrics = { advance: () => 10, hyphen: 10, align: 'justify' };
+    // After the 6th letter: 60, not 6/12 of the 300-wide column.
+    expect(caretInText(t, lines, 0, 15, 6, 'start', 300, m)!.x).toBe(60);
+    expect(caretInText(t, lines, 0, 15, 12, 'end', 300, m)!.x).toBe(120);
+  });
+
+  it('words are measured by the probe on request, then used', () => {
+    resetWidths();
+    const face = { fontFamily: 'Serif' };
+    expect(wordWidth(face, 'AVATAR', 32)).toBeUndefined();
+    const asked = wantedWidths();
+    expect(asked.map((w) => w.words)).toEqual([['AVATAR']]);
+    expect(probeText(asked[0].chars, asked[0].words)).toBe('||\n|AVATAR|');
+    // Bars 10 wide; "|AVATAR|" 10 + 200 at the probe's size.
+    recordWidths(asked[0].key, asked[0].chars, [10, 210], asked[0].words);
+    expect(wordWidth(face, 'AVATAR', PROBE_SIZE / 2)).toBe(100);
+    expect(wantedWidths()).toEqual([]);
+    // A failed measurement isn't asked for again.
+    expect(wordWidth(face, 'ox', 32)).toBeUndefined();
+    const again = wantedWidths();
+    recordWidths(again[0].key, again[0].chars, null, again[0].words);
+    expect(wordWidth(face, 'ox', 32)).toBeUndefined();
+    expect(wantedWidths()).toEqual([]);
   });
 });

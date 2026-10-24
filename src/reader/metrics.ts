@@ -2,7 +2,7 @@
 // italic, small for superscripts), at the block's size and letter spacing.
 
 import { BOLD, type Block, ITALIC, MONO, SUB, SUP, runStyle, runText } from '@/engine/types';
-import { type Face, charWidth, prepareWidths } from './charWidths';
+import { type Face, charWidth, prepareWidths, wordWidth } from './charWidths';
 import type { Metrics } from './hitTest';
 import { type Look, baseTextStyle, drawn, runTextStyle } from './look';
 
@@ -45,9 +45,30 @@ export function metricsOf(b: Block, look: Look): Metrics {
     const s = spanOf(i);
     return s ? charWidth(s.face, ch, s.size) + look.letterSpacing : 0;
   };
+  // The first word looked up has all of the paragraph's words measured, so a
+  // handle dragged on to its other lines doesn't jump when they arrive.
+  let asked = false;
+  const askAll = () => {
+    asked = true;
+    let from = 0;
+    for (const sp of ss) {
+      for (const w of text.slice(from, sp.end).replace(/[\u00ad]/g, '').split(/\s+/)) if (w) wordWidth(sp.face, w, sp.size);
+      from = sp.end;
+    }
+  };
+  /** A word drawn together, in one font: its measured width (asked for when not known yet). */
+  const word = (i: number, j: number) => {
+    if (!asked) askAll();
+    const s = spanOf(i);
+    if (!s || spanOf(j - 1) !== s) return undefined; // the font changes inside it
+    const w = text.slice(i, j).replace(/[\u00ad\n]/g, '');
+    const together = wordWidth(s.face, w, s.size);
+    return together === undefined ? undefined : together + look.letterSpacing * w.length;
+  };
   const first = ss[0];
   return {
     advance,
+    word,
     hyphen: first ? charWidth(first.face, '-', first.size) + look.letterSpacing : 0,
     align: ALIGN[look.textAlign ?? ''] ?? 'left',
   };

@@ -13,6 +13,12 @@ export interface Metrics {
   advance(i: number): number;
   /** Width of the hyphen drawn where a line breaks at a soft hyphen. */
   hyphen: number;
+  /**
+   * Width of drawn characters [start, end), a word with no spaces, as the
+   * text engine lays it out together (closer than the letters' widths add up
+   * to: kerning, ligatures); undefined when not known.
+   */
+  word?(start: number, end: number): number | undefined;
   align: 'left' | 'center' | 'right' | 'justify';
 }
 
@@ -32,19 +38,37 @@ export function lineCarets(text: string, lines: Line[], line: Line, width: numbe
   let ink = end; // without the spaces (and line break) it ends with
   while (ink > start && /\s/.test(text[ink - 1])) ink--;
   const hyphen = ink === end && end < text.length && text[end - 1] === '­' ? m.hyphen : 0;
+  // Each character's width on this line: a word's letters fill the word's own measured width.
+  const adv: number[] = [];
+  for (let k = start; k < end; ) {
+    if (/\s/.test(text[k])) {
+      adv.push(m.advance(k++));
+      continue;
+    }
+    let j = k;
+    while (j < end && !/\s/.test(text[j])) j++;
+    let sum = 0;
+    for (let q = k; q < j; q++) sum += m.advance(q);
+    const together = j - k > 1 ? m.word?.(k, j) : undefined;
+    // Far off: the word was measured in some other way; keep the letters' widths.
+    const f = together !== undefined && sum > 0 && Math.abs(together / sum - 1) < 0.25 ? together / sum : 1;
+    for (let q = k; q < j; q++) adv.push(m.advance(q) * f);
+    k = j;
+  }
   let natural = hyphen;
   let spaces = 0;
   for (let k = start; k < ink; k++) {
-    natural += m.advance(k);
+    natural += adv[k - start];
     if (text[k] === ' ') spaces++;
   }
   const last = line === lines[lines.length - 1] || text[end - 1] === '\n';
   let scale = 1;
   let stretch = 0;
   let left = 0;
-  if (m.align === 'justify' && !last && natural > 0) {
-    if (spaces) stretch = Math.max(0, width - natural) / spaces;
-    else scale = width / natural;
+  // Justifying only widens the spaces between words: a line without any (one
+  // long word) stays as it is, at the left.
+  if (m.align === 'justify' && !last && natural > 0 && spaces) {
+    stretch = Math.max(0, width - natural) / spaces;
   } else {
     // The text engine's width corrects small differences (kerning); a big one means it measured something else.
     const used = line.w;
@@ -56,7 +80,7 @@ export function lineCarets(text: string, lines: Line[], line: Line, width: numbe
   const xs = [left];
   let x = left;
   for (let k = start; k < end; k++) {
-    x += m.advance(k) * scale + (stretch && text[k] === ' ' && k < ink ? stretch : 0);
+    x += adv[k - start] * scale + (stretch && text[k] === ' ' && k < ink ? stretch : 0);
     xs.push(x);
   }
   return xs;
