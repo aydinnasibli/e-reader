@@ -69,7 +69,7 @@ export function DialogHost() {
   const colors = { bg: c.elevated, text: c.text, border: c.border };
 
   return (
-    <Sheet visible={!!dialog} onClose={close} colors={colors} title={dialog?.title} position={dialog?.kind === 'prompt' ? 'top' : 'bottom'}>
+    <Sheet visible={!!dialog} onClose={close} colors={colors} title={dialog?.title} position={dialog?.kind === 'prompt' ? 'top' : 'bottom'} scroll>
       {dialog?.kind === 'actions' &&
         dialog.actions.map((a, i) => (
           <Pressable

@@ -1,7 +1,7 @@
 // Bottom sheet used for menus, settings, contents and dialogs.
 
 import type { ReactNode } from 'react';
-import { KeyboardAvoidingView, Modal, Platform, Pressable, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
+import { KeyboardAvoidingView, Modal, Platform, Pressable, ScrollView, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 export interface SheetColors {
@@ -25,10 +25,15 @@ interface Props {
    * a full-screen box anyway); on iOS the card also shrinks above it.
    */
   position?: 'bottom' | 'top';
+  /**
+   * Scroll the content when it doesn't fit: long menus, large text, landscape,
+   * a keyboard taking half the screen. (Not for content that scrolls itself.)
+   */
+  scroll?: boolean;
   children: ReactNode;
 }
 
-export function Sheet({ visible, onClose, colors, title, height, right, position = 'bottom', children }: Props) {
+export function Sheet({ visible, onClose, colors, title, height, right, position = 'bottom', scroll, children }: Props) {
   const insets = useSafeAreaInsets();
   const win = useWindowDimensions();
   const top = position === 'top';
@@ -55,7 +60,13 @@ export function Sheet({ visible, onClose, colors, title, height, right, position
               {right}
             </View>
           ) : null}
-          {children}
+          {scroll ? (
+            <ScrollView style={styles.scroll} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
+              {children}
+            </ScrollView>
+          ) : (
+            children
+          )}
         </View>
       </KeyboardAvoidingView>
     </Modal>
@@ -73,4 +84,5 @@ const styles = StyleSheet.create({
   handle: { alignSelf: 'center', width: 38, height: 5, borderRadius: 3, marginBottom: 6 },
   titleRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 20, paddingVertical: 8 },
   title: { fontSize: 18, fontWeight: '700' },
+  scroll: { flexGrow: 0, flexShrink: 1 },
 });

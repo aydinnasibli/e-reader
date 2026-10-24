@@ -36,7 +36,7 @@ export function StatsSheet({ visible, onClose }: { visible: boolean; onClose(): 
   );
 
   return (
-    <Sheet visible={visible} onClose={onClose} colors={{ bg: c.elevated, text: c.text, border: c.border }} title="Reading stats">
+    <Sheet visible={visible} onClose={onClose} colors={{ bg: c.elevated, text: c.text, border: c.border }} title="Reading stats" scroll>
       <View style={styles.grid}>
         {tile('Today', todayMs ? formatMinutes(todayMs / 60_000) : '—')}
         {tile('Last 7 days', weekMs ? formatMinutes(weekMs / 60_000) : '—')}

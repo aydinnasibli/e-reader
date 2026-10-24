@@ -91,6 +91,9 @@ export function DisplayPanel({ visible, onClose, settings, theme, onSlide }: Pro
           {
             height,
             paddingBottom: insets.bottom,
+            // Clear of the notch on a phone turned on its side.
+            paddingLeft: insets.left,
+            paddingRight: insets.right,
             backgroundColor: c.chrome,
             borderColor: c.border,
             transform: [{ translateY: slide.interpolate({ inputRange: [0, 1], outputRange: [0, height] }) }],
@@ -471,7 +474,7 @@ const styles = StyleSheet.create({
   close: { width: 34, height: 34, borderRadius: 17, alignItems: 'center', justifyContent: 'center' },
   body: { paddingHorizontal: 18, paddingBottom: 18 },
   fonts: { gap: 10, paddingVertical: 10 },
-  fontCard: { width: 112, height: 82, borderRadius: 12, borderWidth: 2, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 6 },
+  fontCard: { width: 112, minHeight: 82, borderRadius: 12, borderWidth: 2, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 6 },
   row: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', minHeight: 50, gap: 12 },
   stack: { paddingVertical: 8, gap: 8, alignItems: 'flex-start' },
   label: { fontSize: 16, fontWeight: '500', flexShrink: 1 },
@@ -483,7 +486,7 @@ const styles = StyleSheet.create({
   sliderRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
   reset: { alignSelf: 'center', marginTop: 18, borderWidth: StyleSheet.hairlineWidth, borderRadius: 10, paddingHorizontal: 16, paddingVertical: 9 },
   themeGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 10, paddingVertical: 10 },
-  themeSwatch: { width: 60, height: 56, borderRadius: 12, borderWidth: 2, alignItems: 'center', justifyContent: 'center' },
+  themeSwatch: { width: 60, minHeight: 56, paddingVertical: 4, borderRadius: 12, borderWidth: 2, alignItems: 'center', justifyContent: 'center' },
   section: { fontSize: 12, fontWeight: '700', letterSpacing: 0.6, marginTop: 12, marginBottom: 8 },
   swatches: { flexDirection: 'row', flexWrap: 'wrap', gap: 10 },
   colorDot: { width: 34, height: 34, borderRadius: 17, borderWidth: 2 },

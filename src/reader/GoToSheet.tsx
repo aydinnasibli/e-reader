@@ -1,7 +1,7 @@
 // "Go to page": type a page number (or a percentage) and go there.
 
 import { useState } from 'react';
-import { StyleSheet, Text, TextInput, View } from 'react-native';
+import { StyleSheet, Text, TextInput, View, useWindowDimensions } from 'react-native';
 import type { Theme } from '@/lib/settings';
 import { Sheet } from '@/ui/Sheet';
 import { parseGoTo } from './navigate';
@@ -26,6 +26,7 @@ export function GoToSheet({ visible, theme, page, fraction, onClose, onGo }: Pro
   const [unit, setUnit] = useState<Unit>('page');
   const [text, setText] = useState('');
   const [problem, setProblem] = useState<string | null>(null);
+  const win = useWindowDimensions();
   // Scroll mode has no page numbers: percentages only.
   const by: Unit = page ? unit : 'percent';
   const pct = Math.round(fraction * 100);
@@ -50,8 +51,9 @@ export function GoToSheet({ visible, theme, page, fraction, onClose, onGo }: Pro
 
   const colors = { bg: theme.chrome, text: theme.text, border: theme.border };
   return (
-    <Sheet visible={visible} onClose={close} colors={colors} title="Go to page" position="top">
-      <View style={styles.body}>
+    <Sheet visible={visible} onClose={close} colors={colors} title="Go to page" position="top" scroll>
+      {/* A phone on its side has little room above the keyboard: keep the number box in view. */}
+      <View style={[styles.body, win.height < 500 && styles.short]}>
         <Text style={[styles.where, { color: theme.muted }]}>
           {page ? `You're on page ${page.page} of ${page.total} · ${pct}%` : `You're at ${pct}%`}
         </Text>
@@ -108,6 +110,7 @@ export function GoToSheet({ visible, theme, page, fraction, onClose, onGo }: Pro
 
 const styles = StyleSheet.create({
   body: { paddingHorizontal: 20, gap: 14 },
+  short: { gap: 8 },
   where: { fontSize: 14 },
   segment: { flexDirection: 'row', borderRadius: 9, padding: 2, alignSelf: 'flex-start' },
   segItem: { paddingHorizontal: 18, paddingVertical: 7, borderRadius: 7 },

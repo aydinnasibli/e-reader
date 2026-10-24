@@ -87,7 +87,8 @@ export default function NotesScreen() {
         }}
       />
       {count ? (
-        <View style={styles.tools}>
+        // Clear of the notch on a phone turned on its side, like the list below.
+        <View style={[styles.tools, { paddingLeft: 16 + insets.left, paddingRight: 16 + insets.right }]}>
           <View style={[styles.search, { backgroundColor: c.chip }]}>
             <Ionicons name="search" size={16} color={c.secondary} />
             <TextInput

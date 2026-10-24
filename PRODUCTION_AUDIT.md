@@ -148,3 +148,35 @@ The app is distributed as a sideloaded Android APK (plus the owner's own iPhone 
 8. **iOS can't receive books from other apps (P2-11).** Only the Add button works.
 9. **`npm audit` reports 5 high issues (P2-8).** All are in build tooling, not in the app; they go away with the next Expo 58 patch.
 10. **Screen-reader users can't turn pages in page mode (P1-2)** — left as is by the owner's choice; scroll mode works with screen readers.
+
+## 5. Layout sweep (2026-10-24)
+
+Prompted by a real bug the tests didn't catch: the **search panel went off the top of the screen when the keyboard opened** (an 85%-high sheet pushed up by the keyboard). The jest renderer has no layout, so no test could see it.
+
+`test/ui/layout/` now lays out the real rendered screens with **Yoga** (`yoga-layout`, the engine React Native uses; dev dependency only) and checks every button, text box and label on:
+iPhone 15, iPhone SE, a small Android phone, iPhone 15 landscape and an iPad, each at text size ×1, ×1.35 and ×2, and with the keyboard open whenever a text box is on screen (iOS: `KeyboardAvoidingView` padding; Android: window shrinks).
+It flags elements that are off screen or under the status bar/notch, behind the keyboard, clipped by their container, spilling out of a fixed-size card, or on top of another button or text.
+
+Covered: the reader page and menu, all four Display tabs, contents/bookmarks/highlights, search (empty and with results), go to page, highlight tool, auto page turn, back chip, tap-zone guide, scroll mode; the library (grid, list, empty, every update-banner state, "adding book"), book details, highlights & notes, pop-up menus, the rename prompt, reading stats, dictionary and translation, the selection menu at all four corners and the middle, and the error screen.
+
+Found and fixed. Every row was confirmed by running the sweep on the original files: it fails there and passes now.
+
+| Problem | Where | Fix |
+|---|---|---|
+| Search box pushed above the screen when the keyboard opens | every device | bottom sheets stay below the status bar and shrink above the keyboard (`src/ui/Sheet.tsx`) |
+| Long pop-up menus run off the bottom (no scrolling) | iPhone SE at normal text; other phones at larger text; landscape | menus and prompts scroll (`Sheet scroll`, `src/ui/dialogs.tsx`) |
+| Reading stats run off the bottom | landscape; small phones at larger text | scrolls (`src/ui/StatsSheet.tsx`) |
+| Error screen: button off the bottom, title off the top, under the notch | landscape; large text | scrolls, padded by the safe area (`src/ui/ErrorScreen.tsx`) |
+| Display panel tabs and Close button under the notch | landscape | panel padded by the side insets (`src/reader/DisplayPanel.tsx`) |
+| Go to page: number box and buttons behind the keyboard / off the bottom | landscape | card scrolls, tighter spacing on short screens (`src/reader/GoToSheet.tsx`) |
+| Rename prompt buttons behind the keyboard | landscape | scrolls (see menus) |
+| Font names and theme names spill out of their cards | text size ×2 | cards grow with their text (`minHeight`) |
+| Generated cover cuts the title/author off mid-line | small covers ("Continue reading"), large text | line count fitted to the cover, fixed size (`src/ui/Cover.tsx`) |
+| "With notes" filter under the notch | landscape | toolbar padded by the side insets (`src/app/notes.tsx`) |
+
+**Not covered (NOT VERIFIED):**
+- The native navigation bar and the library's search field (drawn by iOS/Android, not React).
+- The book text itself, which is paginated by the phone's own text measurement.
+- Selection handles and the footnote sheet.
+- Exact font metrics: text is measured with average glyph widths, so a finding within a few points of an edge needs a look on a phone.
+- Whether Android's keyboard really resizes the window inside a `Modal`: the sweep checks both models.
