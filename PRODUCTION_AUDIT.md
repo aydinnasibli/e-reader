@@ -124,10 +124,10 @@ Every "Fixed" row has a test that **fails on the old code and passes on the new*
 | `npx tsc --noEmit` | ✅ exit 0 |
 | `npx expo lint` | ✅ exit 0 |
 | vitest (`test/*.test.ts`) | ✅ 158/158 (was 143) |
-| jest (`test/ui/*.test.tsx`) | ✅ 81/81 (was 80) |
+| jest (`test/ui/**/*.test.tsx`) | ✅ 128/128 (was 80), incl. 47 layout checks |
 | `expo export` android + ios (Hermes bytecode) | ✅ locally |
-| Android release build | CI_ANDROID |
-| iOS release build | CI_IOS |
+| Android release build | ✅ CI run 40044749147 on `3ced44d`: `assembleRelease`, signed APK → `BUILD SUCCESSFUL in 9m 49s`. Main's own APK workflow also built and published build-23 (`ce94e3e`). |
+| iOS release build | ✅ same run, `xcodebuild -configuration Release -sdk iphonesimulator` → `** BUILD SUCCEEDED **`. A signed device build was not made (no signing identity) → **NOT VERIFIED**. |
 | Device E2E, memory over 20 open/close cycles, cold start, page-turn FPS, dark-mode flash | **NOT VERIFIED** — no device or emulator available in this environment (Android SDK download host is blocked; no macOS) |
 
 ## 4. Verdict
