@@ -1,13 +1,14 @@
-// Text selected on the page (with a long press, or with the highlight tool)
-// and what can be done with it: copy, share, look up, translate, highlight,
-// add a note, remove highlighting.
+// Text selected on the page with a long press, and what can be done with it:
+// copy, share, look up, translate. And the highlight tool, which works like a
+// marker pen: a tap or a drag highlights the text under the finger, or takes
+// the highlighting away if it starts on a highlight; Note, Copy and Remove act
+// on the highlight just made.
 
 import * as Clipboard from 'expo-clipboard';
 import * as Haptics from 'expo-haptics';
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { Share } from 'react-native';
-import { type Highlight, addHighlight, clearHighlightRange, updateHighlight, useAnnotations } from '@/lib/annotations';
-import { setSettings } from '@/lib/settings';
+import { addHighlight, clearHighlightRange, updateHighlight, useAnnotations } from '@/lib/annotations';
 import { confirmDeleteHighlight, hasNote } from '@/ui/confirm';
 import { showPrompt } from '@/ui/dialogs';
 import type { HighlightColor } from '@/ui/theme';
@@ -36,6 +37,8 @@ interface Options {
   color: HighlightColor;
 }
 
+type Range = { b: number; s: number; e: number };
+
 export function useSelection({ bookId, bookTitle, textOf, chapterOf, color }: Options) {
   const ann = useAnnotations(bookId);
   const [sel, setSel] = useState<TextSel | null>(null);
@@ -45,65 +48,17 @@ export function useSelection({ bookId, bookTitle, textOf, chapterOf, color }: Op
   const ranges = sel ? selectionRanges(sel, textOf) : [];
   const text = sel ? selectionText(sel, textOf) : '';
   const highlights = ann.highlights;
-  /** The selection is exactly one highlight: colours and notes edit it. */
-  const exact: Highlight | undefined =
-    ranges.length === 1 ? highlights.find((h) => h.b === ranges[0].b && h.s === ranges[0].s && h.e === ranges[0].e) : undefined;
-  /** Some of the selection is highlighted. */
-  const touched = ranges.some((r) => highlights.some((h) => h.b === r.b && h.s < r.e && r.s < h.e));
 
-  /** Select the word at a point, or the highlight there (with the highlight tool). */
-  const selectAt = (p: TextPoint, preferHighlight: boolean) => {
-    const h = preferHighlight ? highlights.find((x) => x.b === p.b && x.s <= p.o && p.o < x.e) : undefined;
+  /** Select the word at a point (a long press). */
+  const selectAt = (p: TextPoint) => {
     const w = nearestWord(textOf(p.b) ?? '', p.o);
     const at = { b: p.b, o: w };
-    const next = h ? { a: { b: h.b, o: h.s }, z: { b: h.b, o: h.e - 1 } } : selectBetween(at, at, textOf);
+    const next = selectBetween(at, at, textOf);
     if (next) Haptics.selectionAsync().catch(() => {});
     setSel(next);
   };
   const selectDrag = (from: TextPoint, to: TextPoint) => setSel(selectBetween(from, to, textOf));
   const clear = () => setSel(null);
-
-  const highlight = (c: HighlightColor) => {
-    setSettings({ highlightColor: c });
-    if (!sel) return;
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {});
-    if (exact) updateHighlight(bookId, exact.id, { color: c });
-    else for (const r of ranges) addHighlight(bookId, { ...r, color: c, text: textOf(r.b)!.slice(r.s, r.e), chapter: chapterOf(r.b) });
-    setSel(null);
-  };
-
-  const note = () => {
-    if (!sel) return;
-    const ex = exact;
-    const rs = ranges;
-    setSel(null);
-    showPrompt(ex?.note ? 'Edit note' : 'Add note', {
-      initial: ex?.note ?? '',
-      placeholder: 'Your note',
-      multiline: true,
-      // Emptying an existing note removes it.
-      allowEmpty: !!ex?.note,
-      onSubmit: (n) => {
-        if (ex) return updateHighlight(bookId, ex.id, { note: n || undefined });
-        // The selection is highlighted, with the note on its first part.
-        rs.forEach((r, i) =>
-          addHighlight(bookId, { ...r, color, text: textOf(r.b)!.slice(r.s, r.e), chapter: chapterOf(r.b), ...(i === 0 ? { note: n } : {}) }),
-        );
-      },
-    });
-  };
-
-  const remove = () => {
-    const rs = ranges;
-    const clearAll = () => {
-      for (const r of rs) clearHighlightRange(bookId, r.b, r.s, r.e);
-      setSel(null);
-    };
-    // A note goes when its whole highlight does (one that is only trimmed keeps it): ask first.
-    const loseNote = highlights.some((h) => hasNote(h) && rs.some((r) => r.b === h.b && r.s <= h.s && h.e <= r.e));
-    if (loseNote) confirmDeleteHighlight(true, clearAll);
-    else clearAll();
-  };
 
   const copy = () => {
     Clipboard.setStringAsync(text).catch(() => {});
@@ -122,24 +77,112 @@ export function useSelection({ bookId, bookTitle, textOf, chapterOf, color }: Op
     setSel(null);
   };
 
+  // ---------- the highlight tool: a marker pen ----------
+
+  /** A drag in progress, drawn as it goes: the text it covers, and whether it takes highlighting away. */
+  const [stroke, setStroke] = useState<{ ranges: Range[]; erase: boolean } | null>(null);
+  /** Whether the drag under way erases: decided where it started. */
+  const strokeErases = useRef<boolean | null>(null);
+  /** The highlights the tool just made: Note, Copy and Remove act on them. */
+  const [madeIds, setMadeIds] = useState<string[]>([]);
+  const made = highlights.filter((h) => madeIds.includes(h.id));
+
+  const highlightedAt = (p: TextPoint) => highlights.some((h) => h.b === p.b && h.s <= p.o && p.o < h.e);
+  const wordAt = (p: TextPoint): TextPoint => ({ b: p.b, o: nearestWord(textOf(p.b) ?? '', p.o) });
+
+  /** Take highlighting off these ranges. A note goes when its whole highlight does: ask first. */
+  const clearRanges = (rs: Range[], then?: () => void) => {
+    const clearAll = () => {
+      for (const r of rs) clearHighlightRange(bookId, r.b, r.s, r.e);
+      then?.();
+    };
+    const loseNote = highlights.some((h) => hasNote(h) && rs.some((r) => r.b === h.b && r.s <= h.s && h.e <= r.e));
+    if (loseNote) confirmDeleteHighlight(true, clearAll);
+    else clearAll();
+  };
+
+  /** Highlight the text of a selection, or take its highlighting away. */
+  const mark = (s: TextSel | null, erase: boolean) => {
+    if (!s) return;
+    const rs = selectionRanges(s, textOf);
+    if (!rs.length) return;
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {});
+    if (erase) return clearRanges(rs, () => setMadeIds([]));
+    setMadeIds(rs.map((r) => addHighlight(bookId, { ...r, color, text: textOf(r.b)!.slice(r.s, r.e), chapter: chapterOf(r.b) }).id));
+  };
+
+  /** A tap with the highlight tool: the word highlighted, or its highlighting taken away. */
+  const markTap = (p: TextPoint) => {
+    const w = wordAt(p);
+    mark(selectBetween(w, w, textOf), highlightedAt(w));
+  };
+
+  /** A drag with the highlight tool, from where it started to where the finger is; done when lifted. Nulls: cancelled. */
+  const markDrag = (from: TextPoint | null, to: TextPoint | null, done: boolean) => {
+    if (!from || !to) {
+      strokeErases.current = null;
+      setStroke(null);
+      return;
+    }
+    if (strokeErases.current === null) strokeErases.current = highlightedAt(wordAt(from));
+    const erase = strokeErases.current;
+    const s = selectBetween(from, to, textOf);
+    if (!done) return setStroke(s ? { ranges: selectionRanges(s, textOf), erase } : null);
+    strokeErases.current = null;
+    setStroke(null);
+    mark(s, erase);
+  };
+
+  /** Add or edit the note of the highlight just made. */
+  const noteMade = () => {
+    const h = made[0];
+    if (!h) return;
+    showPrompt(h.note ? 'Edit note' : 'Add note', {
+      initial: h.note ?? '',
+      placeholder: 'Your note',
+      multiline: true,
+      // Emptying an existing note removes it.
+      allowEmpty: !!h.note,
+      onSubmit: (n) => updateHighlight(bookId, h.id, { note: n || undefined }),
+    });
+  };
+
+  const copyMade = () => {
+    if (!made.length) return;
+    Clipboard.setStringAsync(made.map((h) => h.text).join('\n')).catch(() => {});
+    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
+  };
+
+  const removeMade = () => clearRanges(made, () => setMadeIds([]));
+
+  /** The highlight tool is put away. */
+  const endMarking = () => {
+    strokeErases.current = null;
+    setStroke(null);
+    setMadeIds([]);
+  };
+
   return {
     sel,
     setSel,
     ranges,
     /** One word is selected (look up needs that). */
     oneWord: ranges.length === 1 && !/\s/.test(text.trim()),
-    exact,
-    touched,
     selectAt,
     selectDrag,
     clear,
-    highlight,
-    note,
-    remove,
     copy,
     share,
     show,
     lookup,
     setLookup,
+    stroke,
+    made,
+    markTap,
+    markDrag,
+    noteMade,
+    copyMade,
+    removeMade,
+    endMarking,
   };
 }

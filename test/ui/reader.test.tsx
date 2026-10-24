@@ -143,43 +143,46 @@ describe('highlight tool', () => {
     return screen.getByTestId('select-layer');
   };
 
-  it('Highlight in the bottom menu: drag over text to select it, then a colour highlights it', async () => {
+  it('a drag highlights what it covers straight away, in the colour picked: no selection, no handles', async () => {
     const layer = await openTool();
-    expect(screen.getByText(/Drag over text, or tap a word/)).toBeTruthy();
+    expect(screen.getByText(/Tap or drag over text to highlight it/)).toBeTruthy();
+    await fireEvent.press(screen.getByLabelText('Highlight colour green'));
     // From the first word of P1 to the first word of P2.
     await fireEvent(layer, 'responderGrant', ev(22, 65));
     await fireEvent(layer, 'responderMove', ev(60, 100));
     await fireEvent(layer, 'responderMove', ev(22, 125));
-    await fireEvent(layer, 'responderRelease', ev(22, 125));
-    // Selected, with handles and what can be done with it; nothing highlighted yet.
+    // Drawn as the finger moves, in the highlight colour.
     expect(marked('Call')).toBe(true);
-    expect(screen.getByTestId('selection-handle-end')).toBeTruthy();
-    for (const label of ['Note', 'Copy']) expect(screen.getByLabelText(label)).toBeTruthy();
     expect(highlights()).toEqual([]);
-
-    await fireEvent.press(screen.getByLabelText('Highlight colour green'));
+    await fireEvent(layer, 'responderRelease', ev(22, 125));
     expect(highlights()).toEqual([
       [1, P1, 'green'],
       [2, 'It', 'green'],
     ]);
+    expect(screen.queryByTestId('selection-handle-start')).toBeNull();
+    expect(screen.queryByTestId('selection-handle-end')).toBeNull();
+    expect(screen.queryByLabelText('Look Up')).toBeNull(); // not the long-press menu
+    // The panel acts on what was just highlighted.
+    for (const label of ['Note', 'Copy', 'Remove']) expect(screen.getByLabelText(label)).toBeTruthy();
+    await fireEvent.press(screen.getByLabelText('Remove'));
+    expect(highlights()).toEqual([]);
   }, 30000);
 
-  it('a tap selects a word, a tap on a highlight selects it whole; Remove and Done', async () => {
+  it('a tap highlights the word; a tap on the highlight takes it away; Done puts the tool away', async () => {
     const layer = await openTool();
     // A word on P2's first line (the outer 12% of the screen still turns pages).
     const x = W * 0.7;
+    await fireEvent.press(screen.getByLabelText('Highlight colour blue'));
     await fireEvent(layer, 'responderGrant', ev(x, 125));
     await fireEvent(layer, 'responderRelease', ev(x, 125));
-    await fireEvent.press(screen.getByLabelText('Highlight colour blue'));
     const added = highlights();
     expect(added).toHaveLength(1);
     expect(String(added[0][1]).split(' ')).toHaveLength(1); // one word
     expect(added[0][2]).toBe('blue');
+    expect(screen.queryByTestId('selection-handle-start')).toBeNull();
 
-    // Tapping the highlight selects it; Remove takes it away.
     await fireEvent(layer, 'responderGrant', ev(x, 125));
     await fireEvent(layer, 'responderRelease', ev(x, 125));
-    await fireEvent.press(screen.getByLabelText('Remove'));
     expect(highlights()).toEqual([]);
 
     await fireEvent.press(screen.getByLabelText('Done highlighting'));

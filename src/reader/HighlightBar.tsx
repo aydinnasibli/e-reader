@@ -1,6 +1,6 @@
-// The highlight tool's panel, at the bottom while it's on. Select text on the
-// page (drag over it, or tap a word or a highlight), then pick a colour to
-// highlight it, or add a note, copy it or remove its highlighting.
+// The highlight tool's panel, at the bottom while it's on. A tap or a drag on
+// the page highlights in the colour picked here (or takes the highlighting
+// away, on a highlight); Note, Copy and Remove act on the highlight just made.
 
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { StyleSheet, Text, View } from 'react-native';
@@ -11,14 +11,12 @@ import { Tap } from '@/ui/Tap';
 
 interface Props {
   theme: Theme;
-  /** The colour used last (marked); with text selected, a colour highlights it. */
+  /** The colour new highlights get (marked). */
   color: HighlightColor;
-  /** Text is selected. */
-  selected: boolean;
-  /** The selection is exactly one highlight, which has a note. */
+  /** A highlight was just made: Note, Copy and Remove are for it. */
+  made: boolean;
+  /** The highlight just made has a note. */
   hasNote: boolean;
-  /** Some of the selection is highlighted, so it can be removed. */
-  canRemove: boolean;
   onColor(c: HighlightColor): void;
   onNote(): void;
   onCopy(): void;
@@ -26,7 +24,7 @@ interface Props {
   onDone(): void;
 }
 
-export function HighlightBar({ theme, color, selected, hasNote, canRemove, onColor, onNote, onCopy, onRemove, onDone }: Props) {
+export function HighlightBar({ theme, color, made, hasNote, onColor, onNote, onCopy, onRemove, onDone }: Props) {
   const insets = useSafeAreaInsets();
   const action = (icon: keyof typeof Ionicons.glyphMap, label: string, onPress: () => void) => (
     <Tap onPress={onPress} hitSlop={6} accessibilityRole="button" accessibilityLabel={label} style={styles.action}>
@@ -53,15 +51,15 @@ export function HighlightBar({ theme, color, selected, hasNote, canRemove, onCol
           <Text style={styles.doneText}>Done</Text>
         </Tap>
       </View>
-      {selected ? (
+      {made ? (
         <View style={[styles.row, styles.actions, { borderColor: theme.border }]}>
           {action('create-outline', hasNote ? 'Edit note' : 'Note', onNote)}
           {action('copy-outline', 'Copy', onCopy)}
-          {canRemove ? action('close-circle-outline', 'Remove', onRemove) : null}
+          {action('close-circle-outline', 'Remove', onRemove)}
         </View>
       ) : (
         <Text style={[styles.hint, { color: theme.muted }]} numberOfLines={2}>
-          Drag over text, or tap a word or a highlight, to select it
+          Tap or drag over text to highlight it; on a highlight, to remove it
         </Text>
       )}
     </View>

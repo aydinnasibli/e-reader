@@ -287,8 +287,9 @@ export default function ReaderScreen() {
 
 
   // Selecting text: a long press selects a word, with a menu to copy, look
-  // up, translate or share it; the highlight tool (bottom menu) selects text
-  // to highlight, note, copy or remove. Handles at both ends move them.
+  // up, translate or share it, and handles at both ends to move it. The
+  // highlight tool (bottom menu) is a marker: a tap or a drag highlights, or
+  // takes highlighting away when it starts on a highlight. No selection.
   const [highlighting, setHighlighting] = useState(false);
   const textOf = useCallback(
     (b: number) => {
@@ -312,18 +313,27 @@ export default function ReaderScreen() {
   const [, redrawHandles] = useReducer((n: number) => n + 1, 0);
   const selectionRef = useRef(selection);
   selectionRef.current = selection;
-  const onSelectDrag = useCallback((from: TextPoint | null, to: TextPoint | null) => {
-    if (from && to) selectionRef.current.selectDrag(from, to);
-  }, []);
-  // A tap while selecting: with the highlight tool it selects the word or
-  // highlight tapped; otherwise it ends the selection.
-  const onSelectTap = useCallback(
-    (p: TextPoint | null) => {
-      if (highlighting && p) selectionRef.current.selectAt(p, true);
-      else selectionRef.current.clear();
+  const onSelectDrag = useCallback(
+    (from: TextPoint | null, to: TextPoint | null, done: boolean) => {
+      if (highlighting) selectionRef.current.markDrag(from, to, done);
+      else if (from && to) selectionRef.current.selectDrag(from, to);
     },
     [highlighting],
   );
+  // A tap while selecting: with the highlight tool it highlights the word
+  // tapped (or takes a highlight away); otherwise it ends the selection.
+  const onSelectTap = useCallback(
+    (p: TextPoint | null) => {
+      if (highlighting) {
+        if (p) selectionRef.current.markTap(p);
+      } else selectionRef.current.clear();
+    },
+    [highlighting],
+  );
+  const stopHighlighting = useCallback(() => {
+    setHighlighting(false);
+    selectionRef.current.endMarking();
+  }, []);
 
   const win = useWindowDimensions();
   const autoWpm = settings.autoWpm || Math.max(60, Math.round(readingSpeed(id).cpm / CHARS_PER_WORD / 10) * 10);
@@ -348,7 +358,7 @@ export default function ReaderScreen() {
     else if (layer === 'display') {
       setSheet(null);
       setChrome(false);
-    } else if (layer === 'highlight') setHighlighting(false);
+    } else if (layer === 'highlight') stopHighlighting();
     else if (layer === 'menu') setChrome(false);
     else if (layer === 'auto') setAuto(null);
     else if (layer === 'guide') setSettings({ seenTapZones: true });
@@ -391,9 +401,12 @@ export default function ReaderScreen() {
     if (searchMark) add(searchMark.b, { s: searchMark.s, e: searchMark.e, color: theme.accent + '55' });
     // Selected text, over its highlighting.
     if (sel) for (const r of selectionRanges(sel, textOf)) add(r.b, { s: r.s, e: r.e, color: theme.accent + '55' });
+    // A highlight tool drag as it goes: the new highlight, or the page showing through where it erases.
+    const { stroke } = selection;
+    if (stroke) for (const r of stroke.ranges) add(r.b, { s: r.s, e: r.e, color: stroke.erase ? theme.bg : highlightColor(settings.highlightColor, theme.dark) });
     return m;
     // `ann` changes whenever highlights do.
-  }, [id, ann, searchMark, sel, textOf, theme.dark, theme.accent]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [id, ann, searchMark, sel, selection.stroke, textOf, theme.dark, theme.accent, theme.bg, settings.highlightColor]); // eslint-disable-line react-hooks/exhaustive-deps
   const marksFor = useCallback((b: number) => marks.get(b), [marks]);
 
   // A long press selects the word pressed (with the highlight tool too).
@@ -401,7 +414,7 @@ export default function ReaderScreen() {
     if (at === undefined || !textOfRef.current(b)) return;
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(() => {});
     setChrome(false);
-    selectionRef.current.selectAt({ b, o: at }, false);
+    selectionRef.current.selectAt({ b, o: at });
   }, []);
   const textOfRef = useRef(textOf);
   textOfRef.current = textOf;
@@ -504,7 +517,7 @@ export default function ReaderScreen() {
         onAutoEnd={stopAuto}
         onReachEnd={onScrolledToEnd}
         selecting={highlighting || !!sel}
-        edgeTurns={highlighting && !sel}
+        edgeTurns={highlighting}
         onSelectDrag={onSelectDrag}
         onSelectTap={onSelectTap}
         geometry={geometry}
@@ -586,21 +599,17 @@ export default function ReaderScreen() {
         <HighlightBar
           theme={theme}
           color={settings.highlightColor}
-          selected={!!sel}
-          hasNote={!!selection.exact?.note}
-          canRemove={selection.touched}
-          onColor={selection.highlight}
-          onNote={selection.note}
-          onCopy={selection.copy}
-          onRemove={selection.remove}
-          onDone={() => {
-            setHighlighting(false);
-            setSel(null);
-          }}
+          made={selection.made.length > 0}
+          hasNote={!!selection.made[0]?.note}
+          onColor={(highlightColor) => setSettings({ highlightColor })}
+          onNote={selection.noteMade}
+          onCopy={selection.copyMade}
+          onRemove={selection.removeMade}
+          onDone={stopHighlighting}
         />
       ) : null}
       <CharProbe onMeasured={redrawHandles} />
-      {sel ? <SelectionHandles sel={sel} geometry={geometry} textOf={textOf} theme={theme} onChange={setSel} /> : null}
+      {sel && !highlighting ? <SelectionHandles sel={sel} geometry={geometry} textOf={textOf} theme={theme} onChange={setSel} /> : null}
       {sel && !highlighting ? (
         <SelectionMenu
           {...selectionCarets(sel, geometry.current)}

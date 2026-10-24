@@ -89,7 +89,7 @@ it('import → read → highlight → app killed → reopened on the same page w
   const footer = view.getByText(/^3 of \d+ · /).props.children as string;
   const pageNo = footer.split(' · ')[0];
 
-  // Highlight tool: tap a word on this page, pick a colour.
+  // Highlight tool: pick a colour, tap a word on this page: it's highlighted.
   await a.fireEvent.press(items()[0] as never, { nativeEvent: { pageX: a.W / 2, pageY: 300 } });
   await a.fireEvent.press(view.getByLabelText('Highlight'));
   // The test renderer has no layout: give the items of each page boxes 60 points high.
@@ -99,9 +99,9 @@ it('import → read → highlight → app killed → reopened on the same page w
     for (const [i, v] of list.entries()) await a.fireEvent(v as never, 'layout', { nativeEvent: { layout: { x: 0, y: i * 60, width: a.W, height: 60 } } });
   const layer = view.getByTestId('select-layer');
   const ev = { nativeEvent: { pageX: a.W * 0.5, pageY: 10 } };
+  await a.fireEvent.press(view.getByLabelText('Highlight colour green'));
   await a.fireEvent(layer, 'responderGrant', ev);
   await a.fireEvent(layer, 'responderRelease', ev);
-  await a.fireEvent.press(view.getByLabelText('Highlight colour green'));
   const made = a.annotations.getAnnotations(id).highlights;
   expect(made).toHaveLength(1);
   const word = made[0].text;

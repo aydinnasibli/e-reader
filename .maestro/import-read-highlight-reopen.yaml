@@ -29,13 +29,13 @@ appId: com.nec.ebookreader
 - swipe:
     direction: LEFT
 - assertVisible: "3 of .*"
-# Menu → Highlight → tap a word → green → Done.
+# Menu → Highlight → green → tap a word (highlighted at once) → Done.
 - tapOn:
     point: "50%,50%"
 - tapOn: "Highlight"
+- tapOn: "Highlight colour green"
 - tapOn:
     point: "50%,30%"
-- tapOn: "Highlight colour green"
 - tapOn: "Done highlighting"
 # Leave, background and kill the app.
 - back

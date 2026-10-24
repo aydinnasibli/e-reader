@@ -30,74 +30,88 @@ async function selecting(book: string) {
   return { get: () => hook.result.current, run };
 }
 
-describe('selected text', () => {
-  it('a long press selects the word; a colour highlights just it', async () => {
-    const { get, run } = await selecting('s1');
-    await run((s) => s.selectAt(at('fox'), false));
-    expect(selectionText(get().sel!, textOf)).toBe('fox');
-    await run((s) => s.highlight('green'));
-    expect(highlights('s1')).toEqual([['fox', 'green']]);
-    expect(get().sel).toBeNull(); // done with it
+describe('the highlight tool: a marker pen', () => {
+  let alert: jest.SpyInstance;
+  beforeEach(() => (alert = jest.spyOn(Alert, 'alert').mockImplementation(() => {})));
+  afterEach(() => alert.mockRestore());
+  const word = (w: string) => ({ b: 0, o: TEXT.indexOf(w), e: TEXT.indexOf(w) + w.length });
+
+  it('a tap highlights the word, in the colour picked; a tap on it takes it away', async () => {
+    const { get, run } = await selecting('m1');
+    await run((s) => s.markTap(at('fox')));
+    expect(highlights('m1')).toEqual([['fox', 'yellow']]);
+    expect(get().sel).toBeNull(); // nothing selected: no handles, no menu
+    expect(get().made.map((h) => h.text)).toEqual(['fox']);
+    await run((s) => s.markTap(at('fox')));
+    expect(highlights('m1')).toEqual([]);
   });
 
-  it('a word inside a highlighted paragraph can get its own colour', async () => {
-    addHighlight('s2', { b: 0, s: 0, e: TEXT.length, color: 'yellow', text: TEXT });
-    const { run } = await selecting('s2');
-    await run((s) => s.selectAt(at('fox'), false));
-    await run((s) => s.highlight('blue'));
-    expect(highlights('s2')).toEqual([
-      ['The quick brown', 'yellow'],
-      ['fox', 'blue'],
-      ['jumps over the lazy dog', 'yellow'],
+  it('a drag highlights what it covers, drawn as it goes; one starting on a highlight takes highlighting away', async () => {
+    const { get, run } = await selecting('m2');
+    await run((s) => s.markDrag(at('quick'), at('jumps'), false));
+    expect(get().stroke).toEqual({ ranges: [{ b: 0, s: word('quick').o, e: word('jumps').e }], erase: false });
+    expect(highlights('m2')).toEqual([]); // not until the finger lifts
+    await run((s) => s.markDrag(at('quick'), at('jumps'), true));
+    expect(highlights('m2')).toEqual([['quick brown fox jumps', 'yellow']]);
+    expect(get().stroke).toBeNull();
+
+    // Over part of it again: that part is taken away.
+    await run((s) => s.markDrag(at('brown'), at('fox'), false));
+    expect(get().stroke?.erase).toBe(true);
+    await run((s) => s.markDrag(at('brown'), at('fox'), true));
+    expect(highlights('m2')).toEqual([
+      ['quick', 'yellow'],
+      ['jumps', 'yellow'],
     ]);
   });
 
-  it('with the highlight tool, tapping a highlight selects all of it; a colour changes it', async () => {
-    addHighlight('s3', { b: 0, s: 4, e: 15, color: 'yellow', text: 'quick brown' });
-    const { get, run } = await selecting('s3');
-    await run((s) => s.selectAt(at('brown'), true));
-    expect(selectionText(get().sel!, textOf)).toBe('quick brown');
-    expect(get().exact).toBeTruthy();
-    await run((s) => s.highlight('pink'));
-    expect(highlights('s3')).toEqual([['quick brown', 'pink']]);
+  it('a cancelled drag changes nothing', async () => {
+    const { get, run } = await selecting('m3');
+    await run((s) => s.markDrag(at('lazy'), at('dog'), false));
+    await run((s) => s.markDrag(null, null, true));
+    expect(get().stroke).toBeNull();
+    expect(highlights('m3')).toEqual([]);
   });
 
-  it('Remove clears only the selected words; a note goes only with its whole highlight, after asking', async () => {
-    const alert = jest.spyOn(Alert, 'alert').mockImplementation(() => {});
-    addHighlight('s4', { b: 0, s: 0, e: TEXT.length, color: 'pink', text: TEXT, note: 'Aesop?' });
-    const { run } = await selecting('s4');
-    await run((s) => s.selectAt(at('lazy'), false));
-    await run((s) => s.remove());
-    expect(alert).not.toHaveBeenCalled(); // trimmed, the note stays with what's left
-    expect(highlights('s4')).toEqual([
-      ['The quick brown fox jumps over the', 'pink'],
-      ['dog', 'pink'],
-    ]);
-    // The part with the note, whole: asks first.
-    await run((s) => s.selectAt(at('quick'), true));
-    await run((s) => s.remove());
-    expect(alert.mock.calls[0][0]).toBe('Delete highlight and its note?');
-    expect(getAnnotations('s4').highlights).toHaveLength(2);
-    alert.mockRestore();
-  });
-
-  it('a note on new text highlights it with the note', async () => {
+  it('Note, Copy and Remove act on the highlight just made', async () => {
     const prompt = jest.spyOn(dialogs, 'showPrompt').mockImplementation((_t, o) => o.onSubmit('Remember this'));
-    const { run } = await selecting('s5');
-    await run((s) => s.selectAt(at('fox'), false));
-    await run((s) => s.note());
-    expect(getAnnotations('s5').highlights).toMatchObject([{ text: 'fox', color: 'yellow', note: 'Remember this' }]);
+    const copy = jest.spyOn(Clipboard, 'setStringAsync');
+    const { get, run } = await selecting('m4');
+    await run((s) => s.markDrag(at('lazy'), at('dog'), true));
+    await run((s) => s.noteMade());
+    expect(getAnnotations('m4').highlights).toMatchObject([{ text: 'lazy dog', note: 'Remember this' }]);
+    await run((s) => s.copyMade());
+    expect(copy).toHaveBeenCalledWith('lazy dog');
+    await run((s) => s.removeMade());
+    expect(alert).toHaveBeenCalledWith('Delete highlight and its note?', undefined, expect.anything()); // it has a note: asks first
+    expect(get().made).toHaveLength(1);
     prompt.mockRestore();
   });
 
+  it('taking away part of a highlight keeps its note; taking away all of a highlight with a note asks first', async () => {
+    addHighlight('m5', { b: 0, s: 0, e: TEXT.length, color: 'pink', text: TEXT, note: 'Aesop?' });
+    const { run } = await selecting('m5');
+    await run((s) => s.markTap(at('lazy')));
+    expect(alert).not.toHaveBeenCalled();
+    expect(highlights('m5')).toEqual([
+      ['The quick brown fox jumps over the', 'pink'],
+      ['dog', 'pink'],
+    ]);
+    await run((s) => s.markDrag(at('The'), at('the'), true));
+    expect(alert).toHaveBeenCalledWith('Delete highlight and its note?', undefined, expect.anything());
+    expect(getAnnotations('m5').highlights).toHaveLength(2);
+  });
+});
+
+describe('selected text (long press)', () => {
   it('copy and share take the selected text', async () => {
     const share = jest.spyOn(Share, 'share').mockResolvedValue({ action: 'sharedAction', activityType: undefined });
     const copy = jest.spyOn(Clipboard, 'setStringAsync');
     const { get, run } = await selecting('s6');
-    await run((s) => s.selectAt(at('fox'), false));
+    await run((s) => s.selectAt(at('fox')));
     await run((s) => s.copy());
     expect(copy).toHaveBeenCalledWith('fox');
-    await run((s) => s.selectAt(at('dog'), false));
+    await run((s) => s.selectAt(at('dog')));
     await run((s) => s.share());
     expect(share).toHaveBeenCalledWith({ message: '“dog”\n— Book' });
     expect(get().sel).toBeNull();
@@ -105,7 +119,7 @@ describe('selected text', () => {
 
   it('look up and translate show the selected text in the app', async () => {
     const { get, run } = await selecting('s7');
-    await run((s) => s.selectAt(at('fox'), false));
+    await run((s) => s.selectAt(at('fox')));
     expect(get().oneWord).toBe(true);
     await run((s) => s.show('translate'));
     expect(get().lookup).toEqual({ kind: 'translate', text: 'fox' });
@@ -235,7 +249,7 @@ it('a touch between two words selects the closer one', async () => {
   expect(nearestWord('a     word', 5)).toBe(6);
   expect(nearestWord('   a', 0)).toBe(3);
   const { get, run } = await selecting('s8');
-  await run((s) => s.selectAt({ b: 0, o: TEXT.indexOf(' fox') }, false));
+  await run((s) => s.selectAt({ b: 0, o: TEXT.indexOf(' fox') }));
   expect(selectionText(get().sel!, textOf)).toBe('brown');
 });
 
