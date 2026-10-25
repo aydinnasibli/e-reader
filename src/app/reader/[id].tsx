@@ -2,7 +2,7 @@ import * as Haptics from 'expo-haptics';
 import * as ScreenOrientation from 'expo-screen-orientation';
 import { type ErrorBoundaryProps, router, useLocalSearchParams } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
-import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, AppState, BackHandler, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
 import { type Position, blockText } from '@/engine/types';
 import { addBookmark, highlightsByBlock, removeBookmark, useAnnotations } from '@/lib/annotations';
@@ -14,15 +14,11 @@ import { ReadingTracker, charsPerMinute, readingSpeed } from '@/lib/stats';
 import { BookData } from '@/reader/book';
 import { Chrome } from '@/reader/Chrome';
 import type { Mark } from '@/reader/marks';
-import { type PageInfo, PageReader } from '@/reader/PageReader';
-import { pagesBetween } from '@/reader/pageNumbers';
-import { ScrollReader } from '@/reader/ScrollReader';
-import type { ReaderGeometry } from '@/reader/geometry';
+import { pageAtFraction, pagesBetween } from '@/reader/pageNumbers';
 import { LookupSheet } from '@/reader/LookupSheet';
-import { type TextPoint, selectionRanges } from '@/reader/selection';
-import { CharProbe } from '@/reader/CharProbe';
-import { SelectionHandles, selectionCarets } from '@/reader/SelectionHandles';
+import type { TextPoint } from '@/reader/selection';
 import { SelectionMenu } from '@/reader/SelectionMenu';
+import { type PageInfo, type PageSelection, WebReader } from '@/reader/web/WebReader';
 import { useSelection } from '@/reader/useSelection';
 import { AutoBar } from '@/reader/AutoBar';
 import { CHARS_PER_WORD, pageDelay, scrollSpeed, stepWpm } from '@/reader/autoRead';
@@ -309,28 +305,24 @@ export default function ReaderScreen() {
   const { sel, setSel } = selection;
   // A jump (contents, search, a note...) leaves the selection behind.
   useEffect(() => setSel(null), [jump.key, setSel]);
-  // Where text is on screen, from the page or scroll view; handles redraw when it changes.
-  const geometry = useRef<ReaderGeometry | null>(null);
-  const [, redrawHandles] = useReducer((n: number) => n + 1, 0);
+  // The page selects text itself (the browser's own handles); the menu goes over its ends.
+  const [selEnds, setSelEnds] = useState<Pick<PageSelection, 'start' | 'end'> | null>(null);
   const selectionRef = useRef(selection);
   selectionRef.current = selection;
-  const onSelectDrag = useCallback(
-    (from: TextPoint | null, to: TextPoint | null, done: boolean) => {
-      if (highlighting) selectionRef.current.markDrag(from, to, done);
-      else if (from && to) selectionRef.current.selectDrag(from, to);
-    },
-    [highlighting],
-  );
-  // A tap while selecting: with the highlight tool it highlights the word
-  // tapped (or takes a highlight away); otherwise it ends the selection.
-  const onSelectTap = useCallback(
-    (p: TextPoint | null) => {
-      if (highlighting) {
-        if (p) selectionRef.current.markTap(p);
-      } else selectionRef.current.clear();
-    },
-    [highlighting],
-  );
+  const onSelection = useCallback((s: PageSelection | null) => {
+    if (s) Haptics.selectionAsync().catch(() => {});
+    setChrome(false);
+    selectionRef.current.setSel(s ? { a: s.a, z: s.z } : null);
+    setSelEnds(s ? { start: s.start, end: s.end } : null);
+  }, []);
+  useEffect(() => {
+    if (!sel) setSelEnds(null);
+  }, [sel]);
+  // The highlight tool: a tap highlights the word tapped (or takes a highlight away), a drag what it covers.
+  const onMarkTap = useCallback((p: TextPoint | null) => {
+    if (p) selectionRef.current.markTap(p);
+  }, []);
+  const onMarkDrag = useCallback((from: TextPoint | null, to: TextPoint | null, done: boolean) => selectionRef.current.markDrag(from, to, done), []);
   const stopHighlighting = useCallback(() => {
     setHighlighting(false);
     selectionRef.current.endMarking();
@@ -400,25 +392,13 @@ export default function ReaderScreen() {
     const add = (b: number, mark: Mark) => m.set(b, [...(m.get(b) ?? []), mark]);
     for (const [b, list] of highlightsByBlock(id)) m.set(b, list.map((h) => ({ s: h.s, e: h.e, color: highlightColor(h.color, theme.dark) })));
     if (searchMark) add(searchMark.b, { s: searchMark.s, e: searchMark.e, color: theme.accent + '55' });
-    // Selected text, over its highlighting.
-    if (sel) for (const r of selectionRanges(sel, textOf)) add(r.b, { s: r.s, e: r.e, color: theme.accent + '55' });
     // A highlight tool drag as it goes: the new highlight, or the page showing through where it erases.
     const { stroke } = selection;
     if (stroke) for (const r of stroke.ranges) add(r.b, { s: r.s, e: r.e, color: stroke.erase ? theme.bg : highlightColor(settings.highlightColor, theme.dark) });
     return m;
     // `ann` changes whenever highlights do.
-  }, [id, ann, searchMark, sel, selection.stroke, textOf, theme.dark, theme.accent, theme.bg, settings.highlightColor]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [id, ann, searchMark, selection.stroke, theme.dark, theme.accent, theme.bg, settings.highlightColor]); // eslint-disable-line react-hooks/exhaustive-deps
   const marksFor = useCallback((b: number) => marks.get(b), [marks]);
-
-  // A long press selects the word pressed (with the highlight tool too).
-  const onLongPressBlock = useCallback((b: number, at?: number) => {
-    if (at === undefined || !textOfRef.current(b)) return;
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(() => {});
-    setChrome(false);
-    selectionRef.current.selectAt({ b, o: at });
-  }, []);
-  const textOfRef = useRef(textOf);
-  textOfRef.current = textOf;
 
   // Bookmarks on the visible page.
   // `end` is where the next page starts, so it isn't part of this page.
@@ -481,21 +461,20 @@ export default function ReaderScreen() {
   const bookLeft = (book.estimatedChars - here) / speed;
   const footerRight = chapterLeft !== null && chapterLeft > 0 ? `${formatMinutes(chapterLeft)} left in chapter` : `${formatMinutes(bookLeft)} left`;
   const pagesLeftInChapter = pageInfo && nextChapter !== null ? pagesBetween(here, book.charOffset({ b: nextChapter, o: 0 }), pageInfo.cpp) : null;
-  const pageLabel = pageInfo
-    ? (f: number) => `Page ${Math.min(pageInfo.total, Math.max(1, Math.round(f * pageInfo.total)))} of ${pageInfo.total}`
-    : undefined;
+  const fraction = book.fraction(pos);
+  const pageLabel = pageInfo ? (f: number) => `Page ${pageAtFraction(f, fraction, pageInfo.page, pageInfo.total)} of ${pageInfo.total}` : undefined;
   const chromeInfo = !book.complete
     ? `Preparing book ${Math.round(book.progress * 100)}%`
     : pagesLeftInChapter
       ? `${pagesLeftInChapter} ${pagesLeftInChapter === 1 ? 'page' : 'pages'} left in chapter · ${formatMinutes(bookLeft)} left`
       : `${formatMinutes(bookLeft)} left in book`;
 
-  const Reader = settings.mode === 'page' ? PageReader : ScrollReader;
+  // The menu shows unless the display panel has taken its place; the status bar shows with it.
+  const menu = chrome && sheet !== 'display';
   return (
     <View style={{ flex: 1, backgroundColor: theme.bg }}>
-      <StatusBar hidden={!chrome && sheet !== 'display'} style={theme.dark ? 'light' : 'dark'} />
-      <Reader
-        key={settings.mode}
+      <StatusBar hidden={!menu} style={theme.dark ? 'light' : 'dark'} />
+      <WebReader
         book={book}
         settings={settings}
         theme={theme}
@@ -505,7 +484,6 @@ export default function ReaderScreen() {
         onPosition={onPosition}
         onTap={toggleChrome}
         marksFor={marksFor}
-        onLongPressBlock={onLongPressBlock}
         onLink={onLink}
         bookmarked={pageBookmarks.length > 0}
         footerRight={footerRight}
@@ -517,12 +495,12 @@ export default function ReaderScreen() {
         onEnd={pastEnd}
         onAutoEnd={stopAuto}
         onReachEnd={onScrolledToEnd}
-        selecting={highlighting || !!sel}
-        edgeTurns={highlighting}
-        onSelectDrag={onSelectDrag}
-        onSelectTap={onSelectTap}
-        geometry={geometry}
-        onGeometryChange={redrawHandles}
+        marking={highlighting}
+        onMarkTap={onMarkTap}
+        onMarkDrag={onMarkDrag}
+        onSelection={onSelection}
+        selected={!!sel}
+        statusBar={menu}
       />
       {endChip && !chrome && !highlighting && !sel && !sheet ? (
         <BackChip
@@ -554,11 +532,11 @@ export default function ReaderScreen() {
       ) : null}
       {draft ? <LivePreview book={book} settings={{ ...settings, ...draft }} theme={theme} pos={pos} /> : null}
       <Chrome
-        visible={chrome && sheet !== 'display'}
+        visible={menu}
         theme={theme}
         title={book.entry.title}
         chapter={book.chapterAt(pos.b)?.t}
-        fraction={book.fraction(pos)}
+        fraction={fraction}
         info={chromeInfo}
         pageLabel={pageLabel}
         bookmarked={pageBookmarks.length > 0}
@@ -609,11 +587,10 @@ export default function ReaderScreen() {
           onDone={stopHighlighting}
         />
       ) : null}
-      <CharProbe onMeasured={redrawHandles} />
-      {sel && !highlighting ? <SelectionHandles sel={sel} geometry={geometry} textOf={textOf} theme={theme} onChange={setSel} /> : null}
-      {sel && !highlighting ? (
+      {sel && selEnds && !highlighting ? (
         <SelectionMenu
-          {...selectionCarets(sel, geometry.current)}
+          start={selEnds.start}
+          end={selEnds.end}
           canLookUp={selection.oneWord}
           onCopy={selection.copy}
           onLookUp={() => selection.show('define')}
@@ -627,7 +604,7 @@ export default function ReaderScreen() {
         visible={sheet === 'goto'}
         theme={theme}
         page={pageInfo}
-        fraction={book.fraction(pos)}
+        fraction={fraction}
         onClose={() => setSheet(null)}
         onGo={async (f) => goTo(await book.positionAt(f))}
       />

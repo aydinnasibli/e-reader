@@ -78,6 +78,8 @@ export function recordCrash(kind: CrashKind, error: unknown) {
   try {
     const list = all();
     const entry: Crash = { at: Date.now(), kind, ...describe(error), ...(screen ? { screen } : {}), build: BUILD };
+    // While developing, say so at once too.
+    if (typeof __DEV__ !== 'undefined' && __DEV__ && process.env.NODE_ENV !== 'test') console.warn(`[crash log] ${kind}: ${entry.message}`);
     const last = list[list.length - 1];
     if (last && last.kind === kind && last.message === entry.message && entry.at - last.at < REPEAT_MS) {
       set([...list.slice(0, -1), { ...last, at: entry.at, count: (last.count ?? 1) + 1 }]);

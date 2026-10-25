@@ -5,7 +5,6 @@
 // cut off, or on top of something else (see check.ts).
 
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react-native';
-import { Dimensions } from 'react-native';
 import type { Block, Manifest } from '@/engine/types';
 import { addBookmark, addHighlight } from '@/lib/annotations';
 import { setSettings } from '@/lib/settings';
@@ -60,9 +59,9 @@ beforeAll(() => {
 });
 
 const settle = () => act(() => new Promise((r) => setTimeout(r, 450))); // panel animations
+/** A tap in the middle of the page: the page in the WebView says so (test/ui/fakePage.ts). */
 const tapMiddle = async () => {
-  const { width, height } = Dimensions.get('window');
-  await fireEvent.press(screen.getAllByText(/^Paragraph \d+\./)[0], { nativeEvent: { pageX: width / 2, pageY: height / 2 } });
+  await act(() => (globalThis as { __page?: import('../fakePage').FakePage }).__page!.emit({ t: 'tap' }));
   await settle();
 };
 
@@ -158,7 +157,8 @@ it.each(['phone', 'landscape'] as const)('scroll mode on %s', async (size) => {
   setSettings({ mode: 'scroll', seenTapZones: true, hyphenate: false, fontSize: 19 });
   const a = auditor(device);
   await render(<ReaderScreen />);
-  await waitFor(() => expect(screen.getAllByText(/^Paragraph 0\./).length).toBeGreaterThan(0), { timeout: 9000 });
+  // The text is in the page (the WebView); around it, the badge with the place read.
+  await waitFor(() => expect(screen.getByText(/%/)).toBeTruthy(), { timeout: 9000 });
   await a.check('scroll page');
   await tapMiddle();
   await a.check('scroll menu');

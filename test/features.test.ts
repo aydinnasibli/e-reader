@@ -1,41 +1,10 @@
 import { describe, expect, it, vi } from 'vitest';
 import { BOLD, type Block } from '../src/engine/types';
-import { applyMarks } from '../src/reader/marks';
 import { type Hit, findInBlock, fold } from '../src/reader/search';
 
 // search.ts reads chunk files through expo-file-system, which only exists on
 // the phone. vi.mock is hoisted above the imports.
 vi.mock('expo-file-system', () => ({ File: class {}, Directory: class {}, Paths: {}, FileMode: {} }));
-
-describe('applyMarks', () => {
-  it('splits styled runs at highlight edges and keeps styles', () => {
-    const segs = applyMarks(['Hello ', ['big', BOLD], ' world'], [{ s: 4, e: 10, color: 'Y' }], (o) => o);
-    expect(segs).toEqual([
-      { text: 'Hell', bits: 0 },
-      { text: 'o ', bits: 0, bg: 'Y' },
-      { text: 'big', bits: BOLD, bg: 'Y' },
-      { text: ' ', bits: 0, bg: 'Y' },
-      { text: 'world', bits: 0 },
-    ]);
-  });
-
-  it('shifts marks for the indent prefix and for a sliced page range', () => {
-    // Drawn text is "  abcdef" (2-char indent); the page shows drawn [4, 8) = "cdef".
-    const segs = applyMarks(['cdef'], [{ s: 3, e: 5, color: 'Y' }], (o) => o + 2 - 4);
-    expect(segs).toEqual([
-      { text: 'c', bits: 0 },
-      { text: 'de', bits: 0, bg: 'Y' },
-      { text: 'f', bits: 0 },
-    ]);
-  });
-
-  it('leaves text alone without marks', () => {
-    expect(applyMarks(['a', ['b', BOLD]], undefined, (o) => o)).toEqual([
-      { text: 'a', bits: 0 },
-      { text: 'b', bits: BOLD },
-    ]);
-  });
-});
 
 describe('search', () => {
   const block: Block = { k: 'p', r: ['Ёлка и елка. ', ['Ёлки', BOLD], ' зелёные'] };

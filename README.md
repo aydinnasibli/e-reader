@@ -18,8 +18,10 @@ and TXT files without freezing. Built with Expo (React Native) and TypeScript.
 
 Tapping the middle of a page shows the menu (contents, search, bookmarks,
 display settings, progress slider). Tap the left or right edge, or swipe, to
-turn pages. Long-press a word to highlight it, add a note, look it up or
-translate it. Long-press a book in the library for its options.
+turn pages. Long-press a word to select it (drag the handles to select more),
+then copy, look it up, translate or share it. The menu's Highlight tool marks
+text like a highlighter: tap or drag over it, and add a note to what you
+marked. Long-press a book in the library for its options.
 
 Books can also be opened from other apps ("Open with" on Android, "Open in" /
 Share on iPhone). The library's View menu backs up highlights, notes and
@@ -42,7 +44,7 @@ Android refuses the "older" version, so keep the workflow file in place.
 Most readers load a whole chapter (or book) into a web view and lay it all out
 before showing anything; a single 40 MB chapter is enough to hang them.
 
-This app instead:
+This app draws its pages in a web view too, but:
 
 1. **Converts each book once, as a stream.** The file is read 64 KB at a time,
    decoded, parsed and written out as small chunk files (~30,000 characters each)
@@ -50,20 +52,23 @@ This app instead:
    images inside EPUBs are only extracted when shown.
 2. **Lets you start reading immediately.** The first chunk is ready within a
    moment; the rest is converted in the background while you read.
-3. **Only lays out what's on screen.** Page mode measures the current chunk and
-   its neighbours with the phone's own text engine and cuts them into pages;
-   scroll mode keeps a sliding window of a few chunks. Page 30,000 costs the
-   same as page 3.
+3. **Only lays out what's near.** The reader page (a small HTML page in a
+   WebView, `src/reader/web/page/`) holds the current chunk and its
+   neighbours: in page mode laid out in CSS columns one screen wide, in scroll
+   mode one under another. Chunks are added and dropped as you read. Page
+   30,000 costs the same as page 3.
 
 ## Project layout
 
 ```
-src/engine/   format conversion (EPUB, FB2, TXT, MOBI/AZW3), no React; runs in Node for tests
-src/lib/      storage, library and settings
-src/reader/   page and scroll readers, pagination, menus
-src/app/      screens (Expo Router)
-test/         unit tests (vitest); test/ui/ screen tests (jest + React Native Testing Library)
-bench/        stress benchmark for huge books
+src/engine/           format conversion (EPUB, FB2, TXT, MOBI/AZW3), no React; runs in Node for tests
+src/lib/              storage, library and settings
+src/reader/           the reader: menus, sheets, settings panel, page numbers
+src/reader/web/       the WebView reader: blocks as HTML, the look as CSS, messages to the page
+src/reader/web/page/  the page inside the WebView (built into page.generated.ts)
+src/app/              screens (Expo Router)
+test/                 unit tests (vitest); test/ui/ screen tests (jest + React Native Testing Library)
+bench/                stress benchmark for huge books; bench/webpage/ the reader page in browser engines
 ```
 
 ## Development
@@ -72,6 +77,8 @@ bench/        stress benchmark for huge books
 npx tsc --noEmit   # typecheck
 npx expo lint      # lint
 npm test           # unit tests and screen tests
+npm run build:page # after changing src/reader/web/page/ (a test fails if it's stale)
+npm run test:page  # the reader page in Chromium (Android's engine) and WebKit (iPhone's)
 ```
 
 ### Stress benchmark

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { charsPerPage, pageCount, pageNumber, pagesBetween } from '../src/reader/pageNumbers';
+import { charsPerPage, pageAtFraction, pageCount, pageNumber, pagesBetween } from '../src/reader/pageNumbers';
 
 describe('page numbers', () => {
   it('chars per page comes from the laid-out chunks', () => {
@@ -39,5 +39,16 @@ describe('page numbers', () => {
     expect(pageCount(10, 1500)).toBe(1);
     expect(pagesBetween(10_000, 28_000, 1500)).toBe(12);
     expect(pagesBetween(28_000, 10_000, 1500)).toBe(0);
+  });
+
+  it('the slider shows the page you are on, and the first and last at its ends', () => {
+    // Page 23 of 5698 at 0.3% (the front pages hold less text than most).
+    expect(pageAtFraction(0.003, 0.003, 23, 5698)).toBe(23);
+    expect(pageAtFraction(0.0031, 0.003, 23, 5698)).toBe(24);
+    expect(pageAtFraction(0.0015, 0.003, 23, 5698)).toBe(12);
+    expect(pageAtFraction(0, 0.003, 23, 5698)).toBe(1);
+    expect(pageAtFraction(1, 0.003, 23, 5698)).toBe(5698);
+    expect(pageAtFraction(0.5, 0, 1, 100)).toBe(51);
+    expect(pageAtFraction(0.5, 1, 100, 100)).toBe(51);
   });
 });

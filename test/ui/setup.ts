@@ -47,6 +47,39 @@ jest.mock('@expo/vector-icons/Ionicons', () => {
   Icon.glyphMap = {};
   return Icon;
 });
+// The reader's WebView: a fake page answering in its place (test/ui/fakePage.ts).
+// The latest one is global.__page, for tests to drive.
+jest.mock('react-native-webview', () => {
+  const { createElement, forwardRef, useEffect, useImperativeHandle, useRef } = require('react');
+  const { View } = require('react-native');
+  const { FakePage } = require('./fakePage');
+  const WebView = forwardRef((props: { onMessage(e: { nativeEvent: { data: string } }): void }, ref: unknown) => {
+    const onMessage = useRef(props.onMessage);
+    onMessage.current = props.onMessage;
+    const page: { current: InstanceType<typeof FakePage> | null } = useRef(null);
+    if (!page.current) page.current = new FakePage((m: unknown) => onMessage.current({ nativeEvent: { data: JSON.stringify(m) } }));
+    (globalThis as { __page?: unknown }).__page = page.current;
+    useImperativeHandle(ref, () => ({
+      injectJavaScript(js: string) {
+        const json = js.match(/window\.__nec\((.*)\);true;$/s)?.[1];
+        if (json) page.current!.receive(JSON.parse(json));
+      },
+      reload() {
+        setTimeout(() => page.current!.load(), 0);
+      },
+    }));
+    useEffect(() => {
+      const t = setTimeout(() => page.current!.load(), 0);
+      return () => clearTimeout(t);
+    }, []);
+    return createElement(View, { testID: 'reader-page', style: { flex: 1 } });
+  });
+  return { WebView, default: WebView };
+});
+jest.mock('@/reader/web/webFonts', () => ({
+  webFont: () => Promise.resolve({ css: '', family: 'serif', medium: false }),
+  MONO_FAMILY: 'monospace',
+}));
 // Font files load in the background on device; treat them as loaded.
 jest.mock('@/lib/fonts', () => ({
   ...jest.requireActual('@/lib/fonts'),

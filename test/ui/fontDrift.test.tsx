@@ -1,12 +1,15 @@
 /// <reference types="jest" />
 // Changing the text size, even many times in a row (a slider drag is one
-// change per step), keeps the reader on the page it was on: going back to the
-// first size lands on the very same page, not a few pages earlier.
+// change per step), keeps the reader on the page it was on: the page is laid
+// out again at the place the reader arrived at, not at the start of the page
+// shown after the last change (up to a page earlier, so every step would
+// creep back).
 
-import { act, render, screen } from '@testing-library/react-native';
+import { act, render, waitFor } from '@testing-library/react-native';
 import type { Block, Manifest } from '@/engine/types';
 import { setSettings } from '@/lib/settings';
 import ReaderScreen from '@/app/reader/[id]';
+import type { FakePage } from './fakePage';
 
 const para = (i: number) => `Paragraph ${i}. ` + 'The sea was calm and the sky was wide, and the ship went on through the night. '.repeat(3);
 const blocks: Block[] = Array.from({ length: 80 }, (_, i) => ({ k: 'p', r: [para(i)] }));
@@ -38,28 +41,31 @@ jest.mock('@/lib/library', () => {
   };
 });
 
-/** Let pending layout finish: the test renderer never reports text layout, so the reader falls back to estimates after a few seconds. */
-async function settle() {
-  for (let i = 0; i < 4; i++) await act(async () => void jest.advanceTimersByTime(4100));
-}
-const pageLabel = () => (screen.getByText(/^\d+ of \d+ · /).props.children as string).split(' · ')[0];
+const page = () => (globalThis as { __page?: FakePage }).__page!;
+const P41 = { b: 41, i: 0 };
 
 beforeAll(() => require('@/lib/storage').testChunks.set('sea/0', JSON.stringify({ b: blocks })));
 
-it('many size changes and back: each size always shows the same page, and the first size the page it started on', async () => {
-  jest.useFakeTimers();
+it('many size changes: each lays the page out at the place opened, not where the last page started', async () => {
   setSettings({ mode: 'page', fontSize: 19, indent: false, hyphenate: false, align: 'left', pageTurn: 'none', seenTapZones: true });
   await render(<ReaderScreen />);
-  await settle();
-  const pageAt = new Map<number, string>([[19, pageLabel()]]);
-
-  for (const fontSize of [20, 21, 22, 23, 22, 21, 20, 21, 22, 21, 20, 19]) {
+  await waitFor(() => expect(page().shown()).toBeTruthy(), { timeout: 5000 });
+  // The page shown starts before paragraph 41 (pages hold several paragraphs).
+  expect(page().shown().first.b).toBeLessThan(41);
+  for (const fontSize of [20, 21, 22, 23, 22, 21, 20]) {
     await act(async () => setSettings({ fontSize }));
-    await settle();
-    // Each size lands where it did the first time: the place doesn't creep back.
-    const page = pageLabel();
-    expect([fontSize, page]).toEqual([fontSize, pageAt.get(fontSize) ?? page]);
-    pageAt.set(fontSize, page);
+    await waitFor(() => expect(page().last('setup')!.setup.css).toContain(`font-size:${fontSize}px`));
+    expect(page().last('setup')!.target).toEqual({ at: P41 });
   }
-  jest.useRealTimers();
-}, 60000);
+}, 30000);
+
+it('after a page turn, the place kept is the page turned to', async () => {
+  setSettings({ mode: 'page', fontSize: 19 });
+  await render(<ReaderScreen />);
+  await waitFor(() => expect(page().shown()).toBeTruthy(), { timeout: 5000 });
+  await act(() => page().turn(1));
+  const turnedTo = page().shown().first;
+  await act(async () => setSettings({ fontSize: 24 }));
+  await waitFor(() => expect(page().last('setup')!.setup.css).toContain('font-size:24px'));
+  expect(page().last('setup')!.target).toEqual({ at: turnedTo });
+}, 30000);

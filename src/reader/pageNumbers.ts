@@ -37,3 +37,13 @@ export function pageCount(totalChars: number, cpp: number): number {
 export function pagesBetween(from: number, to: number, cpp: number): number {
   return Math.max(0, Math.ceil((to - from) / cpp));
 }
+
+/**
+ * The page at `f` (0..1) along the book, for the slider: the page shown at
+ * `here`, the first and last at the ends, pages spread evenly in between. So
+ * the slider shows the page you're on, and dragging it starts from there.
+ */
+export function pageAtFraction(f: number, here: number, page: number, total: number): number {
+  const n = f <= here ? (here > 0 ? 1 + ((page - 1) * f) / here : 1) : here < 1 ? page + ((total - page) * (f - here)) / (1 - here) : total;
+  return Math.min(total, Math.max(1, Math.round(n)));
+}

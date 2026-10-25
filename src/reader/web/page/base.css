@@ -1,0 +1,21 @@
+/* What never changes; sizes, fonts and colours come from the screen (css.ts). */
+html, body { margin: 0; padding: 0; -webkit-text-size-adjust: 100%; text-size-adjust: 100%; -webkit-tap-highlight-color: transparent; }
+html[data-mode='page'], html[data-mode='page'] body { overflow: hidden; position: fixed; inset: 0; overscroll-behavior: none; }
+html[data-mode='scroll'] body { overscroll-behavior: none; }
+#viewport { display: none; }
+html[data-mode='page'] #viewport { display: block; position: fixed; inset: 0; overflow: hidden; }
+html[data-mode='page'] #scroll { display: none; }
+#strip { position: absolute; top: 0; left: 0; height: 100%; will-change: transform; }
+#strip > .chunk { position: absolute; top: 0; box-sizing: border-box; column-fill: auto; orphans: 1; widows: 1; }
+.chunk > :first-child { margin-top: 0 !important; }
+[data-b] { margin: 0; white-space: pre-wrap; overflow-wrap: break-word; }
+h1[data-b], h2[data-b], h3[data-b], h4[data-b], h5[data-b], h6[data-b] { break-after: avoid; }
+.img { break-inside: avoid; text-align: center; white-space: normal; }
+.img img { max-width: 100%; height: auto; vertical-align: top; }
+.hr { display: flex; align-items: center; justify-content: center; }
+.hr i { display: block; width: 30%; height: 1px; opacity: 0.6; }
+.sup, .sub { line-height: 0; }
+.sup { vertical-align: super; }
+.sub { vertical-align: sub; }
+.end { text-align: center; padding: 32px 0; font-size: 13px; display: none; }
+html.marking, html.marking * { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }

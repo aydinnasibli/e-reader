@@ -12,7 +12,7 @@ import type { ReaderSettings, Theme } from '@/lib/settings';
 import type { BookData } from './book';
 import { BlockImage, BlockText, Spacer } from './BlockText';
 import { drawn, lineHeightOf, lookOf, toDrawn } from './look';
-import { HEADER, pageFrame } from './PageReader';
+import { HEADER, webFrame } from './web/frame';
 
 interface Props {
   book: BookData;
@@ -25,7 +25,7 @@ interface Props {
 export function LivePreview({ book, settings, theme, pos }: Props) {
   const win = useWindowDimensions();
   const insets = useSafeAreaInsets();
-  const { width, pageHeight, left } = pageFrame(win, insets, settings.margin);
+  const { column: width, height: pageHeight, left } = webFrame(win, insets, settings.margin, 'page');
   const lang = book.manifest?.lang;
 
   // Enough text to fill the screen at any size, and no more.

@@ -1,34 +1,25 @@
 import { Image } from 'expo-image';
-import { type ComponentRef, type Ref, memo, useEffect, useState } from 'react';
-import { Text, type TextLayoutEvent, View } from 'react-native';
-import { type Block, type Run, makeRun, runLink, runStyle, runText, sliceRuns } from '@/engine/types';
+import { memo, useEffect, useState } from 'react';
+import { Text, View } from 'react-native';
+import { type Block, LINK, type Run, makeRun, runLink, runStyle, runText, sliceRuns } from '@/engine/types';
 import type { ReaderSettings, Theme } from '@/lib/settings';
 import type { BookData, ImageInfo } from './book';
-import { type Look, baseTextStyle, drawn, lineHeightOf, lookOf, runTextStyle, toDrawn } from './look';
-import { type Mark, applyMarks } from './marks';
+import { type Look, baseTextStyle, drawn, lineHeightOf, runTextStyle } from './look';
 
-/** A drawn text, as its ref gives it. */
-export type TextInstance = ComponentRef<typeof Text>;
+// A block drawn as native text, outside the reader page: the display panel's
+// preview and the footnote sheet.
 
 interface TextProps {
   block: Block;
   look: Look;
   theme: Theme;
-  /** Draw only this [start, end) range of the drawn text (page mode). */
+  /** Draw only this [start, end) range of the drawn text (the preview starting mid-paragraph). */
   range?: [number, number];
-  /** Drop the top margin (first thing on a page, or a continued paragraph). */
+  /** Drop the top margin (the first thing shown). */
   noTopMargin?: boolean;
-  noBottomMargin?: boolean;
-  /** Highlights / search hits, in block coordinates. */
-  marks?: Mark[];
-  /** Tap on a footnote reference. */
-  onLink?: (target: string) => void;
-  onTextLayout?: (e: TextLayoutEvent) => void;
-  /** The text view, for asking where its lines are drawn (see drawnLayout). */
-  textRef?: Ref<TextInstance>;
 }
 
-export const BlockText = memo(function BlockText({ block, look, theme, range, noTopMargin, noBottomMargin, marks, onLink, onTextLayout, textRef }: TextProps) {
+export const BlockText = memo(function BlockText({ block, look, theme, range, noTopMargin }: TextProps) {
   const d = drawn(block, look);
   let runs: Run[] = d.runs;
   if (range) {
@@ -40,16 +31,12 @@ export const BlockText = memo(function BlockText({ block, look, theme, range, no
       runs = [...runs.slice(0, -1), makeRun(runText(last).slice(0, -1) + '\u2010', runStyle(last), runLink(last))];
     }
   }
-  const from = range?.[0] ?? 0;
-  const segments = applyMarks(runs, marks, (o) => toDrawn(d, o) - from);
   return (
     <Text
-      ref={textRef}
       allowFontScaling={false}
-      // Greedy line breaking, so a paragraph split across pages breaks exactly as measured.
+      // Greedy line breaking, as the reader page's browser breaks lines.
       textBreakStrategy="simple"
       android_hyphenationFrequency={look.hyph !== undefined ? 'normal' : 'none'}
-      onTextLayout={onTextLayout}
       style={{
         ...baseTextStyle(look, block.k === 'pre'),
         color: theme.text,
@@ -58,31 +45,19 @@ export const BlockText = memo(function BlockText({ block, look, theme, range, no
         letterSpacing: look.letterSpacing,
         textAlign: look.textAlign,
         marginTop: noTopMargin ? 0 : look.marginTop,
-        marginBottom: noBottomMargin ? 0 : look.marginBottom,
+        marginBottom: look.marginBottom,
         paddingLeft: look.paddingLeft,
       }}>
-      {/* Always nested texts, even plain ones: React Native builds a text of only
-          strings differently from one with nested texts, so the first highlight
-          (a long-pressed word) would replace the paragraph's view under the finger,
-          and the touch it was part of would never end (the next one is lost). */}
-      {segments.map((seg, i) => {
-        const st = runTextStyle(seg.bits, look);
-        const link = seg.link;
-        return (
-          <Text
-            key={i}
-            style={[st, seg.bg ? { backgroundColor: seg.bg } : null, link ? { color: theme.accent } : null]}
-            onPress={link && onLink ? () => onLink(link) : undefined}
-            suppressHighlighting>
-            {seg.text}
-          </Text>
-        );
-      })}
+      {runs.map((r, i) => (
+        <Text key={i} style={[runTextStyle(runStyle(r) & ~LINK, look), runLink(r) ? { color: theme.accent } : null]}>
+          {runText(r)}
+        </Text>
+      ))}
     </Text>
   );
 }, sameProps);
 
-/** Like memo's default, but ranges are compared by value (pages build new arrays each render). */
+/** Like memo's default, but ranges are compared by value (the preview builds new arrays each render). */
 function sameProps(a: TextProps, b: TextProps) {
   for (const k of Object.keys(a) as (keyof TextProps)[]) {
     if (k === 'range') {
@@ -105,7 +80,7 @@ export function Spacer({ block, settings, theme }: { block: Block; settings: Rea
   return <View style={{ height: h }} />;
 }
 
-/** Image block. With `height` it uses a fixed box (page mode); otherwise it sizes itself. */
+/** Image block. With `height` it uses a fixed box; otherwise it sizes itself. */
 export function BlockImage({ book, imageKey, width, height }: { book: BookData; imageKey: string; width: number; height?: number }) {
   const [info, setInfo] = useState<ImageInfo | null | undefined>(() => book.knownImage(imageKey));
   useEffect(() => {
@@ -130,5 +105,3 @@ export function imageBoxHeight(info: ImageInfo | null | undefined, width: number
   const w = Math.min(width, info.width * 2);
   return Math.min(maxHeight, Math.round((w * info.height) / info.width));
 }
-
-export { lookOf };

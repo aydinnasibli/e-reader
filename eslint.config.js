@@ -19,7 +19,7 @@ module.exports = defineConfig([
     },
   },
   {
-    files: ['bench/**/*.mjs'],
+    files: ['bench/**/*.mjs', 'scripts/**/*.mjs'],
     languageOptions: { globals: { Buffer: 'readonly', process: 'readonly' } },
   },
 ]);

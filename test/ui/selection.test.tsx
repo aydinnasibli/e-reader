@@ -9,8 +9,6 @@ import { Alert, Share } from 'react-native';
 import { addHighlight, getAnnotations } from '@/lib/annotations';
 import { THEMES } from '@/lib/settings';
 import type { LookupKind } from '@/reader/LookupCard';
-import { CharProbe } from '@/reader/CharProbe';
-import { charWidth, resetWidths } from '@/reader/charWidths';
 import { LookupSheet } from '@/reader/LookupSheet';
 import { SelectionMenu } from '@/reader/SelectionMenu';
 import { selectionText } from '@/reader/selection';
@@ -251,23 +249,4 @@ it('a touch between two words selects the closer one', async () => {
   const { get, run } = await selecting('s8');
   await run((s) => s.selectAt({ b: 0, o: TEXT.indexOf(' fox') }));
   expect(selectionText(get().sel!, textOf)).toBe('brown');
-});
-
-it('the phone measures the letters asked for, and they are used from then on', async () => {
-  resetWidths();
-  const face = { fontFamily: 'Georgia' };
-  const onMeasured = jest.fn();
-  await render(<CharProbe onMeasured={onMeasured} />);
-  await act(async () => {
-    charWidth(face, 'a', 16); // not known yet: asked for
-    await new Promise((r) => setTimeout(r, 10));
-  });
-  const probe = screen.container.queryAll((n) => typeof n.props.onTextLayout === 'function')[0];
-  expect(probe.props.children).toBe('||\n|aaaa|');
-  // Measured at the size it's drawn at.
-  expect([probe.props.style].flat(3).find((st: { fontSize?: number } | undefined) => st?.fontSize)?.fontSize).toBe(16);
-  await fireEvent(probe, 'textLayout', { nativeEvent: { lines: [{ width: 8 }, { width: 8 + 4 * 7.5 }] } });
-  await act(() => new Promise((r) => setTimeout(r, 10)));
-  expect(charWidth(face, 'a', 16)).toBe(7.5);
-  expect(onMeasured).toHaveBeenCalled();
 });

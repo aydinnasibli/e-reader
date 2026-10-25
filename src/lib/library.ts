@@ -19,6 +19,7 @@ import {
 } from '@/engine/ingest';
 import type { BookFormat, Manifest, Position } from '@/engine/types';
 import { forgetAnnotations } from './annotations';
+import { recordCrash } from './crashLog';
 import { fingerprintOf } from './fingerprint';
 import { claimPending } from './restore';
 import {
@@ -346,8 +347,10 @@ function addFile(file: File, name: string, size: number): AddOutcome {
     }
     books.unshift(book);
     return { added: book };
-  } catch {
-    // Usually storage full. Don't leave a half-copied book behind.
+  } catch (e) {
+    // Usually storage full; kept in the crash log in case it's something else.
+    recordCrash('error', e);
+    // Don't leave a half-copied book behind.
     try {
       if (dir.exists) dir.delete();
     } catch {

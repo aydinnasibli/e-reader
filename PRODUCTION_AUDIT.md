@@ -14,7 +14,7 @@ anything not proven on a device is marked **NOT VERIFIED**).
 | Versions | Expo SDK **58** (`expo ~58.0.17`), React Native **0.88.0**, React 19.3, TypeScript 6.0 | `package.json` |
 | New Architecture | Always on (RN ≥ 0.82 has no legacy architecture to opt back into) | `node_modules/react-native/package.json` 0.88.0 |
 | JS engine | **Hermes** (the only engine RN 0.88 ships; no `jsEngine` override) | `app.json` |
-| Reader engine | **Custom, no WebView.** EPUB/FB2/MOBI/AZW3/TXT are converted once, streaming, into JSON "blocks" in ~30k-char chunks; pages are cut with the platform text engine (`onTextLayout`) and drawn as native `<Text>`. **PDF is not supported** (refused by `sniffFormat`, `src/engine/ingest.ts:105`). | `src/engine/*`, `src/reader/Measurer.tsx`, `src/reader/paginate.ts`, README "How big books stay fast" |
+| Reader engine | **Custom, no WebView** *(superseded 2026-10-25: pages are now drawn in a WebView, see §7)*. EPUB/FB2/MOBI/AZW3/TXT are converted once, streaming, into JSON "blocks" in ~30k-char chunks; pages are cut with the platform text engine (`onTextLayout`) and drawn as native `<Text>`. **PDF is not supported** (refused by `sniffFormat`, `src/engine/ingest.ts:105`). | `src/engine/*`, `src/reader/Measurer.tsx`, `src/reader/paginate.ts`, README "How big books stay fast" |
 | ZIP | Own random-access reader over `fflate`; entries are never extracted to paths named by the archive | `src/engine/zip.ts`, `src/reader/book.ts:212-243` |
 | Storage | Plain JSON files in the app's documents dir via `expo-file-system` (`library.json`, `settings.json`, `shelves.json`, `stats.json`, `books/<id>/{source.*,manifest.json,c/<n>.json,img/,annotations.json}`), atomic tmp+bak writes | `src/lib/storage.ts:1-8, 97-134` |
 | Navigation | Expo Router (`src/app/`), stack with library, reader, book details, notes; `+native-intent` handles Android "Open with" | `src/app/_layout.tsx`, `src/app/+native-intent.tsx` |
@@ -77,7 +77,7 @@ anything not proven on a device is marked **NOT VERIFIED**).
 ### Checked and found sound (no action)
 
 - **Zip-slip**: no archive name ever becomes a file path. Cover is `cover.<ext>`, other images are `z_/p_/b_` + `[A-Za-z0-9._-]` (`src/reader/book.ts:215`, `src/engine/fb2.ts:296`); shared files are copied under a generated id (`src/lib/library.ts:540-541`). Now covered by a test.
-- **Book HTML/JS sandboxing**: there is no WebView; `<script>`, `<style>`, `<template>` etc. are dropped by the converter (`src/engine/html.ts:13`). Book code can never run.
+- **Book HTML/JS sandboxing**: there is no WebView; `<script>`, `<style>`, `<template>` etc. are dropped by the converter (`src/engine/html.ts:13`). Book code can never run. *(Since 2026-10-25 there is a WebView; see §7, Security.)*
 - **Secrets / tokens**: no API keys or tokens in the bundle; nothing needs secure storage (no accounts).
 - **Corrupt files**: 450 randomised corruptions (bit flips, truncation, 0xFF runs) of EPUB/FB2/MOBI all end in a book or an error within the time budget (`test/corrupt.test.ts`). DRM is detected and explained (`src/engine/epub.ts:191-203`).
 - **Large books**: streaming conversion, chunked layout, LRU chunk cache of 12 (`src/reader/book.ts:11`); benchmarks in `bench/`.
@@ -217,3 +217,61 @@ On `main`, left uncommitted for the owner. The app is for the owner's own use (a
 | — | **Dropped** | `noUncheckedIndexedAccess`: 265 errors app-wide (~120 in `src/engine`), nearly all bounds-checked typed-array reads in hot loops; the randomised-corruption suite already covers malformed input. | `tsc` with the flag on |
 
 Checks: `tsc --noEmit` ✅ · `expo lint` ✅ · vitest 186/186 ✅ · jest 134/134 ✅ · `expo export` android + ios ✅ · `expo-doctor` 20/20 ✅.
+
+## 7. Third pass: the reader moved to a WebView (2026-10-25)
+
+On `main`, left uncommitted for the owner. Owner decisions: draw the pages in a WebView with the app's own small renderer (not Readium or foliate-js), replace the native reader directly, and keep every feature in the first version.
+
+Why: the app drew its own selection handles over native text and had to guess where the phone draws each letter. On iPhone (TextKit justification) the guess was off by up to 180 pt. In a WebView the browser draws the text and its own selection handles, on both phones.
+
+### What changed
+
+- `src/reader/web/`: blocks as HTML (`html.ts`), the look as CSS (`css.ts`, same values as before), where the text goes (`frame.ts`), bundled fonts copied where the WebView can read them (`webFonts.ts`), the messages (`protocol.ts`), `WebReader.tsx`.
+- The page inside the WebView is `src/reader/web/page/`. Page mode lays each chunk out in CSS columns one page wide; scroll mode stacks chunks. It handles touches, the browser's own selection, and marks (CSS Custom Highlight API, with a fallback). It is built into `page.generated.ts` with `npm run build:page`, and a test fails if that file is stale.
+- **Removed:** `PageReader`, `ScrollReader`, `Measurer`, `paginate`, `CharProbe`, `charWidths`, `hitTest`, `metrics`, `drawnLayout`, `SelectionHandles`, `geometry`, the `modules/text-layout` native module (Android and iOS), and `bench/textkit`. The §6 row "iPhone selection handles" no longer applies.
+- **Unchanged:** conversion, the block/chunk format, positions (block + character), highlights and notes, page numbers (estimated per chunk).
+
+### Security
+
+- Book text reaches the page only as HTML the app builds, with every text escaped (`escapeHtml`), and the converter still drops scripts and styles.
+- The WebView may only load `file:` and `about:` URLs (`onShouldStartLoadWithRequest`). It opens no new windows and shows no link previews.
+- On iPhone it may read files only inside the app's documents folder (`allowingReadAccessToURL`). On Android, file access is on, so the page can load the book's pictures and fonts. Any file the app can read is then open to the page's script, which is safe only because no book code runs there.
+
+### Found on the emulator and fixed
+
+| Problem | Fix | Proof |
+|---|---|---|
+| Android crashed when opening a book: `dataDetectorTypes="none"` is not a valid value there. | Set on iOS only. | Emulator |
+| After the app starts, the first book opened could land a page early (page 9 → 8), and that earlier place was then saved. The pages were measured in the fallback font: `document.fonts.ready` doesn't wait for a font face that hasn't started loading. | Every face the CSS names is loaded before pages are measured (`page/main.ts`). | `bench/webpage`, "web font not loaded yet": the place was off screen before the fix (Chromium). Emulator: two cold starts, page 9 both times. |
+| A picture whose real shape differs from the size given (a photo turned by its EXIF data) moved the place when it loaded: the page re-read the place from the screen after the text had moved. | It keeps the place arrived at (`page/paged.ts`), like the screen does. | `bench/webpage` picture test (fails with the old rule) |
+| Opening the menu in landscape laid the book out again (page 23 of 5698 → 24 of 6837). The status bar changes the top inset and, on Android in landscape, the window height. The old reader's code did the same. | `useReadingArea`: a width change is taken at once; any other change only after it has held 300 ms with the status bar hidden. | Emulator, both orientations |
+| Under the Display panel the status bar covered the page header (landscape). | The status bar shows only with the menu. | Emulator |
+| The menu said "Page 19" where the footer said 23: the front matter holds less text per page. | The slider shows the page you're on at your place, and interpolates to the ends (`pageAtFraction`). | `test/pageNumbers.test.ts`, emulator |
+
+### Verified
+
+- **Android 16 emulator, in Expo Go:**
+  - Opening a book, the cover, justified and hyphenated text, page numbers.
+  - Swipe and tap turns, two-page spreads in landscape, rotation keeping the place.
+  - Long-press selection with the browser's handles, dragging a handle, and the app's menu (copy, look up, translate, share).
+  - Footnote links and "Back to page", the highlighter (tap and drag).
+  - Web fonts, a text size change keeping the place, the Display panel's live preview.
+  - Scroll mode with its % badge, auto-scroll (start, stop), the back button, reopening at the same place.
+- **Browser engines** (`npm run test:page`), in Chromium (the engine of Android's WebView) and WebKit:
+  - Every page of a three-chunk book, phone and spread: no gaps, the first character of each page on screen.
+  - Reopening at every page start, jumps, text size changes.
+  - Selection, marks, touches, the highlighter, scroll mode, a late web font, a picture changing shape.
+
+### Not verified
+
+- **The iPhone.** WebKit is tested in Playwright's WebKit on macOS, not in the iPhone's WebView.
+- **The installed APK.** Everything above ran in Expo Go.
+- **Real-phone performance:** smoothness of page turns, and memory with three chunks in the WebView.
+
+### Known limits
+
+- Expo Go on Android can't read a file picked with Add ("Missing 'READ' permission"). This is Expo Go only. The import code is unchanged in this pass, except that the error now goes to the crash log. For the emulator test, the book was copied straight into the app's folder.
+- Go to page N can land a page or so away from N near the front matter. Page numbers are estimated from characters, and the box turns N into a fraction of the book.
+- Turning past the last converted page while a book is still converting just springs back. The footer shows "preparing n%".
+
+Checks: `tsc --noEmit` ✅ · `expo lint` ✅ · vitest 163/163 ✅ · jest 137/137 ✅ · `npm run test:page` Chromium + WebKit ✅ · `expo export` android + ios ✅ · `expo-doctor` 20/20 ✅.

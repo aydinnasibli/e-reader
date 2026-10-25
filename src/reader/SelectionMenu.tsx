@@ -5,7 +5,7 @@
 import { useState } from 'react';
 import { Pressable, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import type { Caret } from './hitTest';
+import type { PageCaret as Caret } from './web/protocol';
 
 const HEIGHT = 38;
 /** The arrow is a square turned 45°, centred on the bar's edge; its tip sticks out this far. */

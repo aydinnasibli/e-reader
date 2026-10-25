@@ -55,7 +55,6 @@ function app() {
 
 const flushMicrotasks = () => new Promise((r) => setTimeout(r, 0));
 
-type El = { props: Record<string, any>; parent: El | null }; // eslint-disable-line @typescript-eslint/no-explicit-any
 
 it('import → read → highlight → app killed → reopened on the same page with the highlight', async () => {
   const memfs = require('./memfs') as typeof import('./memfs');
@@ -77,31 +76,23 @@ it('import → read → highlight → app killed → reopened on the same page w
   expect(a.library.getBook(id)?.title).toBe('The Sea');
 
   let view = await a.render(<a.Reader />);
-  // Paragraph boxes on the pages (the current one and its neighbours). A tap on
-  // any of them reaches the reader's page, like a finger on the text.
-  const items = () => view.container.queryAll((n: El) => typeof n.props.onLayout === 'function' && n.props.children?.props?.block) as El[];
+  // The page in the WebView (test/ui/fakePage.ts) shows the first page.
+  const page = () => (globalThis as { __page?: import('./fakePage').FakePage }).__page!;
   await a.waitFor(() => expect(view.getByText(/^1 of \d+ · /)).toBeTruthy(), { timeout: 9000 });
-  // Tap the right edge to turn the page, twice.
+  // Turn the page twice, as a tap on the right edge does on the page.
   for (const n of [2, 3]) {
-    await a.fireEvent.press(items()[0] as never, { nativeEvent: { pageX: a.W - 5, pageY: 300 } });
+    await a.act(() => page().turn(1));
     await a.waitFor(() => expect(view.getByText(new RegExp(`^${n} of \\d+ · `))).toBeTruthy(), { timeout: 8000 });
   }
   const footer = view.getByText(/^3 of \d+ · /).props.children as string;
   const pageNo = footer.split(' · ')[0];
 
   // Highlight tool: pick a colour, tap a word on this page: it's highlighted.
-  await a.fireEvent.press(items()[0] as never, { nativeEvent: { pageX: a.W / 2, pageY: 300 } });
+  await a.act(() => page().emit({ t: 'tap' }));
   await a.fireEvent.press(view.getByLabelText('Highlight'));
-  // The test renderer has no layout: give the items of each page boxes 60 points high.
-  const byPage = new Map<El | null, El[]>();
-  for (const v of items()) byPage.set(v.parent, [...(byPage.get(v.parent) ?? []), v]);
-  for (const list of byPage.values())
-    for (const [i, v] of list.entries()) await a.fireEvent(v as never, 'layout', { nativeEvent: { layout: { x: 0, y: i * 60, width: a.W, height: 60 } } });
-  const layer = view.getByTestId('select-layer');
-  const ev = { nativeEvent: { pageX: a.W * 0.5, pageY: 10 } };
   await a.fireEvent.press(view.getByLabelText('Highlight colour green'));
-  await a.fireEvent(layer, 'responderGrant', ev);
-  await a.fireEvent(layer, 'responderRelease', ev);
+  const on = page().shown().first;
+  await a.act(() => page().emit({ t: 'markTap', at: { b: on.b, i: on.i + 3 } }));
   const made = a.annotations.getAnnotations(id).highlights;
   expect(made).toHaveLength(1);
   const word = made[0].text;
@@ -126,10 +117,7 @@ it('import → read → highlight → app killed → reopened on the same page w
   a.settings.setSettings({ seenTapZones: true });
   view = await a.render(<a.Reader />);
   await a.waitFor(() => expect(view.getByText(new RegExp(`^${pageNo} · `))).toBeTruthy(), { timeout: 9000 });
-  // The highlighted word is drawn with a background on the page.
-  const drawn = view.container.queryAll(
-    (n: El) => n.props.children === word && [n.props.style].flat().some((st: { backgroundColor?: string } | null) => st?.backgroundColor),
-  );
-  expect(drawn.length).toBeGreaterThan(0);
+  // The highlight is drawn on the page.
+  await a.waitFor(() => expect(page().marks.some((m) => m.b === made[0].b)).toBe(true));
   await view.unmount();
 }, 90000);

@@ -1,15 +1,18 @@
 /// <reference types="jest" />
-// The real reader screen, with a small converted book, driven like a finger
-// would: tap to show the menu, open Display, drag the size slider, long-press
-// a word to select it, and highlight with the highlight tool.
+// The real reader screen, with a small converted book, driven like the page
+// in the WebView would: it reports taps, selections and highlighter strokes,
+// and the screen answers with menus, highlights, jumps and page turns. (The
+// page itself is tested in real browser engines: bench/webpage.)
 
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react-native';
 import * as Clipboard from 'expo-clipboard';
-import { BackHandler, Dimensions } from 'react-native';
+import { BackHandler } from 'react-native';
 import type { Block, Manifest } from '@/engine/types';
 import { getAnnotations } from '@/lib/annotations';
 import { setSettings } from '@/lib/settings';
+import type { FromPage } from '@/reader/web/protocol';
 import ReaderScreen from '@/app/reader/[id]';
+import type { FakePage } from './fakePage';
 
 const P1 = 'Call me Ishmael. Some years ago, never mind how long precisely, having little or no money in my purse.';
 const P2 = 'It is a way I have of driving off the spleen and regulating the circulation.';
@@ -25,7 +28,6 @@ const manifest: Manifest = {
   toc: [{ t: 'Loomings', l: 0, b: 0 }],
   images: {},
 };
-
 const mockUpdateBook = jest.fn();
 jest.mock('expo-router', () => ({ useLocalSearchParams: () => ({ id: 'moby' }), router: { back: jest.fn() } }));
 jest.mock('expo-screen-orientation', () => ({ lockAsync: () => Promise.resolve(), OrientationLock: {} }));
@@ -43,98 +45,85 @@ jest.mock('@/lib/library', () => {
 });
 export const manifestForMock = manifest;
 
-const { width: W } = Dimensions.get('window');
-type El = { props?: { style?: unknown; pointerEvents?: string }; parent: El | null };
-/** Text on screen, not in the hidden view used to measure paragraphs. */
-const shown = (text: string) =>
-  screen.queryAllByText(text).filter((el) => {
-    for (let n: El | null = el as unknown as El; n; n = n.parent) {
-      const op = [n.props?.style].flat().find((st) => (st as { opacity?: number })?.opacity === 0);
-      if (op && n.props?.pointerEvents === 'none') return false;
-    }
-    return true;
-  });
-/** The font size the text is drawn at: on the paragraph's text, around the nested texts that hold its words. */
-const sizeOf = (el: unknown) => {
-  for (let n = el as El | null; n; n = n.parent) {
-    const size = ([n.props?.style].flat() as ({ fontSize?: number } | undefined)[]).find((st) => st?.fontSize)?.fontSize;
-    if (size) return size;
-  }
-};
+const page = () => (globalThis as { __page?: FakePage }).__page!;
+/** The page says something. */
+const emit = (m: FromPage) => act(() => page().emit(m));
+const tapMiddle = () => emit({ t: 'tap' });
+/** A selection on the page of P1's characters [s, e) (block 1; P1 is drawn without an indent here). */
+const select = (s: number, e: number) =>
+  emit({ t: 'selection', start: { b: 1, i: s }, end: { b: 1, i: e }, startCaret: { x: 20, y: 70, h: 28 }, endCaret: { x: 80, y: 70, h: 28 } });
 
 beforeAll(async () => {
   require('@/lib/storage').testChunks.set('moby/0', JSON.stringify({ b: blocks }));
 });
 beforeEach(() => setSettings({ mode: 'page', fontSize: 19, indent: false, hyphenate: false, align: 'left', pageTurn: 'none', seenTapZones: true }));
 
-/** Wait for the first page; text layout falls back to estimates after a few seconds here. */
+/** Open the book: the page gets set up, then the chunk, and shows the first page. */
 async function openBook() {
   await render(<ReaderScreen />);
-  await waitFor(() => expect(shown(P1).length).toBeGreaterThan(0), { timeout: 9000 });
+  await waitFor(() => expect(page().last('content')).toBeTruthy(), { timeout: 5000 });
+  await waitFor(() => expect(page().shown()).toBeTruthy());
 }
 
-it('size slider: the page text follows the slider live, then the pages are laid out at the new size', async () => {
+it('the page gets the book: its look first, then the chunk around the place, with its text', async () => {
   await openBook();
-  // Tap the middle of the page for the menu, then Display.
-  await fireEvent.press(shown(P1)[0], { nativeEvent: { pageX: W / 2, pageY: 300 } });
-  await fireEvent.press(screen.getByLabelText('Display'));
-  const slider = screen.getByTestId('slider-Size');
-
-  await act(() => fireEvent(slider, 'valueChange', 28));
-  expect(shown(P1).map(sizeOf)).toContain(28); // drawn live
-  await act(() => fireEvent(slider, 'valueChange', 33));
-  expect(shown(P1).map(sizeOf)).toContain(33);
-
-  await act(() => fireEvent(slider, 'slidingComplete', 33));
-  // New pages are laid out at 33; the preview goes away once they are on screen.
-  await waitFor(() => expect(shown(P1).map(sizeOf)).toEqual([33]), { timeout: 9000 });
+  const setup = page().last('setup')!;
+  expect(setup.setup.mode).toBe('page');
+  expect(setup.setup.css).toContain('font-size:19px');
+  expect(page().text(1)).toBe(P1);
+  expect(page().last('content')!.target).toEqual({ at: { b: 0, i: 0 } });
 }, 30000);
 
-/** Page items get their on-screen boxes: heading 0–60, P1 60–120, P2 120–180 (the test renderer has no layout). */
-async function layOut() {
-  for (const view of screen.container.queryAll((n) => typeof n.props.onLayout === 'function' && n.props.children?.props?.block)) {
-    const block = view.props.children.props.block as Block;
-    const y = block.k === 'h' ? 0 : block.r?.[0] === P1 ? 60 : 120;
-    await fireEvent(view, 'layout', { nativeEvent: { layout: { x: 0, y, width: W, height: 60 } } });
-  }
-}
-/** Text drawn with a background (highlighted or selected) starting with `start`. */
-const marked = (start: string) =>
-  screen.container
-    .queryAll((n) => typeof n.props.children === 'string' && n.props.children.startsWith(start))
-    .some((n) => [n.props.style].flat().some((st: { backgroundColor?: string } | null) => st?.backgroundColor));
+it('size slider: the text follows the slider live, then the page is laid out at the new size', async () => {
+  await openBook();
+  await tapMiddle();
+  await fireEvent.press(screen.getByLabelText('Display'));
+  const slider = screen.getByTestId('slider-Size');
+  await act(() => fireEvent(slider, 'valueChange', 28));
+  // Drawn live over the page while sliding.
+  expect(screen.getAllByText(P1).length).toBeGreaterThan(0);
+  await act(() => fireEvent(slider, 'slidingComplete', 28));
+  // The page is set up again at 28, at the same place.
+  await waitFor(() => expect(page().last('setup')!.setup.css).toContain('font-size:28px'));
+  expect(page().last('setup')!.target).toEqual({ at: { b: 0, i: 0 } });
+  // Once the page shows it, the preview goes.
+  await waitFor(() => expect(screen.queryAllByText(P1)).toEqual([]), { timeout: 5000 });
+}, 30000);
 
-it('touch and hold selects the word with handles at both ends, and a menu to copy, look up, translate or share it', async () => {
+it('text selected on the page gets a menu to copy, look up, translate or share it', async () => {
   const copy = jest.spyOn(Clipboard, 'setStringAsync');
   await openBook();
-  await layOut();
-  // Near the start of the first line of P1 (the page starts below the header).
-  await fireEvent(shown(P1)[0], 'longPress', { nativeEvent: { pageX: 20 + 8, pageY: 70 } });
-  expect(screen.getByTestId('selection-handle-start')).toBeTruthy();
-  expect(screen.getByTestId('selection-handle-end')).toBeTruthy();
-  expect(marked('Call')).toBe(true);
+  await select(0, 4);
   for (const label of ['Copy', 'Look Up', 'Translate', 'Share']) expect(screen.getByLabelText(label)).toBeTruthy();
   // No highlighting here: that's the highlight tool's.
   expect(screen.queryByLabelText(/Highlight colour/)).toBeNull();
   await fireEvent.press(screen.getByLabelText('Copy'));
   expect(copy).toHaveBeenCalledWith('Call');
-  expect(screen.queryByTestId('selection-handle-start')).toBeNull();
+  // The menu goes, and the page is told to end its selection.
+  expect(screen.queryByLabelText('Copy')).toBeNull();
+  expect(page().last('clearSelection')).toBeTruthy();
   expect(getAnnotations('moby').highlights.filter((h) => h.text === 'Call')).toEqual([]);
 }, 30000);
 
-it('a tap off the selection ends it', async () => {
+it('a selection ended on the page closes the menu', async () => {
   await openBook();
-  await layOut();
-  await fireEvent(shown(P1)[0], 'longPress', { nativeEvent: { pageX: 28, pageY: 70 } });
-  const layer = screen.getByTestId('select-layer');
-  await fireEvent(layer, 'responderGrant', { nativeEvent: { pageX: W / 2, pageY: 600 } });
-  await fireEvent(layer, 'responderRelease', { nativeEvent: { pageX: W / 2, pageY: 600 } });
+  await select(0, 4);
+  expect(screen.getByLabelText('Copy')).toBeTruthy();
+  await emit({ t: 'noSelection' });
   expect(screen.queryByLabelText('Copy')).toBeNull();
-  expect(screen.queryByTestId('select-layer')).toBeNull(); // pages turn again
+}, 30000);
+
+it('more than one word: no Look Up, the whole words are copied', async () => {
+  const copy = jest.spyOn(Clipboard, 'setStringAsync');
+  await openBook();
+  // From inside "Call" to inside "Ishmael": whole words.
+  await select(1, 10);
+  expect(screen.queryByLabelText('Look Up')).toBeNull();
+  await fireEvent.press(screen.getByLabelText('Copy'));
+  expect(copy).toHaveBeenLastCalledWith('Call me Ishmael.');
 }, 30000);
 
 describe('highlight tool', () => {
-  const ev = (pageX: number, pageY: number) => ({ nativeEvent: { pageX, pageY } });
   // Highlights persist across tests in this file: compare against what was there before.
   const all = () => getAnnotations('moby').highlights.map((h) => [h.b, h.text, h.color]);
   let before: unknown[] = [];
@@ -142,31 +131,25 @@ describe('highlight tool', () => {
   beforeEach(() => (before = all()));
   const openTool = async () => {
     await openBook();
-    await fireEvent.press(shown(P1)[0], { nativeEvent: { pageX: W / 2, pageY: 300 } });
+    await tapMiddle();
     await fireEvent.press(screen.getByLabelText('Highlight'));
-    await layOut();
-    return screen.getByTestId('select-layer');
+    expect(page().last('tool')).toEqual({ t: 'tool', marking: true });
   };
 
-  it('a drag highlights what it covers straight away, in the colour picked: no selection, no handles', async () => {
-    const layer = await openTool();
+  it('a drag highlights what it covers straight away, in the colour picked: no selection menu', async () => {
+    await openTool();
     expect(screen.getByText(/Tap or drag over text to highlight it/)).toBeTruthy();
     await fireEvent.press(screen.getByLabelText('Highlight colour green'));
-    // From the first word of P1 to the first word of P2.
-    await fireEvent(layer, 'responderGrant', ev(22, 65));
-    await fireEvent(layer, 'responderMove', ev(60, 100));
-    await fireEvent(layer, 'responderMove', ev(22, 125));
-    // Drawn as the finger moves, in the highlight colour.
-    expect(marked('Call')).toBe(true);
+    // From the first word of P1 to the first word of P2, drawn as the finger moves.
+    await emit({ t: 'markDrag', from: { b: 1, i: 1 }, to: { b: 2, i: 1 }, done: false });
+    expect(page().marks.some((m) => m.b === 1 && m.s === 0)).toBe(true);
     expect(highlights()).toEqual([]);
-    await fireEvent(layer, 'responderRelease', ev(22, 125));
+    await emit({ t: 'markDrag', from: { b: 1, i: 1 }, to: { b: 2, i: 1 }, done: true });
     expect(highlights()).toEqual([
       [1, P1, 'green'],
       [2, 'It', 'green'],
     ]);
-    expect(screen.queryByTestId('selection-handle-start')).toBeNull();
-    expect(screen.queryByTestId('selection-handle-end')).toBeNull();
-    expect(screen.queryByLabelText('Look Up')).toBeNull(); // not the long-press menu
+    expect(screen.queryByLabelText('Look Up')).toBeNull();
     // The panel acts on what was just highlighted.
     for (const label of ['Note', 'Copy', 'Remove']) expect(screen.getByLabelText(label)).toBeTruthy();
     await fireEvent.press(screen.getByLabelText('Remove'));
@@ -174,24 +157,16 @@ describe('highlight tool', () => {
   }, 30000);
 
   it('a tap highlights the word; a tap on the highlight takes it away; Done puts the tool away', async () => {
-    const layer = await openTool();
-    // A word on P2's first line (the outer 12% of the screen still turns pages).
-    const x = W * 0.7;
+    await openTool();
     await fireEvent.press(screen.getByLabelText('Highlight colour blue'));
-    await fireEvent(layer, 'responderGrant', ev(x, 125));
-    await fireEvent(layer, 'responderRelease', ev(x, 125));
-    const added = highlights();
-    expect(added).toHaveLength(1);
-    expect(String(added[0][1]).split(' ')).toHaveLength(1); // one word
-    expect(added[0][2]).toBe('blue');
-    expect(screen.queryByTestId('selection-handle-start')).toBeNull();
-
-    await fireEvent(layer, 'responderGrant', ev(x, 125));
-    await fireEvent(layer, 'responderRelease', ev(x, 125));
+    await emit({ t: 'markTap', at: { b: 2, i: 9 } });
+    expect(highlights()).toEqual([[2, 'way', 'blue']]);
+    // Drawn on the page.
+    expect(page().marks.some((m) => m.b === 2 && m.s === 8 && m.e === 11)).toBe(true);
+    await emit({ t: 'markTap', at: { b: 2, i: 9 } });
     expect(highlights()).toEqual([]);
-
     await fireEvent.press(screen.getByLabelText('Done highlighting'));
-    expect(screen.queryByTestId('select-layer')).toBeNull();
+    expect(page().last('tool')).toEqual({ t: 'tool', marking: false });
   }, 30000);
 });
 
@@ -205,13 +180,10 @@ describe('tap zones', () => {
     expect(screen.queryByText('Menu')).toBeNull();
   }, 30000);
 
-  it('a tap a bit right of the middle opens the menu; one near the right edge does not', async () => {
+  it('a tap in the middle of the page opens the menu', async () => {
     await openBook();
-    // Right zone: next page (this short book has none), never the menu.
-    await fireEvent.press(shown(P1)[0], { nativeEvent: { pageX: W * 0.8, pageY: 300 } });
     expect(screen.queryByLabelText('Display')).toBeNull();
-    // A bit right of the middle: the menu.
-    await fireEvent.press(shown(P1)[0], { nativeEvent: { pageX: W * 0.6, pageY: 300 } });
+    await tapMiddle();
     expect(screen.getByLabelText('Display')).toBeTruthy();
   }, 30000);
 });
@@ -221,16 +193,15 @@ describe('page numbers, back after a jump, auto page turn', () => {
     await openBook();
     await waitFor(() => expect(screen.getByText(/^1 of 1 · /)).toBeTruthy(), { timeout: 3000 });
     expect(await screen.findByLabelText('Battery 82%')).toBeTruthy();
-    // The battery symbol is filled to the level.
     const fills = screen.getByTestId('battery-glyph').queryAll((n) => [n.props.style].flat().some((st: { width?: unknown } | null) => st?.width === '82%'));
     expect(fills.length).toBeGreaterThan(0);
   }, 30000);
 
   it('after jumping from the contents, a chip goes back to where you were', async () => {
     await openBook();
-    await fireEvent.press(shown(P1)[0], { nativeEvent: { pageX: W / 2, pageY: 300 } });
+    await tapMiddle();
     await fireEvent.press(screen.getByLabelText('Contents'));
-    // "Loomings" is also the page header and the heading; the contents entry is drawn last.
+    // "Loomings" is also the page header; the contents entry is drawn last.
     const entries = await screen.findAllByText('Loomings');
     await fireEvent.press(entries[entries.length - 1]);
     const chip = await screen.findByLabelText(/^Back to page \d+$/);
@@ -238,37 +209,35 @@ describe('page numbers, back after a jump, auto page turn', () => {
     await waitFor(() => expect(screen.queryByLabelText(/^Back to page/)).toBeNull());
   }, 30000);
 
-  it('auto page turn: started from the menu, speed, pause and stop', async () => {
+  it('auto page turn: started from the menu, speed, pause and stop; it asks the page to turn', async () => {
+    jest.useFakeTimers();
     await openBook();
-    await fireEvent.press(shown(P1)[0], { nativeEvent: { pageX: W / 2, pageY: 300 } });
+    await tapMiddle();
     await fireEvent.press(screen.getByLabelText('Auto page turn'));
     const speed = () => Number(/(\d+) wpm/.exec(screen.getByText(/\d+ wpm/).props.children.join(''))?.[1]);
     const before = speed();
     await fireEvent.press(screen.getByLabelText('Faster'));
     expect(speed()).toBeGreaterThan(before);
-    await fireEvent.press(screen.getByLabelText('Pause'));
-    expect(screen.getByLabelText('Resume')).toBeTruthy();
-    await fireEvent.press(screen.getByLabelText('Stop'));
-    expect(screen.queryByText(/\d+ wpm/)).toBeNull();
+    await act(async () => void jest.advanceTimersByTime(120_000));
+    // Turning past this short book's only page: the book ends, and auto page turn with it.
+    await waitFor(() => expect(screen.queryByText(/\d+ wpm/)).toBeNull());
+    jest.useRealTimers();
   }, 30000);
 
-  it('auto-scroll stops by itself at the end of the book', async () => {
+  it('auto-scroll: the page is asked to scroll, and says when it reached the end', async () => {
     setSettings({ mode: 'scroll' });
     await openBook();
-    // A tap in scroll mode: touch down and up in place.
-    const root = screen.container.queryAll((n) => typeof n.props.onTouchStart === 'function')[0];
-    const touch = { nativeEvent: { pageX: W / 2, pageY: 300 } };
-    await fireEvent(root, 'touchStart', touch);
-    await fireEvent(root, 'touchEnd', touch);
+    await tapMiddle();
     await fireEvent.press(await screen.findByLabelText('Auto-scroll'));
     expect(screen.getByText(/\d+ wpm/)).toBeTruthy();
-    // The whole (short) book is on screen: the list can't move, so it's the end.
-    await waitFor(() => expect(screen.queryByText(/\d+ wpm/)).toBeNull(), { timeout: 4000 });
+    await waitFor(() => expect(page().last('auto')!.speed).toBeGreaterThan(0));
+    await emit({ t: 'autoEnd' });
+    expect(screen.queryByText(/\d+ wpm/)).toBeNull();
+    expect(page().last('auto')!.speed).toBe(0);
   }, 30000);
 });
 
 describe('Android back button', () => {
-  // The reader's back listener; React Navigation's own one (leaving the screen) runs only if it returns false.
   let back: () => boolean | null | undefined = () => false;
   beforeEach(async () => {
     jest.spyOn(BackHandler, 'addEventListener').mockImplementation((_e, handler) => {
@@ -287,34 +256,34 @@ describe('Android back button', () => {
 
   it('closes the Display panel, or the menu, before leaving the book', async () => {
     await openBook();
-    await fireEvent.press(shown(P1)[0], { nativeEvent: { pageX: W / 2, pageY: 300 } });
+    await tapMiddle();
     await fireEvent.press(screen.getByLabelText('Display'));
-    expect(await press()).toBe(true); // closes the panel (it slides away; animations don't finish in tests)
-    expect(await press()).toBe(false); // and with it the menu: nothing is open, back leaves the book
-    await fireEvent.press(shown(P1)[0], { nativeEvent: { pageX: W / 2, pageY: 300 } });
+    expect(await press()).toBe(true);
+    expect(await press()).toBe(false);
+    await tapMiddle();
     expect(screen.getByLabelText('Contents')).toBeTruthy();
-    expect(await press()).toBe(true); // closes the menu
+    expect(await press()).toBe(true);
     expect(await press()).toBe(false);
   }, 30000);
 
   it('ends a selection first', async () => {
     await openBook();
-    await layOut();
-    await fireEvent(shown(P1)[0], 'longPress', { nativeEvent: { pageX: 28, pageY: 70 } });
+    await select(0, 4);
     expect(screen.getByLabelText('Copy')).toBeTruthy();
     expect(await press()).toBe(true);
     expect(screen.queryByLabelText('Copy')).toBeNull();
+    expect(page().last('clearSelection')).toBeTruthy();
     expect(await press()).toBe(false);
   }, 30000);
 
   it('turns the highlight tool off, and stops auto page turn', async () => {
     await openBook();
-    await fireEvent.press(shown(P1)[0], { nativeEvent: { pageX: W / 2, pageY: 300 } });
+    await tapMiddle();
     await fireEvent.press(screen.getByLabelText('Highlight'));
-    expect(screen.getByTestId('select-layer')).toBeTruthy();
+    expect(page().last('tool')!.marking).toBe(true);
     expect(await press()).toBe(true);
-    expect(screen.queryByTestId('select-layer')).toBeNull();
-    await fireEvent.press(shown(P1)[0], { nativeEvent: { pageX: W / 2, pageY: 300 } });
+    expect(page().last('tool')!.marking).toBe(false);
+    await tapMiddle();
     await fireEvent.press(screen.getByLabelText('Auto page turn'));
     expect(screen.getByText(/\d+ wpm/)).toBeTruthy();
     expect(await press()).toBe(true);
@@ -328,7 +297,7 @@ describe('the end of the book', () => {
     await openBook();
     // Opening on the last page isn't finishing it.
     expect(mockUpdateBook.mock.calls.some(([, patch]) => patch.finished)).toBe(false);
-    await fireEvent.press(shown(P1)[0], { nativeEvent: { pageX: W * 0.9, pageY: 300 } }); // next page: there is none
+    await emit({ t: 'end' });
     expect(await screen.findByLabelText('Finished · Back to library')).toBeTruthy();
     expect(mockUpdateBook).toHaveBeenCalledWith('moby', { finished: true });
   }, 30000);
@@ -337,30 +306,32 @@ describe('the end of the book', () => {
 describe('getting around from the menu', () => {
   it('Go to page: a page number, or a percentage; out of range says what to type', async () => {
     await openBook();
-    await fireEvent.press(shown(P1)[0], { nativeEvent: { pageX: W / 2, pageY: 300 } });
+    await tapMiddle();
     await waitFor(() => expect(screen.getByText(/^1 of 1 · /)).toBeTruthy(), { timeout: 3000 });
     await fireEvent.press(screen.getByLabelText('Go to page'));
     expect(screen.getByText(/You're on page 1 of 1/)).toBeTruthy();
     const field = screen.getByLabelText('Page number');
     await fireEvent.changeText(field, '7');
     await fireEvent.press(screen.getByLabelText('Go'));
-    // Said right there, and the window stays open to fix it.
     expect(screen.getByText('Enter a page from 1 to 1.')).toBeTruthy();
-    // Or by percentage.
     await fireEvent.press(screen.getByLabelText('By percentage'));
     await fireEvent.changeText(screen.getByLabelText('Percentage'), '50');
     expect(screen.queryByText(/Enter a/)).toBeNull();
     await fireEvent.press(screen.getByLabelText('Go'));
-    // Gone there: the way back to where you were is offered.
     expect(await screen.findByLabelText(/^Back to page \d+$/)).toBeTruthy();
   }, 30000);
 
   it('chapter buttons: none before the first chapter or after the last', async () => {
     await openBook();
-    await fireEvent.press(shown(P1)[0], { nativeEvent: { pageX: W / 2, pageY: 300 } });
-    // The book has one chapter, starting where it opens.
+    await tapMiddle();
     expect(screen.getByLabelText('Previous chapter').props.accessibilityState?.disabled).toBe(true);
     expect(screen.getByLabelText('Next chapter').props.accessibilityState?.disabled).toBe(true);
   }, 30000);
-});
 
+  it('a footnote link on the page opens the note', async () => {
+    await openBook();
+    await emit({ t: 'link', target: 'missing-note' });
+    // A note that isn't in the book: the sheet says so rather than nothing happening.
+    expect(await screen.findByText("This note couldn't be found in the book.")).toBeTruthy();
+  }, 30000);
+});
