@@ -10,7 +10,7 @@ import { addHighlight, getAnnotations } from '@/lib/annotations';
 import { THEMES } from '@/lib/settings';
 import type { LookupKind } from '@/reader/LookupCard';
 import { CharProbe } from '@/reader/CharProbe';
-import { PROBE_SIZE, charWidth, resetWidths } from '@/reader/charWidths';
+import { charWidth, resetWidths } from '@/reader/charWidths';
 import { LookupSheet } from '@/reader/LookupSheet';
 import { SelectionMenu } from '@/reader/SelectionMenu';
 import { selectionText } from '@/reader/selection';
@@ -264,8 +264,10 @@ it('the phone measures the letters asked for, and they are used from then on', a
   });
   const probe = screen.container.queryAll((n) => typeof n.props.onTextLayout === 'function')[0];
   expect(probe.props.children).toBe('||\n|aaaa|');
-  await fireEvent(probe, 'textLayout', { nativeEvent: { lines: [{ width: 8 }, { width: 8 + 4 * 30 }] } });
+  // Measured at the size it's drawn at.
+  expect([probe.props.style].flat(3).find((st: { fontSize?: number } | undefined) => st?.fontSize)?.fontSize).toBe(16);
+  await fireEvent(probe, 'textLayout', { nativeEvent: { lines: [{ width: 8 }, { width: 8 + 4 * 7.5 }] } });
   await act(() => new Promise((r) => setTimeout(r, 10)));
-  expect(charWidth(face, 'a', PROBE_SIZE)).toBe(30);
+  expect(charWidth(face, 'a', 16)).toBe(7.5);
   expect(onMeasured).toHaveBeenCalled();
 });

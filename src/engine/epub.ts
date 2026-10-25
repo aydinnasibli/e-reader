@@ -6,7 +6,7 @@ import { createDecoder, detectBom, type StreamDecoder, xmlDeclaredEncoding } fro
 import { HtmlToBlocks } from './html';
 import { BookError, DRM_MESSAGE, type IngestContext } from './io';
 import { type MarkupHandler, MarkupTokenizer } from './markup';
-import type { ImageRef, Manifest, TocEntry } from './types';
+import { ENGINE_VERSION, type ImageRef, type Manifest, type TocEntry } from './types';
 import { BookWriter } from './writer';
 import type { ZipArchive } from './zip';
 
@@ -423,7 +423,7 @@ export async function ingestEpub(ctx: IngestContext, zip: ZipArchive): Promise<M
   if (!toc.length) toc = w.headings;
 
   return {
-    v: 1,
+    v: ENGINE_VERSION,
     format: 'epub',
     title: pkg.title || ctx.fallbackTitle,
     author: pkg.authors.join(', '),

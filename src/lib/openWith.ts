@@ -1,17 +1,18 @@
-// "Open with" on Android: a book file tapped in WhatsApp, Telegram, Files,
-// Gmail... arrives as a content:// (or file://) URL through Expo Router's
-// +native-intent. The app adds the book (or finds it already on the shelf)
-// and opens it in the reader.
+// "Open with" / "Open in": a book file tapped in WhatsApp, Telegram, Files,
+// Gmail, Safari... arrives through Expo Router's +native-intent, as a
+// content:// (or file://) URL on Android and as a file:// URL to a copy in
+// the app's Documents/Inbox on iOS (app.json declares the book file types
+// there). The app adds the book (or finds it already on the shelf) and opens
+// it in the reader.
 //
 // redirectSystemPath sees every such URL once, both the one that started
 // the app and later ones while it runs, so that is the only entry point.
-// iOS doesn't register as a handler for book files, and Expo Go has no
-// intent filters, so nothing arrives there.
+// Expo Go registers for no file types, so nothing arrives there.
 
 import { File, Paths } from 'expo-file-system';
 import { router } from 'expo-router';
 import { useEffect, useSyncExternalStore } from 'react';
-import { Alert } from 'react-native';
+import { Alert, Platform } from 'react-native';
 import { getBook, importSharedFile, loadLibrary } from './library';
 import { readJson, saveJson } from './storage';
 
@@ -44,6 +45,22 @@ function launchedBefore(url: string): string | null {
   loadLibrary(); // this can run before the app has loaded it
   const last = readJson<{ url: string; bookId: string }>(launchFile());
   return last?.url === url && getBook(last.bookId) ? last.bookId : null;
+}
+
+/**
+ * iOS hands over a copy of the file in Documents/Inbox that nothing else
+ * removes (and Documents goes into the phone's backups). The book has its own
+ * copy once added; refused files aren't kept either.
+ */
+function dropInboxCopy(url: string) {
+  if (Platform.OS !== 'ios') return;
+  try {
+    if (!/\/Documents\/Inbox\/[^/]+$/.test(decodeURI(url))) return;
+    const f = new File(url);
+    if (f.exists) f.delete();
+  } catch {
+    // left for iOS to clear with the app's data
+  }
 }
 
 const inFlight = new Set<string>();
@@ -81,6 +98,7 @@ export async function openSharedFile(url: string, initial = false): Promise<void
   setInFlight(url, true);
   try {
     const res = await importSharedFile(url).catch(() => ({ failed: true }) as const);
+    dropInboxCopy(url);
     if (initial && 'book' in res) saveJson(launchFile(), { url, bookId: res.book.id });
     await navigationReady;
     // A book that failed to prepare before opens too: the reader explains and offers to try again.

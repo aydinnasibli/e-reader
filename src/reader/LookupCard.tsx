@@ -117,9 +117,11 @@ export function LookupCard({ kind, text, lang, theme, onBack, onSwitch }: Props)
         {t.partial ? <Text style={[styles.source, muted]}>Only the beginning was translated. Select less text to translate the rest.</Text> : null}
         <View style={styles.row}>
           {languageName(t.from) ? (
-            <Text style={[styles.source, muted]}>From {languageName(t.from)} · Google Translate</Text>
+            <Text style={[styles.source, muted]}>
+              From {languageName(t.from)} · {t.source}
+            </Text>
           ) : (
-            <Text style={[styles.source, muted]}>Google Translate</Text>
+            <Text style={[styles.source, muted]}>{t.source}</Text>
           )}
           <Tap
             onPress={() => {

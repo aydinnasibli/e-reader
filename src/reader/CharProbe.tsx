@@ -1,10 +1,10 @@
 // Measures the characters and words charWidths asks for: an invisible text
-// per font, one character (or word) per line, whose line widths the text
-// engine reports.
+// per font and size, one character (or word) per line, whose line widths the
+// text engine reports.
 
 import { useEffect, useSyncExternalStore } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
-import { PROBE_SIZE, probeText, recordWidths, subscribeWidths, wantedWidths, widthsVersion } from './charWidths';
+import { probeText, recordWidths, subscribeWidths, wantedWidths, widthsVersion } from './charWidths';
 
 /** Give up on a batch the text engine never reports (it stays estimated). */
 const TIMEOUT_MS = 3000;
@@ -26,11 +26,11 @@ export function CharProbe({ onMeasured }: { onMeasured(): void }) {
   if (!batches.length) return null;
   return (
     <View pointerEvents="none" style={styles.hidden}>
-      {batches.map(({ key, face, chars, words }) => (
+      {batches.map(({ key, face, size, chars, words }) => (
         <Text
           key={`${key}|${chars.join('')}|${words.join(' ')}`}
           allowFontScaling={false}
-          style={[face, styles.text]}
+          style={[face, styles.text, { fontSize: size, lineHeight: Math.ceil(size * 1.5) }]}
           onTextLayout={(e) => recordWidths(key, chars, e.nativeEvent.lines.map((l) => l.width), words)}>
           {probeText(chars, words)}
         </Text>
@@ -42,5 +42,5 @@ export function CharProbe({ onMeasured }: { onMeasured(): void }) {
 const styles = StyleSheet.create({
   // Wide enough that no line wraps; out of sight.
   hidden: { position: 'absolute', left: -10000, top: 0, width: 4000, opacity: 0 },
-  text: { fontSize: PROBE_SIZE, lineHeight: PROBE_SIZE * 1.5, letterSpacing: 0 },
+  text: { letterSpacing: 0 },
 });

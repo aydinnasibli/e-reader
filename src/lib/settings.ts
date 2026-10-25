@@ -190,6 +190,10 @@ function current(): ReaderSettings {
   return settings;
 }
 
+export function getSettings(): ReaderSettings {
+  return current();
+}
+
 export function useSettings(): ReaderSettings {
   return useSyncExternalStore(
     (l) => {

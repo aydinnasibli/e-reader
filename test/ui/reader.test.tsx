@@ -54,8 +54,13 @@ const shown = (text: string) =>
     }
     return true;
   });
-const sizeOf = (el: { props: { [k: string]: unknown } }) =>
-  ([el.props.style].flat() as ({ fontSize?: number } | undefined)[]).find((st) => st?.fontSize)?.fontSize;
+/** The font size the text is drawn at: on the paragraph's text, around the nested texts that hold its words. */
+const sizeOf = (el: unknown) => {
+  for (let n = el as El | null; n; n = n.parent) {
+    const size = ([n.props?.style].flat() as ({ fontSize?: number } | undefined)[]).find((st) => st?.fontSize)?.fontSize;
+    if (size) return size;
+  }
+};
 
 beforeAll(async () => {
   require('@/lib/storage').testChunks.set('moby/0', JSON.stringify({ b: blocks }));

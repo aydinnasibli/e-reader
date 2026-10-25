@@ -1,6 +1,7 @@
 // Definitions and translations shown inside the app. No keys: definitions come
 // from Wiktionary (every language, explained in English), with Google's
-// dictionary as a fallback; translations from Google Translate.
+// dictionary as a fallback; translations from Google Translate, with MyMemory
+// as a fallback.
 
 export interface Sense {
   /** Part of speech: "Noun", "Verb", ... */
@@ -22,6 +23,8 @@ export interface Translation {
   from?: string;
   /** Only the beginning of a long selection was translated. */
   partial?: boolean;
+  /** The service that translated it, credited under the translation. */
+  source: 'Google Translate' | 'MyMemory';
 }
 
 /** Languages offered as translation targets. */
@@ -187,7 +190,7 @@ export function parseGoogleDefinitions(word: string, json: unknown): Definition 
 }
 
 /** Read Google Translate's answer: [[[translated, original, ...], ...], null, "from", ...]. */
-export function parseTranslation(json: unknown): Translation | null {
+export function parseTranslation(json: unknown): Omit<Translation, 'source'> | null {
   if (!Array.isArray(json) || !Array.isArray(json[0])) return null;
   const text = (json[0] as unknown[])
     .map((p) => (Array.isArray(p) && typeof p[0] === 'string' ? p[0] : ''))
@@ -259,9 +262,15 @@ export function wellFormed(text: string): string {
   return out;
 }
 
-/** The beginning of `text` that fits in one request, cut at a sentence (or a space) when it doesn't all fit. */
-export function fitForRequest(text: string, max = MAX_ENCODED): string {
-  if (encodeURIComponent(text).length <= max) return text;
+const encodedLength = (s: string) => encodeURIComponent(s).length;
+
+/**
+ * The beginning of `text` that fits in one request, cut at a sentence (or a
+ * space) when it doesn't all fit. `size` measures a piece of text; by default
+ * its length in the address.
+ */
+export function fitForRequest(text: string, max = MAX_ENCODED, size: (s: string) => number = encodedLength): string {
+  if (size(text) <= max) return text;
   // Never end on the first half of a pair: that can't be encoded.
   const end = (n: number) => (n > 0 && /[\uD800-\uDBFF]/.test(text[n - 1]) ? n - 1 : n);
   // Longest prefix that fits, then back to the last sentence end or space in it.
@@ -269,7 +278,7 @@ export function fitForRequest(text: string, max = MAX_ENCODED): string {
   let hi = text.length;
   while (lo < hi) {
     const mid = Math.ceil((lo + hi) / 2);
-    if (encodeURIComponent(text.slice(0, end(mid))).length <= max) lo = mid;
+    if (size(text.slice(0, end(mid))) <= max) lo = mid;
     else hi = mid - 1;
   }
   lo = end(lo);
@@ -280,10 +289,61 @@ export function fitForRequest(text: string, max = MAX_ENCODED): string {
   return space > lo / 2 ? head.slice(0, space) : head;
 }
 
-export async function translateText(text: string, to: string, signal?: AbortSignal): Promise<Translation> {
-  const all = wellFormed(text.replace(/\u00AD/g, '').trim());
+/** MyMemory takes at most 500 characters per request\u2026 */
+export const MYMEMORY_PIECE = 500;
+/** \u2026and 5,000 a day without an account: a long selection sends only its beginning. */
+export const MYMEMORY_TOTAL = 1500;
+
+/**
+ * Read MyMemory's answer. Its errors (text too long, daily limit used up)
+ * come back as a "translation" with another responseStatus: null then.
+ */
+export function parseMyMemory(json: unknown): Omit<Translation, 'source'> | null {
+  if (!json || typeof json !== 'object') return null;
+  const j = json as { responseStatus?: unknown; quotaFinished?: unknown; responseData?: { translatedText?: unknown; detectedLanguage?: unknown } };
+  if (Number(j.responseStatus) !== 200 || j.quotaFinished === true) return null;
+  const text = typeof j.responseData?.translatedText === 'string' ? j.responseData.translatedText.trim() : '';
+  if (!text) return null;
+  const from = j.responseData?.detectedLanguage;
+  return { text, from: typeof from === 'string' ? from : undefined };
+}
+
+async function viaGoogle(all: string, to: string, signal?: AbortSignal): Promise<Translation> {
   const q = fitForRequest(all);
   const t = parseTranslation(await getJson(gtx(q, to, ['t']), undefined, signal));
   if (!t) throw new LookupError('Empty translation');
-  return q.length < all.length ? { ...t, partial: true } : t;
+  return { ...t, source: 'Google Translate', ...(q.length < all.length ? { partial: true } : {}) };
+}
+
+async function viaMyMemory(all: string, to: string, signal?: AbortSignal): Promise<Translation> {
+  const chars = (s: string) => s.length;
+  const q = fitForRequest(all, MYMEMORY_TOTAL, chars);
+  const parts: string[] = [];
+  let from: string | undefined;
+  for (let rest = q; rest; ) {
+    const piece = fitForRequest(rest, MYMEMORY_PIECE, chars);
+    rest = rest.slice(piece.length).trimStart();
+    const url = `https://api.mymemory.translated.net/get?langpair=autodetect|${encodeURIComponent(to)}&q=${encodeURIComponent(piece)}`;
+    const t = parseMyMemory(await getJson(url, undefined, signal));
+    if (!t) throw new LookupError('Empty translation');
+    parts.push(t.text);
+    from ??= t.from;
+  }
+  if (!parts.length) throw new LookupError('Empty translation');
+  return { text: parts.join(' '), from, source: 'MyMemory', ...(q.length < all.length ? { partial: true } : {}) };
+}
+
+/**
+ * Translate a selection. Google Translate first: the best translations, but
+ * no official API, and it turns away addresses it thinks send too many
+ * requests. When it fails, MyMemory (official, free, a daily limit) takes over.
+ */
+export async function translateText(text: string, to: string, signal?: AbortSignal): Promise<Translation> {
+  const all = wellFormed(text.replace(/\u00AD/g, '').trim());
+  try {
+    return await viaGoogle(all, to, signal);
+  } catch (e) {
+    if (signal?.aborted) throw e;
+    return viaMyMemory(all, to, signal);
+  }
 }

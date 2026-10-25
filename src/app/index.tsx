@@ -29,6 +29,9 @@ import { formatBytes } from '@/ui/format';
 import { StatsSheet } from '@/ui/StatsSheet';
 import { UpdateBanner } from '@/ui/UpdateBanner';
 import { CURRENT_BUILD, canSelfUpdate, checkForUpdate } from '@/lib/appUpdate';
+import { useCrashes } from '@/lib/crashLog';
+import { backUp, restoreFromFile } from '@/ui/backupDialogs';
+import { showCrashLog } from '@/ui/crashDialogs';
 import { type AppColors, useAppColors } from '@/ui/theme';
 import { Tap } from '@/ui/Tap';
 
@@ -47,6 +50,7 @@ export default function Library() {
   const [importing, setImporting] = useState(false);
   const addingShared = useAddingSharedFile();
   const [statsOpen, setStatsOpen] = useState(false);
+  const crashes = useCrashes();
   const columns = width >= 700 ? 5 : 3;
   const cellWidth = (width - GAP * (columns + 1)) / columns;
 
@@ -105,6 +109,9 @@ export default function Library() {
             },
           ]
         : []),
+      { label: 'Back up highlights & notes', icon: 'share-outline', onPress: () => void backUp() },
+      { label: 'Restore a backup…', icon: 'arrow-undo-outline', onPress: () => void restoreFromFile() },
+      ...(crashes.length ? [{ label: `Crash log (${crashes.length})`, icon: 'bug-outline' as const, onPress: () => showCrashLog(crashes) }] : []),
     ]);
 
   const newCollection = (then?: (id: string) => void) =>

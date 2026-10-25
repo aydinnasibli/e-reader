@@ -22,7 +22,15 @@ function fakeBook(blocks: Block[]) {
   return book;
 }
 
-const fontSizeOf = (text: string | RegExp) => [screen.getByText(text).props.style].flat().find((s) => s?.fontSize)?.fontSize;
+type Node = { props: { style?: unknown }; parent: Node | null };
+/** A style value of the text drawn: on the paragraph's text, around the nested texts that hold its words. */
+const styleOf = (text: string | RegExp, key: 'fontSize' | 'lineHeight') => {
+  for (let n: Node | null = screen.getByText(text) as unknown as Node; n; n = n.parent) {
+    const v = ([n.props.style].flat() as Record<string, number>[]).find((s) => s?.[key])?.[key];
+    if (v) return v;
+  }
+};
+const fontSizeOf = (text: string | RegExp) => styleOf(text, 'fontSize');
 
 /** The reader's wiring: the panel's slider feeds a draft drawn by LivePreview. */
 function Reader({ book, onSlide }: { book: BookData; onSlide: jest.Mock }) {
@@ -87,8 +95,7 @@ describe('display panel', () => {
     await fireEvent.press(screen.getByText('Spacing'));
     await fireEvent(screen.getByTestId('slider-Line spacing'), 'valueChange', 2.02);
     expect(onSlide).toHaveBeenLastCalledWith({ lineSpacing: 2 }, false);
-    const lh = [screen.getByText(TEXT).props.style].flat().find((s) => s?.lineHeight)?.lineHeight;
-    expect(lh).toBe(Math.round(19 * 2));
+    expect(styleOf(TEXT, 'lineHeight')).toBe(Math.round(19 * 2));
   });
 });
 

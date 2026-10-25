@@ -5,7 +5,7 @@
 import { createDecoder, detectBom, type StreamDecoder, xmlDeclaredEncoding } from './decode';
 import { type IngestContext, READ_SLICE } from './io';
 import { type MarkupHandler, MarkupTokenizer } from './markup';
-import { BOLD, type BlockKind, ITALIC, MONO, SUB, SUP, type ImageRef, type Manifest, type TocEntry } from './types';
+import { BOLD, type BlockKind, ENGINE_VERSION, ITALIC, MONO, SUB, SUP, type ImageRef, type Manifest, type TocEntry } from './types';
 import { BookWriter } from './writer';
 import type { ZipArchive, ZipEntry } from './zip';
 
@@ -344,7 +344,7 @@ export async function ingestFb2(ctx: IngestContext, zip?: ZipArchive, entry?: Zi
   if (h.coverId && images[h.coverId]) cover = h.coverId;
 
   return {
-    v: 1,
+    v: ENGINE_VERSION,
     format: 'fb2',
     title: h.title || ctx.fallbackTitle,
     author: h.authors.join(', '),

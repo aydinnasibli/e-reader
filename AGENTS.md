@@ -42,4 +42,5 @@ Docs: https://docs.expo.dev/eas/index.md
 
 ## Git workflow (owner's rule)
 
-- Work and commit on the feature branch. **Always ask the owner before merging or pushing to `main`**, every time, even after earlier approvals. Pushing to `main` builds and publishes a new Android APK that installed apps are offered as an update.
+- Work directly on `main`. **Never create branches.**
+- **Don't commit or push.** Leave changes uncommitted; the owner commits and pushes when they choose. Pushing to `main` builds and publishes a new Android APK that installed apps are offered as an update.

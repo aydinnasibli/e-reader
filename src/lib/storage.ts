@@ -8,7 +8,9 @@
 //   <documents>/books/<id>/img/...      extracted images
 
 import { Directory, File, type FileHandle, FileMode, Paths } from 'expo-file-system';
+import { strToU8 } from 'fflate';
 import type { BookSink, ByteSource, ChunkInfo } from '@/engine/io';
+import { hashBytes } from './fingerprint';
 
 export function booksDir() {
   return new Directory(Paths.document, 'books');
@@ -24,6 +26,19 @@ export function chunkFile(id: string, index: number) {
 
 export function imageFile(id: string, name: string) {
   return new File(Paths.document, 'books', id, 'img', name);
+}
+
+const UNSAFE = /[^A-Za-z0-9._-]/g;
+const MAX_NAME = 100;
+
+/**
+ * A file name for an image from its name inside the book: safe characters
+ * only, never a path. A name that had to change gets a hash of the original,
+ * so "a/b.png" and "a_b.png" in one EPUB don't share a file.
+ */
+export function safeImageName(key: string): string {
+  const safe = key.replace(UNSAFE, '_');
+  return safe === key && safe.length <= MAX_NAME ? safe : `${safe.slice(0, MAX_NAME)}-${hashBytes(strToU8(key))}`;
 }
 
 export function manifestFile(id: string) {

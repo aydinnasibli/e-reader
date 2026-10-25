@@ -21,6 +21,11 @@ display settings, progress slider). Tap the left or right edge, or swipe, to
 turn pages. Long-press a word to highlight it, add a note, look it up or
 translate it. Long-press a book in the library for its options.
 
+Books can also be opened from other apps ("Open with" on Android, "Open in" /
+Share on iPhone). The library's View menu backs up highlights, notes and
+reading places to a file and restores them on any phone, and shows the crash
+log if the app ever hit an error.
+
 ## Android app (APK) and updates
 
 Every push to `main` builds a signed APK on GitHub Actions and publishes it as

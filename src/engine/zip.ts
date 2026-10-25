@@ -120,13 +120,21 @@ export class ZipArchive {
     }
   }
 
+  /** Entries by lowercased path (the first of any that differ only in case), built on the first miss. */
+  private byLower: Map<string, ZipEntry> | null = null;
+
   /** Look up an entry by path, tolerating case differences (common in sloppy EPUBs). */
   find(path: string): ZipEntry | undefined {
     const direct = this.entries.get(path);
     if (direct) return direct;
-    const lower = path.toLowerCase();
-    for (const [k, v] of this.entries) if (k.toLowerCase() === lower) return v;
-    return undefined;
+    if (!this.byLower) {
+      this.byLower = new Map();
+      for (const [k, v] of this.entries) {
+        const lower = k.toLowerCase();
+        if (!this.byLower.has(lower)) this.byLower.set(lower, v);
+      }
+    }
+    return this.byLower.get(path.toLowerCase());
   }
 
   dataOffset(e: ZipEntry): number {

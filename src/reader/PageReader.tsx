@@ -9,11 +9,12 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import type { Block, Position } from '@/engine/types';
 import type { ReaderSettings, Theme } from '@/lib/settings';
 import type { BookData } from './book';
-import { BlockImage, BlockText, Spacer } from './BlockText';
+import { BlockImage, BlockText, Spacer, type TextInstance } from './BlockText';
 import { Measurer } from './Measurer';
 import { swipeOutcome, tapZone } from './gestures';
 import type { ReaderGeometry } from './geometry';
-import { type Caret, caretInText, hitText } from './hitTest';
+import { drawnLines } from './drawnLayout';
+import { type Caret, type DrawnLines, caretDrawn, caretInText, hitDrawn, hitText } from './hitTest';
 import { metricsOf, prepareBlock } from './metrics';
 import { Battery, Clock } from './StatusInfo';
 import { charsPerPage, pageCount, pageNumber } from './pageNumbers';
@@ -81,6 +82,8 @@ interface Props {
   onSelectTap?(at: TextPoint | null): void;
   /** Filled in with what's where on the page, for selection handles. */
   geometry?: { current: ReaderGeometry | null };
+  /** Where text is on screen became better known (handles are placed again). */
+  onGeometryChange?(): void;
   /** The page number shown, the (estimated) total, and characters per page. */
   onPageInfo?(info: PageInfo): void;
   /** Turn requests from outside (auto page turn); `n` increments per request. */
@@ -118,7 +121,7 @@ interface Cur {
   page: number | null;
 }
 
-export function PageReader({ book, settings, theme, start, startKey, version, onPosition, onTap, marksFor, onLongPressBlock, onLink, bookmarked, footerRight, onLayoutReady, selecting, edgeTurns, onSelectDrag, onSelectTap, geometry, onPageInfo, turn, onEnd }: Props) {
+export function PageReader({ book, settings, theme, start, startKey, version, onPosition, onTap, marksFor, onLongPressBlock, onLink, bookmarked, footerRight, onLayoutReady, selecting, edgeTurns, onSelectDrag, onSelectTap, geometry, onGeometryChange, onPageInfo, turn, onEnd }: Props) {
   const win = useWindowDimensions();
   const liveInsets = useSafeAreaInsets();
   // Showing/hiding the status bar can change the top inset on some iPhones;
@@ -136,6 +139,13 @@ export function PageReader({ book, settings, theme, start, startKey, version, on
   const [cur, setCur] = useState<Cur>(() => ({ chunk: book.chunkOf(start.b), page: null }));
   const target = useRef<{ pos: Position; last?: boolean }>({ pos: start });
   const lastPos = useRef<Position>(start);
+  // The place kept across layout changes: where the person last arrived (a
+  // page turn, a jump, opening the book). Not the start of the page shown
+  // after a change: that is up to a page earlier, so every step of the text
+  // size slider would move further back.
+  const anchor = useRef<Position>(start);
+  /** The page last reported, and in which layout. */
+  const reported = useRef<{ key: string; chunk: number; page: number } | null>(null);
   const [measuring, setMeasuring] = useState<{ chunk: number; blocks: Block[]; key: string } | null>(null);
 
   // Whether the last page may stay on screen while the current one is laid out.
@@ -143,13 +153,15 @@ export function PageReader({ book, settings, theme, start, startKey, version, on
   // Jump requests (TOC, slider) and layout changes both re-target the reader.
   useEffect(() => {
     target.current = { pos: start };
+    anchor.current = start;
+    reported.current = null;
     staleOk.current = false;
     setCur({ chunk: book.chunkOf(start.b), page: null });
   }, [startKey]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => {
-    target.current = { pos: lastPos.current };
+    target.current = { pos: anchor.current };
     staleOk.current = true;
-    setCur({ chunk: book.chunkOf(lastPos.current.b), page: null });
+    setCur({ chunk: book.chunkOf(anchor.current.b), page: null });
     setMeasuring(null);
   }, [layoutKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -229,13 +241,18 @@ export function PageReader({ book, settings, theme, start, startKey, version, on
     const items = (curLaid.pages[cur.page + step - 1] ?? curLaid.pages[cur.page]).items;
     const last = items[items.length - 1];
     lastPos.current = pos;
+    // Another page in the same layout: the person moved on. The first page
+    // after a jump, or after a layout change, keeps the place it was aimed at.
+    const prev = reported.current;
+    reported.current = { key: layoutKey, chunk: cur.chunk, page: cur.page };
+    if (prev && prev.key === layoutKey && (prev.chunk !== cur.chunk || prev.page !== cur.page)) anchor.current = pos;
     // The end is exclusive: where the next page starts.
     const lastText = curLaid.measures[last.b - curLaid.first]?.kind === 'text';
     const lastPage = book.complete && cur.chunk + 1 >= book.chunkCount && cur.page + step >= curLaid.pages.length;
     const byTurn = turned.current;
     turned.current = false;
     onPosition(pos, lastText ? { b: last.b, o: bookOffset(last.b, last.e) } : { b: last.b + 1, o: 0 }, lastPage && byTurn);
-  }, [cur, curLaid, onPosition, step, book]);
+  }, [cur, curLaid, onPosition, step, book, layoutKey]);
 
   /** The page one step away, or why there isn't one. */
   const neighbour = (dir: 1 | -1): { cur: Cur; pageData?: { laid: Laid; index: number } } | 'end' | 'processing' | null => {
@@ -326,7 +343,36 @@ export function PageReader({ book, settings, theme, start, startKey, version, on
   const itemBoxes = useRef(new Map<string, ItemBox>());
   const viewportTop = useRef(0);
   const viewportRef = useRef<ViewInstance>(null);
-  /** The block and character under a point within one page column (`column` is that column's key). */
+  // Each shown item's text view, and while selecting, where its lines are
+  // drawn: hit testing and handles use that when the phone can say.
+  const texts = useRef(new Map<string, TextInstance>());
+  const drawnBoxes = useRef(new Map<string, DrawnLines>());
+  const textRefs = useRef(new Map<string, (t: TextInstance | null) => void>());
+  const textRef = (boxKey: string) => {
+    let f = textRefs.current.get(boxKey);
+    if (!f) {
+      f = (t) => {
+        if (t) texts.current.set(boxKey, t);
+        else {
+          texts.current.delete(boxKey);
+          textRefs.current.delete(boxKey);
+          drawnBoxes.current.delete(boxKey);
+        }
+      };
+      textRefs.current.set(boxKey, f);
+    }
+    return f;
+  };
+  /** Ask where the text on a page (its key), or one column of a spread, is drawn. */
+  const askDrawn = (page: string) =>
+    Promise.all(
+      [...texts.current].map(async ([k, t]) => {
+        if (!k.startsWith(page + '|') && !k.startsWith(page + ':')) return;
+        const d = await drawnLines(t);
+        if (d) drawnBoxes.current.set(k, d);
+        else drawnBoxes.current.delete(k);
+      }),
+    );
   /**
    * The block and character under a point within one page column. With
    * `nearest` (dragging), a point between or beyond paragraphs uses the
@@ -335,6 +381,7 @@ export function PageReader({ book, settings, theme, start, startKey, version, on
   const pointAt = (pageX: number, pageY: number, column: string, nearest: boolean): { b: number; o?: number } | null => {
     const y = pageY - viewportTop.current;
     let best: ItemBox | null = null;
+    let bestKey = '';
     let bestDist = Infinity;
     for (const [k, box] of itemBoxes.current) {
       if (!k.startsWith(column + '|')) continue;
@@ -342,6 +389,7 @@ export function PageReader({ book, settings, theme, start, startKey, version, on
       if (nearest && box.laid.measures[box.it.b - box.laid.first]?.kind !== 'text') continue;
       if (dist < bestDist) {
         best = box;
+        bestKey = k;
         bestDist = dist;
       }
     }
@@ -355,10 +403,14 @@ export function PageReader({ book, settings, theme, start, startKey, version, on
     const top = it.top || it.s > 0 ? 0 : look.marginTop;
     const left = textLeft + (column.endsWith(':R') ? width + settings.margin : 0) + look.paddingLeft;
     const d = drawn(blk, look);
-    const at = hitText(d.text, m.lines, it.s, it.e, pageX - left, y - best.y - top, width - look.paddingLeft, metricsOf(blk, look));
+    const drawnBox = drawnBoxes.current.get(bestKey);
+    const at = drawnBox
+      ? it.s + hitDrawn(drawnBox, pageX, pageY)
+      : hitText(d.text, m.lines, it.s, it.e, pageX - left, y - best.y - top, width - look.paddingLeft, metricsOf(blk, look));
     return { b: it.b, o: toBlock(d, at) };
   };
-  const longPress = (pageX: number, pageY: number, column: string) => {
+  const longPress = async (pageX: number, pageY: number, column: string) => {
+    await askDrawn(column);
     const p = pointAt(pageX, pageY, column, false);
     if (p) onLongPressBlock?.(p.b, p.o);
   };
@@ -450,6 +502,7 @@ export function PageReader({ book, settings, theme, start, startKey, version, on
       const k = it.b - l.first;
       const blk = l.blocks[k];
       if (!blk) return null;
+      const boxKey = `${key}|${idx}`;
       let content;
       if (blk.k === 'img') content = <BlockImage book={book} imageKey={blk.s!} width={width} height={it.h} />;
       else if (blk.k === 'sp' || blk.k === 'hr') content = <Spacer block={blk} settings={settings} theme={theme} />;
@@ -466,10 +519,10 @@ export function PageReader({ book, settings, theme, start, startKey, version, on
             noBottomMargin={it.e < len}
             marks={marksFor?.(it.b)}
             onLink={onLink}
+            textRef={textRef(boxKey)}
           />
         );
       }
-      const boxKey = `${key}|${idx}`;
       return (
         <View
           key={`${it.b}:${it.s}`}
@@ -529,6 +582,12 @@ export function PageReader({ book, settings, theme, start, startKey, version, on
       const look = l.looks[i];
       if (!blk || m?.kind !== 'text') continue;
       const d = drawn(blk, look);
+      const drawnBox = drawnBoxes.current.get(k);
+      if (drawnBox) {
+        const c = caretDrawn(drawnBox, toDrawn(d, p.o) - it.s, edge);
+        if (c) return c;
+        continue; // on the other column of a spread, or another page
+      }
       const c = caretInText(d.text, m.lines, it.s, it.e, toDrawn(d, p.o), edge, width - look.paddingLeft, metricsOf(blk, look));
       if (!c) continue; // on the other column of a spread, or another page
       const top = it.top || it.s > 0 ? 0 : look.marginTop;
@@ -538,6 +597,23 @@ export function PageReader({ book, settings, theme, start, startKey, version, on
     return null;
   };
   if (geometry) geometry.current = { pointAt: textPoint, caretAt };
+  // While selecting, keep asking where the page's text is drawn: drawing a
+  // selection or highlight redraws the text. Not while it's changing quickly
+  // (a drag), and the handles move once it's known.
+  const geometryChanged = useRef(onGeometryChange);
+  geometryChanged.current = onGeometryChange;
+  useEffect(() => {
+    if (!selecting) {
+      drawnBoxes.current.clear();
+      return;
+    }
+    let alive = true;
+    const timer = setTimeout(() => askDrawn(curKey).then(() => alive && geometryChanged.current?.()), 60);
+    return () => {
+      alive = false;
+      clearTimeout(timer);
+    };
+  }, [selecting, curKey, marksFor, layoutKey]);
   const stroke = useRef<{ x: number; y: number; from: TextPoint | null; moved: boolean }>({ x: 0, y: 0, from: null, moved: false });
   const selectLayer = selecting && cur.page !== null && (
     <View

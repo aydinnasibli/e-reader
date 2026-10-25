@@ -13,7 +13,7 @@ import { createDecoder } from './decode';
 import { HtmlToBlocks } from './html';
 import { BookError, type ByteSource, DRM_MESSAGE, type IngestContext } from './io';
 import { MarkupTokenizer } from './markup';
-import type { ImageRef, Manifest } from './types';
+import { ENGINE_VERSION, type ImageRef, type Manifest } from './types';
 import { BookWriter } from './writer';
 
 const u16 = (b: Uint8Array, o: number) => (b[o] << 8) | b[o + 1];
@@ -298,7 +298,7 @@ export async function ingestMobi(ctx: IngestContext): Promise<Manifest> {
   w.finish();
 
   return {
-    v: 1,
+    v: ENGINE_VERSION,
     format: kf8 ? 'azw3' : 'mobi',
     title,
     author,

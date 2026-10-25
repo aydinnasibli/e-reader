@@ -52,6 +52,15 @@ export function setView(view: ViewMode) {
   set({ view });
 }
 
+export function getShelves(): Readonly<State> {
+  return get();
+}
+
+/** The collection with this name, made if there is none (restoring a backup). */
+export function collectionNamed(name: string): Collection {
+  return get().collections.find((c) => c.name === name) ?? createCollection(name);
+}
+
 export function createCollection(name: string): Collection {
   const c = { id: Date.now().toString(36) + Math.random().toString(36).slice(2, 6), name };
   set({ collections: [...get().collections, c] });

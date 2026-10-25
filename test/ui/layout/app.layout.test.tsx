@@ -79,7 +79,7 @@ jest.mock('@/lib/lookup', () => ({
         { pos: 'Noun', defs: [{ text: 'Rare.' }] },
       ],
     }),
-  translateText: () => Promise.resolve({ text: 'A fairly long translated sentence that wraps onto several lines of the card.', from: 'en' }),
+  translateText: () => Promise.resolve({ text: 'A fairly long translated sentence that wraps onto several lines of the card.', from: 'en', source: 'Google Translate' }),
 }));
 
 beforeAll(() => {

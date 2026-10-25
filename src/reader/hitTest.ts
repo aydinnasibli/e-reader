@@ -20,6 +20,31 @@ export interface Metrics {
    */
   word?(start: number, end: number): number | undefined;
   align: 'left' | 'center' | 'right' | 'justify';
+  /**
+   * How a justified line is filled: 'spaces' (Android) widens only the spaces
+   * between words; 'textkit' (iOS) also opens the gaps between letters of a
+   * loose line (see textKitShares), and needs `fontSize`.
+   */
+  justification?: 'spaces' | 'textkit';
+  fontSize?: number;
+}
+
+// How TextKit (iOS) fills a justified line, measured on its text engine laid
+// out the way React Native lays it out (bench/textkit), in ems of the
+// paragraph's size. The spaces widen alone up to TEXTKIT_SPACES_ONLY each.
+// A looser line also opens every gap between two letters of a word, up to
+// TEXTKIT_MAX_GAP, the spaces keeping TEXTKIT_SPACE_LEAD more than those gaps
+// and taking whatever the gaps can't. A line without spaces spreads its letters.
+const TEXTKIT_SPACES_ONLY = 0.54;
+const TEXTKIT_SPACE_LEAD = 0.46;
+const TEXTKIT_MAX_GAP = 0.29;
+
+/** What each space and each gap between letters gets of a justified line's `slack` on iOS. */
+export function textKitShares(slack: number, spaces: number, gaps: number, size: number): { space: number; gap: number } {
+  if (!spaces) return { space: 0, gap: gaps ? slack / gaps : 0 };
+  if (slack / spaces <= TEXTKIT_SPACES_ONLY * size) return { space: slack / spaces, gap: 0 };
+  const gap = Math.min(TEXTKIT_MAX_GAP * size, Math.max(0, (slack - spaces * TEXTKIT_SPACE_LEAD * size) / (spaces + gaps)));
+  return { space: (slack - gaps * gap) / spaces, gap };
 }
 
 /** Metrics from usual letter widths, for one font size (tests, and before anything is measured). */
@@ -30,10 +55,12 @@ export function estimatedMetrics(text: string, fontSize: number, align: Metrics[
 /**
  * Where the caret sits before each character of a line, and after the last:
  * x positions from the left of the text, `line.end - line.start + 1` of them.
- * Justified lines (all but a paragraph's last, or one before a line break)
+ * Justified lines (all but the last drawn, or one before a line break)
  * stretch their spaces to fill `width`; other lines take their measured width.
+ * `lastShown`: the line is the last of the text drawn (a page shows part of a
+ * paragraph, drawn on its own, so its last line isn't justified either).
  */
-export function lineCarets(text: string, lines: Line[], line: Line, width: number, m: Metrics): number[] {
+export function lineCarets(text: string, lines: Line[], line: Line, width: number, m: Metrics, lastShown = false): number[] {
   const { start, end } = line;
   let ink = end; // without the spaces (and line break) it ends with
   while (ink > start && /\s/.test(text[ink - 1])) ink--;
@@ -55,24 +82,38 @@ export function lineCarets(text: string, lines: Line[], line: Line, width: numbe
     for (let q = k; q < j; q++) adv.push(m.advance(q) * f);
     k = j;
   }
+  const textkit = m.justification === 'textkit' && m.fontSize !== undefined;
+  // What justifying widens: the spaces between words (iOS: any space before
+  // the line's end, the indent's too), and on iOS the gaps between letters.
+  const widened = (k: number) => k < ink && (textkit ? /\s/.test(text[k]) : text[k] === ' ');
+  const isGap = (k: number) => textkit && k + 1 < ink && !/\s/.test(text[k]) && !/\s/.test(text[k + 1]);
   let natural = hyphen;
   let spaces = 0;
+  let gaps = 0;
   for (let k = start; k < ink; k++) {
     natural += adv[k - start];
-    if (text[k] === ' ') spaces++;
+    if (widened(k)) spaces++;
+    else if (isGap(k)) gaps++;
   }
-  const last = line === lines[lines.length - 1] || text[end - 1] === '\n';
+  const last = lastShown || line === lines[lines.length - 1] || text[end - 1] === '\n';
   let scale = 1;
   let stretch = 0;
+  let gap = 0;
   let left = 0;
-  // Justifying only widens the spaces between words: a line without any (one
-  // long word) stays as it is, at the left.
-  if (m.align === 'justify' && !last && natural > 0 && spaces) {
+  if (m.align === 'justify' && !last && natural > 0 && textkit) {
+    ({ space: stretch, gap } = textKitShares(Math.max(0, width - natural), spaces, gaps, m.fontSize!));
+  } else if (m.align === 'justify' && !last && natural > 0 && spaces) {
+    // Android only widens the spaces between words: a line without any (one
+    // long word) stays as it is, at the left.
     stretch = Math.max(0, width - natural) / spaces;
   } else {
     // The text engine's width corrects small differences (kerning); a big one means it measured something else.
+    // Android's width counts the spaces the line ends with, which aren't drawn.
     const used = line.w;
-    if (used && natural > 0 && Math.abs(used / natural - 1) < 0.12) scale = used / natural;
+    let trailing = 0;
+    for (let k = ink; k < end; k++) trailing += adv[k - start];
+    const measured = used && Math.abs(used - natural - trailing) < Math.abs(used - natural) ? natural + trailing : natural;
+    if (used && measured > 0 && Math.abs(used / measured - 1) < 0.12) scale = used / measured;
     const drawnWidth = natural * scale;
     if (m.align === 'center') left = Math.max(0, (width - drawnWidth) / 2);
     else if (m.align === 'right') left = Math.max(0, width - drawnWidth);
@@ -80,7 +121,7 @@ export function lineCarets(text: string, lines: Line[], line: Line, width: numbe
   const xs = [left];
   let x = left;
   for (let k = start; k < end; k++) {
-    x += adv[k - start] * scale + (stretch && text[k] === ' ' && k < ink ? stretch : 0);
+    x += adv[k - start] * scale + (stretch && widened(k) ? stretch : 0) + (gap && isGap(k) ? gap : 0);
     xs.push(x);
   }
   return xs;
@@ -107,7 +148,7 @@ export function hitText(text: string, lines: Line[], from: number, to: number, x
     top += l.height;
   }
   if (line.end <= line.start) return line.start;
-  const xs = lineCarets(text, lines, line, width, m);
+  const xs = lineCarets(text, lines, line, width, m, line === shown[shown.length - 1]);
   for (let k = line.start; k < line.end; k++) if (x < xs[k - line.start + 1]) return k;
   return line.end - 1;
 }
@@ -141,11 +182,46 @@ export function caretInText(
   for (const line of shown) {
     if (at >= line.start && (at < line.end || line === shown[shown.length - 1])) {
       if (at >= line.end && line !== lines[lines.length - 1]) return null;
-      const xs = lineCarets(text, lines, line, width, m);
+      const xs = lineCarets(text, lines, line, width, m, line === shown[shown.length - 1]);
       const k = Math.min(at + (edge === 'end' ? 1 : 0), line.end) - line.start;
       return { x: xs[k], y: top, h: line.height };
     }
     top += line.height;
   }
   return null;
+}
+
+// ---- where the phone drew the text (see drawnLayout) ----
+
+/** A text's lines as drawn: positions in window points, offsets in the text drawn (a page's slice of a paragraph). */
+export interface DrawnLines {
+  /** Where the text's content starts. */
+  x: number;
+  y: number;
+  length: number;
+  /** Each line's characters [start, end), top and bottom, and the caret's x before each character and after the last. */
+  lines: { start: number; end: number; top: number; bottom: number; xs: number[] }[];
+}
+
+/** The character under a point (window coordinates); above, below or beside the text, the nearest one. */
+export function hitDrawn(d: DrawnLines, pageX: number, pageY: number): number {
+  const y = pageY - d.y;
+  const line = d.lines.find((l) => y < l.bottom) ?? d.lines[d.lines.length - 1];
+  if (!line || line.end <= line.start) return line?.start ?? 0;
+  const x = pageX - d.x;
+  for (let k = line.start; k < line.end; k++) if (x < line.xs[k - line.start + 1]) return k;
+  return line.end - 1;
+}
+
+/**
+ * Where the caret before character `i` sits ('end': after character i - 1, on
+ * its line), in window coordinates; null if that character isn't in this text.
+ */
+export function caretDrawn(d: DrawnLines, i: number, edge: 'start' | 'end'): Caret | null {
+  const at = edge === 'end' ? i - 1 : i;
+  if (at < 0 || at >= d.length) return null;
+  const line = d.lines.find((l) => at >= l.start && at < l.end);
+  if (!line) return null;
+  const x = line.xs[at + (edge === 'end' ? 1 : 0) - line.start];
+  return { x: d.x + x, y: d.y + line.top, h: line.bottom - line.top };
 }

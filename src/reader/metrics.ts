@@ -1,6 +1,7 @@
 // A block's character widths as drawn: each run in its own font (bold,
 // italic, small for superscripts), at the block's size and letter spacing.
 
+import { Platform } from 'react-native';
 import { BOLD, type Block, ITALIC, MONO, SUB, SUP, runStyle, runText } from '@/engine/types';
 import { type Face, charWidth, prepareWidths, wordWidth } from './charWidths';
 import type { Metrics } from './hitTest';
@@ -71,6 +72,8 @@ export function metricsOf(b: Block, look: Look): Metrics {
     word,
     hyphen: first ? charWidth(first.face, '-', first.size) + look.letterSpacing : 0,
     align: ALIGN[look.textAlign ?? ''] ?? 'left',
+    justification: Platform.OS === 'ios' ? 'textkit' : 'spaces',
+    fontSize: look.fontSize,
   };
 }
 
@@ -81,8 +84,8 @@ export function prepareBlock(b: Block, look: Look) {
   const ss = spans(b, look);
   let from = 0;
   for (const s of ss) {
-    prepareWidths(s.face, text.slice(from, s.end));
+    prepareWidths(s.face, s.size, text.slice(from, s.end));
     from = s.end;
   }
-  prepareWidths(ss[0].face, '-');
+  prepareWidths(ss[0].face, ss[0].size, '-');
 }

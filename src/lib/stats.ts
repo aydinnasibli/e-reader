@@ -6,7 +6,7 @@ import { File, Paths } from 'expo-file-system';
 import { useSyncExternalStore } from 'react';
 import { readJson, saveJson } from './storage';
 
-interface BookStats {
+export interface BookStats {
   /** Time spent reading (breaks capped, background and flipping excluded). */
   ms: number;
   /** Older versions' character count (its speed was skewed by fast flipping; unused). */
@@ -81,6 +81,33 @@ export function useStats(): Stats {
     },
     get,
   );
+}
+
+export function getStats(): Readonly<Stats> {
+  return get();
+}
+
+function replace(next: Stats) {
+  stats = next;
+  saveJson(file(), stats);
+  listeners.forEach((l) => l());
+}
+
+// Stats from a backup: per day and per book, the larger of the two, so that
+// restoring onto the phone the backup came from doesn't count anything twice.
+
+export function mergeDays(days: Record<string, number>) {
+  const s = get();
+  const merged = { ...s.days };
+  for (const [day, ms] of Object.entries(days)) merged[day] = Math.max(merged[day] ?? 0, ms);
+  replace({ ...s, days: merged });
+}
+
+export function mergeBookStats(bookId: string, saved: BookStats) {
+  const s = get();
+  const here = s.books[bookId];
+  if (here && here.ms >= saved.ms) return;
+  replace({ ...s, books: { ...s.books, [bookId]: saved } });
 }
 
 /**

@@ -54,8 +54,18 @@ export type ImageRef =
 
 export type BookFormat = 'epub' | 'fb2' | 'txt' | 'mobi' | 'azw3';
 
+/**
+ * Version of the converters' output, saved in each book's manifest. Bump it
+ * whenever the same file would come out as different blocks (split, merged,
+ * dropped or reordered): highlights, bookmarks and reading positions are
+ * block numbers, so a book converted again by a newer version needs its
+ * annotations moved along (by their saved text) or they land elsewhere.
+ */
+export const ENGINE_VERSION = 1;
+
 export interface Manifest {
-  v: 1;
+  /** ENGINE_VERSION of the converter that made it. */
+  v: number;
   format: BookFormat;
   title: string;
   author: string;

@@ -1,5 +1,5 @@
 /// <reference types="jest" />
-// "Open with" on Android: a book file shared from another app is recognised
+// "Open with" on Android and "Open in" on iPhone: a book file shared from another app is recognised
 // from its bytes, copied, added (or found on the shelf) and opened.
 
 import { strToU8, zipSync } from 'fflate';
@@ -304,9 +304,26 @@ it('a file shared while the app runs keeps the current screen until it is opened
   expect(mockPush).toHaveBeenCalledWith({ pathname: '/reader/[id]', params: { id: expect.any(String) } });
 });
 
-it('only shared files on Android are taken over; app links pass through', async () => {
+it('on iPhone, a book opened from another app arrives as a copy in Documents/Inbox: added, opened, and the copy removed', async () => {
   Object.defineProperty(Platform, 'OS', { value: 'ios', configurable: true });
-  expect(redirectSystemPath({ path: 'content://x/1', initial: true })).toBe('content://x/1');
+  const uri = 'file:///private/var/mobile/Containers/Data/Application/0A1B/Documents/Inbox/The%20Sea.epub';
+  mockFiles.set(uri, makeEpub('Opened in from Files. '));
+  const before = booksOnShelf();
+  expect(redirectSystemPath({ path: uri, initial: false })).toBeNull();
+  await settle();
+  expect(booksOnShelf()).toBe(before + 1);
+  expect(mockPush).toHaveBeenCalledWith({ pathname: '/reader/[id]', params: { id: expect.any(String) } });
+  expect(mockFiles.has(uri)).toBe(false);
+  // A file elsewhere (an Android file manager's) is never deleted.
   Object.defineProperty(Platform, 'OS', { value: 'android', configurable: true });
-  expect(redirectSystemPath({ path: 'necreader://notes', initial: false })).toBe('necreader://notes');
+  const kept = share(makeEpub('Kept where it is. '), 'kept.epub', { from: FILES });
+  await openSharedFile(kept);
+  expect(mockFiles.has(kept)).toBe(true);
+});
+
+it('app links pass through on both phones', () => {
+  for (const os of ['ios', 'android']) {
+    Object.defineProperty(Platform, 'OS', { value: os, configurable: true });
+    expect(redirectSystemPath({ path: 'necreader://notes', initial: false })).toBe('necreader://notes');
+  }
 });

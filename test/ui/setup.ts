@@ -23,6 +23,7 @@ jest.mock('@/lib/storage', () => {
       },
     }),
     imageFile: () => ({ exists: false, uri: '' }),
+    safeImageName: jest.requireActual('@/lib/storage').safeImageName,
     testChunks: chunks,
   };
 });

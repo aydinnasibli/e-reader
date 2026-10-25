@@ -10,7 +10,51 @@
     "ios": {
       "icon": "./assets/images/icon.png",
       "bundleIdentifier": "com.nec.ebookreader",
-      "supportsTablet": true
+      "supportsTablet": true,
+      "infoPlist": {
+        "LSSupportsOpeningDocumentsInPlace": false,
+        "CFBundleDocumentTypes": [
+          {
+            "CFBundleTypeName": "Book",
+            "CFBundleTypeRole": "Viewer",
+            "LSHandlerRank": "Alternate",
+            "LSItemContentTypes": [
+              "org.idpf.epub-container",
+              "com.nec.ebookreader.fb2",
+              "com.nec.ebookreader.mobi",
+              "com.nec.ebookreader.azw3",
+              "public.plain-text",
+              "public.zip-archive"
+            ]
+          }
+        ],
+        "UTImportedTypeDeclarations": [
+          {
+            "UTTypeIdentifier": "org.idpf.epub-container",
+            "UTTypeDescription": "EPUB book",
+            "UTTypeConformsTo": ["public.data", "public.composite-content"],
+            "UTTypeTagSpecification": { "public.filename-extension": ["epub"], "public.mime-type": ["application/epub+zip"] }
+          },
+          {
+            "UTTypeIdentifier": "com.nec.ebookreader.fb2",
+            "UTTypeDescription": "FictionBook",
+            "UTTypeConformsTo": ["public.xml"],
+            "UTTypeTagSpecification": { "public.filename-extension": ["fb2"], "public.mime-type": ["application/x-fictionbook+xml", "application/x-fictionbook"] }
+          },
+          {
+            "UTTypeIdentifier": "com.nec.ebookreader.mobi",
+            "UTTypeDescription": "Mobipocket book",
+            "UTTypeConformsTo": ["public.data"],
+            "UTTypeTagSpecification": { "public.filename-extension": ["mobi", "prc"], "public.mime-type": ["application/x-mobipocket-ebook"] }
+          },
+          {
+            "UTTypeIdentifier": "com.nec.ebookreader.azw3",
+            "UTTypeDescription": "Kindle book",
+            "UTTypeConformsTo": ["public.data"],
+            "UTTypeTagSpecification": { "public.filename-extension": ["azw3", "azw"], "public.mime-type": ["application/vnd.amazon.mobi8-ebook", "application/vnd.amazon.ebook"] }
+          }
+        ]
+      }
     },
     "android": {
       "adaptiveIcon": {
@@ -49,10 +93,6 @@
         "android.permission.READ_EXTERNAL_STORAGE",
         "android.permission.WRITE_EXTERNAL_STORAGE"
       ]
-    },
-    "web": {
-      "output": "single",
-      "favicon": "./assets/images/favicon.png"
     },
     "plugins": [
       "expo-router",

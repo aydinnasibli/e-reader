@@ -6,6 +6,7 @@ import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'r
 import { ActivityIndicator, AppState, BackHandler, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
 import { type Position, blockText } from '@/engine/types';
 import { addBookmark, highlightsByBlock, removeBookmark, useAnnotations } from '@/lib/annotations';
+import { useRecordScreenError } from '@/lib/crashLog';
 import { getBook, loadManifest, reprocessBook, updateBook, useBookStatus, useLiveBook } from '@/lib/library';
 import { useFontReady } from '@/lib/fonts';
 import { type ReaderSettings, setSettings, useReaderTheme, useSettings } from '@/lib/settings';
@@ -661,6 +662,7 @@ const styles = StyleSheet.create({
 });
 
 export function ErrorBoundary({ error, retry }: ErrorBoundaryProps) {
+  useRecordScreenError(error);
   return (
     <ErrorScreen
       title="The reader hit a problem"

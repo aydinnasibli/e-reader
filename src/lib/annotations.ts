@@ -179,6 +179,21 @@ export function removeHighlight(bookId: string, id: string) {
   save(bookId, { ...a, highlights: a.highlights.filter((x) => x.id !== id) });
 }
 
+/**
+ * Add annotations from a backup: ones already here (same id) stay as they
+ * are, the others are added. Returns how many were added.
+ */
+export function mergeAnnotations(bookId: string, incoming: Annotations): number {
+  const a = getAnnotations(bookId);
+  const hl = new Set(a.highlights.map((h) => h.id));
+  const bm = new Set(a.bookmarks.map((x) => x.id));
+  const highlights = incoming.highlights.filter((h) => !hl.has(h.id));
+  const bookmarks = incoming.bookmarks.filter((x) => !bm.has(x.id));
+  if (!highlights.length && !bookmarks.length) return 0;
+  save(bookId, { highlights: [...a.highlights, ...highlights].sort(byPosition), bookmarks: [...a.bookmarks, ...bookmarks].sort(byPosition) });
+  return highlights.length + bookmarks.length;
+}
+
 export function forgetAnnotations(bookId: string) {
   unsaved.delete(bookId);
   cache.delete(bookId);

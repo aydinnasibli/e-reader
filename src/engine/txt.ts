@@ -4,7 +4,7 @@
 
 import { createDecoder, detectBom, sniffEncoding } from './decode';
 import { type IngestContext, READ_SLICE, UNTITLED } from './io';
-import type { Manifest } from './types';
+import { ENGINE_VERSION, type Manifest } from './types';
 import { BookWriter } from './writer';
 
 /** How paragraphs are separated in this file. */
@@ -169,7 +169,7 @@ export async function ingestTxt(ctx: IngestContext): Promise<Manifest> {
   w.finish();
 
   return {
-    v: 1,
+    v: ENGINE_VERSION,
     format: 'txt',
     title: ctx.fallbackTitle === UNTITLED && opening ? shortTitle(opening) : ctx.fallbackTitle,
     author: '',

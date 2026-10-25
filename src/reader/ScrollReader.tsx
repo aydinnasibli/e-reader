@@ -9,9 +9,10 @@ import type { Block, Position } from '@/engine/types';
 import type { ReaderSettings, Theme } from '@/lib/settings';
 import type { BookData } from './book';
 import { ClockBattery } from './StatusInfo';
-import { BlockImage, BlockText, Spacer } from './BlockText';
+import { BlockImage, BlockText, Spacer, type TextInstance } from './BlockText';
+import { drawnLines } from './drawnLayout';
 import type { ReaderGeometry } from './geometry';
-import { type Caret, caretInText, hitText } from './hitTest';
+import { type Caret, type DrawnLines, caretDrawn, caretInText, hitDrawn, hitText } from './hitTest';
 import { metricsOf, prepareBlock } from './metrics';
 import { drawn, lookOf, toBlock, toDrawn } from './look';
 import type { Mark } from './marks';
@@ -196,6 +197,46 @@ export function ScrollReader({ book, settings, theme, start, startKey, version, 
   const settingsRef = useRef(settings);
   settingsRef.current = settings;
   const onLayoutFns = useRef(new Map<number, (e: TextLayoutEvent) => void>()).current;
+  // Each paragraph's text view, and while selecting, where its lines are drawn:
+  // hit testing and handles use that when the phone can say.
+  const texts = useRef(new Map<number, TextInstance>()).current;
+  const drawnByBlock = useRef(new Map<number, DrawnLines>()).current;
+  const textRefFns = useRef(new Map<number, (t: TextInstance | null) => void>()).current;
+  const textRef = (b: number) => {
+    let f = textRefFns.get(b);
+    if (!f) {
+      f = (t) => {
+        if (t) texts.set(b, t);
+        else {
+          texts.delete(b);
+          drawnByBlock.delete(b);
+          textRefFns.delete(b);
+        }
+      };
+      textRefFns.set(b, f);
+    }
+    return f;
+  };
+  // One stable ref per paragraph too: a new one each render would be called
+  // with null first, and the paragraph's lines forgotten as if scrolled away.
+  const viewRefFns = useRef(new Map<number, (v: ViewInstance | null) => void>()).current;
+  const viewRef = (b: number) => {
+    let f = viewRefFns.get(b);
+    if (!f) {
+      f = (v) => {
+        if (v) views.set(b, v);
+        else {
+          // Scrolled away: forget it, so long books don't pile up entries.
+          views.delete(b);
+          lines.delete(b);
+          onLayoutFns.delete(b);
+          viewRefFns.delete(b);
+        }
+      };
+      viewRefFns.set(b, f);
+    }
+    return f;
+  };
   const layoutFn = (b: number, blk: Block) => {
     let f = onLayoutFns.get(b);
     if (!f) {
@@ -208,8 +249,13 @@ export function ScrollReader({ book, settings, theme, start, startKey, version, 
     }
     return f;
   };
-  const longPress = (b: number, blk: Block, pageX: number, pageY: number) => {
+  const longPress = async (b: number, blk: Block, pageX: number, pageY: number) => {
     const look = lookOf(blk, settings, book.manifest?.lang);
+    const shown = blk.r ? await drawnLines(texts.get(b)) : null;
+    if (shown) {
+      drawnByBlock.set(b, shown);
+      return onLongPressBlock?.(b, toBlock(drawn(blk, look), hitDrawn(shown, pageX, pageY)));
+    }
     const ls = lines.get(b);
     const view = views.get(b);
     if (!blk.r || !ls || !view) return onLongPressBlock?.(b);
@@ -277,6 +323,29 @@ export function ScrollReader({ book, settings, theme, start, startKey, version, 
         if (--left === 0) geometryChanged.current?.();
       });
   }, [selecting, data, settings, rects, views]);
+  // Where the text is drawn, asked again when the selection or highlights
+  // redraw it (not while that changes quickly, during a drag).
+  useEffect(() => {
+    if (!selecting) {
+      drawnByBlock.clear();
+      return;
+    }
+    let alive = true;
+    const timer = setTimeout(async () => {
+      await Promise.all(
+        [...texts].map(async ([b, t]) => {
+          const d = await drawnLines(t);
+          if (d) drawnByBlock.set(b, d);
+          else drawnByBlock.delete(b);
+        }),
+      );
+      if (alive) geometryChanged.current?.();
+    }, 60);
+    return () => {
+      alive = false;
+      clearTimeout(timer);
+    };
+  }, [selecting, data, settings, marksFor, texts, drawnByBlock]);
   const blockAt = (b: number) => {
     const c = book.chunkOf(b);
     return blocks.get(c)?.[b - book.chunkStart(c)];
@@ -286,7 +355,7 @@ export function ScrollReader({ book, settings, theme, start, startKey, version, 
     let best = -1;
     let bestDist = Infinity;
     for (const [b, r] of rects) {
-      if (!lines.has(b)) continue;
+      if (!lines.has(b) && !drawnByBlock.has(b)) continue;
       const dist = pageY < r.y ? r.y - pageY : pageY >= r.y + r.h ? pageY - (r.y + r.h) + 1 : 0;
       if (dist < bestDist) {
         best = b;
@@ -296,21 +365,27 @@ export function ScrollReader({ book, settings, theme, start, startKey, version, 
     const blk = best >= 0 ? blockAt(best) : undefined;
     const r = rects.get(best);
     const ls = lines.get(best);
-    if (!blk || !r || !ls || (!nearest && bestDist > 0)) return null;
+    const shown = drawnByBlock.get(best);
+    if (!blk || !r || !(shown || ls) || (!nearest && bestDist > 0)) return null;
     const look = lookOf(blk, settings, book.manifest?.lang);
     const d = drawn(blk, look);
-    const at = hitText(d.text, ls, 0, d.text.length, pageX - r.x - padLeft - look.paddingLeft, pageY - r.y - look.marginTop, width - look.paddingLeft, metricsOf(blk, look));
+    const at = shown
+      ? hitDrawn(shown, pageX, pageY)
+      : hitText(d.text, ls!, 0, d.text.length, pageX - r.x - padLeft - look.paddingLeft, pageY - r.y - look.marginTop, width - look.paddingLeft, metricsOf(blk, look));
     return { b: best, o: toBlock(d, at) };
   };
   const stroke = useRef<{ x: number; y: number; from: TextPoint | null; moved: boolean }>({ x: 0, y: 0, from: null, moved: false });
   /** Where the caret before/after a character is, in window coordinates (while selecting). */
   const caretAt = (p: TextPoint, edge: 'start' | 'end'): Caret | null => {
     const blk = blockAt(p.b);
-    const r = rects.get(p.b);
-    const ls = lines.get(p.b);
-    if (!blk || !r || !ls) return null;
+    if (!blk) return null;
     const look = lookOf(blk, settings, book.manifest?.lang);
     const d = drawn(blk, look);
+    const shown = drawnByBlock.get(p.b);
+    if (shown) return caretDrawn(shown, toDrawn(d, p.o), edge);
+    const r = rects.get(p.b);
+    const ls = lines.get(p.b);
+    if (!r || !ls) return null;
     const c = caretInText(d.text, ls, 0, d.text.length, toDrawn(d, p.o), edge, width - look.paddingLeft, metricsOf(blk, look));
     return c && { x: r.x + padLeft + look.paddingLeft + c.x, y: r.y + look.marginTop + c.y, h: c.h };
   };
@@ -357,19 +432,11 @@ export function ScrollReader({ book, settings, theme, start, startKey, version, 
     else if (blk.k === 'sp' || blk.k === 'hr') content = <Spacer block={blk} settings={settings} theme={theme} />;
     else {
       const look = lookOf(blk, settings, book.manifest?.lang);
-      content = <BlockText block={blk} look={look} theme={theme} marks={marksFor?.(b)} onLink={linkPressed} onTextLayout={layoutFn(b, blk)} />;
+      content = <BlockText block={blk} look={look} theme={theme} marks={marksFor?.(b)} onLink={linkPressed} onTextLayout={layoutFn(b, blk)} textRef={textRef(b)} />;
     }
     return (
       <Pressable
-        ref={(v) => {
-          if (v) views.set(b, v);
-          else {
-            // Scrolled away: forget it, so long books don't pile up entries.
-            views.delete(b);
-            lines.delete(b);
-            onLayoutFns.delete(b);
-          }
-        }}
+        ref={viewRef(b)}
         onLongPress={(e) => longPress(b, blk, e.nativeEvent.pageX, e.nativeEvent.pageY)}
         delayLongPress={450}
         style={{ paddingLeft: padLeft, paddingRight: padRight }}>

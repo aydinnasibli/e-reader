@@ -6,7 +6,7 @@ import type { Block, ChunkFile, Manifest, Position, TocEntry } from '@/engine/ty
 import { blockLength } from '@/engine/types';
 import { ZipArchive, readZipData } from '@/engine/zip';
 import { type BookEntry, type LiveBook, sourceFile } from '@/lib/library';
-import { FileSource, chunkFile, imageFile } from '@/lib/storage';
+import { FileSource, chunkFile, imageFile, safeImageName } from '@/lib/storage';
 
 const CACHE_CHUNKS = 12;
 
@@ -212,7 +212,7 @@ export class BookData {
   private async resolveImage(key: string): Promise<string | null> {
     const ref = this.manifest?.images[key];
     if (ref && 'file' in ref) return imageFile(this.entry.id, ref.file).uri;
-    const safe = key.replace(/[^A-Za-z0-9._-]/g, '_');
+    const safe = safeImageName(key);
     if (ref && 'pdb' in ref) {
       const out = imageFile(this.entry.id, `p_${safe}.${ref.ext}`);
       if (!out.exists) out.writeSync(this.source().read(ref.pdb[0], ref.pdb[1]));
@@ -226,9 +226,10 @@ export class BookData {
       }
       return out.uri;
     }
-    // Still converting: look the image up directly.
+    // Still converting: look the image up directly. FB2 pictures are already
+    // written, named after their id (see fb2.ts).
     for (const ext of ['jpg', 'png', 'gif']) {
-      const f = imageFile(this.entry.id, `b_${safe}.${ext}`);
+      const f = imageFile(this.entry.id, `b_${key.replace(/[^A-Za-z0-9._-]/g, '_')}.${ext}`);
       if (f.exists) return f.uri;
     }
     const zip = this.archive();

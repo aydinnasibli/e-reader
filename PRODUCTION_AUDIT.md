@@ -180,3 +180,40 @@ Found and fixed. Every row was confirmed by running the sweep on the original fi
 - Selection handles and the footnote sheet.
 - Exact font metrics: text is measured with average glyph widths, so a finding within a few points of an edge needs a look on a phone.
 - Whether Android's keyboard really resizes the window inside a `Modal`: the sweep checks both models.
+
+## 6. Second pass: decisions and changes (2026-10-24)
+
+On `main`, left uncommitted for the owner. The app is for the owner's own use (an Android phone and an iPhone); decisions taken on that basis.
+
+### Owner decisions
+
+| Item | Decision |
+|---|---|
+| P0-1 public signing key | **Accepted risk.** Only APKs from this repo's own releases are installed. (If it's ever rotated: Android 9+ key rotation via `apksigner --lineage`, with `--rotation-min-sdk-version 28`, keeps installed copies updating; to be proven on an emulator first.) |
+| P1-3 crash reporting | **Local crash log**, no service or account. |
+| P1-4 RTL books | **Won't do.** |
+| P1-5 / CI/CD | **Unchanged.** Both workflows stay as they are (no beta channel, actions not pinned by SHA). |
+| P2-7 translation | **Google first, MyMemory as fallback.** |
+| P3-8 APK size | **Unchanged** (both ABIs, all seven font families). |
+| Web target | **Removed.** |
+
+### Changes
+
+| # | Status | Change | Proof |
+|---|---|---|---|
+| P1-3 | **Fixed (JS errors)** | `src/lib/crashLog.ts`: uncaught errors (before React Native's own handler), screen error pages, and in release builds unhandled promise rejections go to `crashes.json` (latest 30, repeats counted), with time, screen, build, stack. Pending saves are flushed before a fatal error closes the app. Next start points it out once; Library → View → Crash log shares or clears it. Native crashes are not caught; release stacks are bundle offsets (no source maps kept). | `test/crashLog.test.ts`, `test/ui/crashLog.test.tsx` (fail with recording removed) |
+| P2-7 | **Fixed** | MyMemory fallback when Google fails (blocked, web page, unreachable): ≤500 chars per request, ≤1,500 in all, cut at sentences; its error "translations" are rejected; the card names the service. | `test/translate.test.ts` (fails with the fallback removed); live check with Google blocked: en→az, ru→en, 1,000-char en→tr |
+| P2-8 | **Partly** | Expo SDK 58 patches applied (`expo install --fix`; expo-doctor 20/20). The 5 remaining high findings are build tooling only (`@expo/cli`, ESLint plugin). | `npx expo-doctor`, `npm audit` |
+| P2-10 | **Fixed (mechanism)** | `storage.json` version + `migrateStorage()` runner (ordered, idempotent steps; failures logged and retried; newer files left alone). `ENGINE_VERSION` names the manifest's converter version and when to bump it. No migration exists yet: version 1 is today's layout. | `test/migrations.test.ts` |
+| P3-7 | **No longer applies** | `origin` is `aydinnasibli/e-reader`, the repo the updater checks. | `git remote -v` |
+| — | **Done** | Removed the web target (`react-native-web`, web config, favicon) and the unused `@expo/ui` and `expo-symbols`. reanimated / gesture-handler / worklets stay: `react-native-drawer-layout` (an Expo Router dependency) requires them. | tsc, lint, tests, `expo export` |
+| P3-2 | **Fixed** | Page mode keeps the place the person arrived at (page turn, jump, opening) across layout changes, instead of the start of the page shown after each change; every text-size step used to move up to a page back. | `test/ui/fontDrift.test.tsx`: 12 size changes, each size lands on the same page (old code: a page earlier) |
+| P3-5 | **Fixed** | `safeImageName()`: a name that had to be changed gets a hash of the original (and is capped at 100 characters), so `a/b.png` and `a_b.png` no longer share a file. Unchanged names keep their extracted files. | `test/imageNames.test.ts` |
+| P3-6 | **Fixed** | `ZipArchive.find` builds a lowercase index on the first miss instead of scanning all entries on every miss. | `test/zipFind.test.ts` |
+| P2-9 | **Fixed** | Library → View → *Back up highlights & notes* shares one JSON file (highlights, notes, bookmarks, places, finished marks, edited titles, collections, stats, settings; not the books). *Restore a backup…* puts it back on any phone: books are matched by file fingerprint; data for books not on the phone waits in `restore.json` and is applied when the same file is added. Annotations merge by id (restoring twice adds nothing); every field of a picked file is checked. | `test/ui/backup.test.tsx`: backup → empty disk + fresh modules → restore → restart → add the file under another name → highlight, note, bookmark, place, collection back (fails with the add-time step removed); damaged/foreign files refused or cleaned |
+| P2-11 | **Fixed — iPhone NOT VERIFIED** | iOS declares EPUB, FB2, MOBI/PRC, AZW3/AZW, TXT and ZIP as files it can open (`ios.infoPlist` in `app.json`, rank Alternate, copies not opened in place). The file:// URL reaches the same `+native-intent` path as Android (checked in Expo's scene delegate and expo-linking sources); the copy iOS leaves in Documents/Inbox is deleted after the import. | `test/ui/openWith.test.tsx` (fails with the clean-up removed); `expo config --type introspect` shows the declarations. Needs a check on the iPhone: Files → share an EPUB → Nec reader |
+| — | **iPhone selection handles: estimate fixed; exact module NOT VERIFIED** | Measured on macOS TextKit laid out as React Native lays out iOS text (`bench/textkit`): iOS justifies a loose line by also opening the gaps between letters, which the estimate (spaces only, as Android) missed by up to 73–180 pt; and the system font's letters don't scale from the 64 pt probe (≈0.5 pt per letter). Now: widths are measured at the size drawn (`charWidths.ts`), and `textKitShares()` (constants fitted on 4,908 word edges) fills justified lines as TextKit does. Held out (38,753 edges, 9 fonts, 3 sizes, 2 widths): worst 180 → 14 pt, 99 % within 24 → 3.4 pt, 90 % within 0.24 pt. Exact: `modules/text-layout/ios/TextLayoutModule.swift` lays the paragraph view's own attributed string out as RCTTextLayoutManager does and reads TextKit's caret positions; it runs only in an installed build (not Expo Go). It parses and autolinks; compiling and running it need Xcode. | `test/textkitJustify.test.ts` (TextKit fixture; fails with the iOS model off), `test/selection.test.ts`, `npx expo-modules-autolinking resolve --platform apple` |
+| P3-4 | **Left as is** | Per-book stats also feed the reading-speed estimate; dropping deleted books' entries would make it worse. | — |
+| — | **Dropped** | `noUncheckedIndexedAccess`: 265 errors app-wide (~120 in `src/engine`), nearly all bounds-checked typed-array reads in hot loops; the randomised-corruption suite already covers malformed input. | `tsc` with the flag on |
+
+Checks: `tsc --noEmit` ✅ · `expo lint` ✅ · vitest 186/186 ✅ · jest 134/134 ✅ · `expo export` android + ios ✅ · `expo-doctor` 20/20 ✅.

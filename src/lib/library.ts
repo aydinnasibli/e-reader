@@ -20,6 +20,7 @@ import {
 import type { BookFormat, Manifest, Position } from '@/engine/types';
 import { forgetAnnotations } from './annotations';
 import { fingerprintOf } from './fingerprint';
+import { claimPending } from './restore';
 import {
   FileSink,
   FileSource,
@@ -190,6 +191,18 @@ export function getBook(id: string) {
   return books.find((b) => b.id === id);
 }
 
+export function getBooks(): readonly BookEntry[] {
+  return books;
+}
+
+/** The book file's fingerprint; worked out (and kept) for books added by older versions. */
+export function fingerprintBook(b: BookEntry): string | undefined {
+  if (b.fp) return b.fp;
+  const fp = fingerprintFile(sourceFile(b));
+  if (fp) updateBook(b.id, { fp });
+  return fp;
+}
+
 export function useBook(id: string) {
   const all = useLibrary();
   return all.find((b) => b.id === id);
@@ -325,6 +338,12 @@ function addFile(file: File, name: string, size: number): AddOutcome {
       progress: 0,
       ...(fp ? { fp } : {}),
     };
+    // A restored backup may hold this book's highlights, place and collections.
+    try {
+      Object.assign(book, claimPending(id, book));
+    } catch {
+      // adding the book matters more; the saved data stays waiting
+    }
     books.unshift(book);
     return { added: book };
   } catch {

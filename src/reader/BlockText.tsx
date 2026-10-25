@@ -1,11 +1,14 @@
 import { Image } from 'expo-image';
-import { memo, useEffect, useState } from 'react';
+import { type ComponentRef, type Ref, memo, useEffect, useState } from 'react';
 import { Text, type TextLayoutEvent, View } from 'react-native';
 import { type Block, type Run, makeRun, runLink, runStyle, runText, sliceRuns } from '@/engine/types';
 import type { ReaderSettings, Theme } from '@/lib/settings';
 import type { BookData, ImageInfo } from './book';
 import { type Look, baseTextStyle, drawn, lineHeightOf, lookOf, runTextStyle, toDrawn } from './look';
 import { type Mark, applyMarks } from './marks';
+
+/** A drawn text, as its ref gives it. */
+export type TextInstance = ComponentRef<typeof Text>;
 
 interface TextProps {
   block: Block;
@@ -21,9 +24,11 @@ interface TextProps {
   /** Tap on a footnote reference. */
   onLink?: (target: string) => void;
   onTextLayout?: (e: TextLayoutEvent) => void;
+  /** The text view, for asking where its lines are drawn (see drawnLayout). */
+  textRef?: Ref<TextInstance>;
 }
 
-export const BlockText = memo(function BlockText({ block, look, theme, range, noTopMargin, noBottomMargin, marks, onLink, onTextLayout }: TextProps) {
+export const BlockText = memo(function BlockText({ block, look, theme, range, noTopMargin, noBottomMargin, marks, onLink, onTextLayout, textRef }: TextProps) {
   const d = drawn(block, look);
   let runs: Run[] = d.runs;
   if (range) {
@@ -39,6 +44,7 @@ export const BlockText = memo(function BlockText({ block, look, theme, range, no
   const segments = applyMarks(runs, marks, (o) => toDrawn(d, o) - from);
   return (
     <Text
+      ref={textRef}
       allowFontScaling={false}
       // Greedy line breaking, so a paragraph split across pages breaks exactly as measured.
       textBreakStrategy="simple"
@@ -55,8 +61,11 @@ export const BlockText = memo(function BlockText({ block, look, theme, range, no
         marginBottom: noBottomMargin ? 0 : look.marginBottom,
         paddingLeft: look.paddingLeft,
       }}>
+      {/* Always nested texts, even plain ones: React Native builds a text of only
+          strings differently from one with nested texts, so the first highlight
+          (a long-pressed word) would replace the paragraph's view under the finger,
+          and the touch it was part of would never end (the next one is lost). */}
       {segments.map((seg, i) => {
-        if (!seg.bits && !seg.bg && !seg.link) return seg.text;
         const st = runTextStyle(seg.bits, look);
         const link = seg.link;
         return (
