@@ -126,7 +126,7 @@ const KIND_LABELS: Record<CrashKind, string> = {
 
 /** The log as text to share, newest first. */
 export function crashReport(list: Crash[] = all()): string {
-  const head = `Nec e-book reader 1.0.${BUILD} · ${Platform.OS} ${Platform.Version}`;
+  const head = `Nec Reader 1.0.${BUILD} · ${Platform.OS} ${Platform.Version}`;
   const items = [...list].reverse().map((c) => {
     const meta = [new Date(c.at).toISOString(), KIND_LABELS[c.kind], c.screen, c.build !== BUILD ? `build ${c.build}` : undefined, c.count ? `${c.count} times` : undefined];
     // Hermes stacks start with the message itself.

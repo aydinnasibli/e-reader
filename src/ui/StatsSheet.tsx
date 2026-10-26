@@ -3,6 +3,7 @@ import { isFinished } from '@/lib/collections';
 import { useLibrary } from '@/lib/library';
 import { dayKey, readingSpeed, useStats } from '@/lib/stats';
 import { formatMinutes } from './format';
+import { measure } from './layout';
 import { Sheet } from './Sheet';
 import { useAppColors } from './theme';
 
@@ -71,5 +72,6 @@ const styles = StyleSheet.create({
   barCol: { alignItems: 'center', flex: 1 },
   barTrack: { flex: 1, width: 14, borderRadius: 7, justifyContent: 'flex-end', overflow: 'hidden' },
   bar: { width: 14, borderRadius: 7 },
-  note: { fontSize: 12, paddingHorizontal: 20, paddingTop: 16, lineHeight: 17 },
+  // Kept to a readable line length when the sheet is wide.
+  note: { fontSize: 12, marginHorizontal: 20, paddingTop: 16, lineHeight: 17, maxWidth: measure(12) },
 });

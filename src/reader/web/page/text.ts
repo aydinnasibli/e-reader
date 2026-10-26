@@ -10,6 +10,12 @@ export function blockOf(n: Node | null): HTMLElement | null {
   return (el?.closest('[data-b]') as HTMLElement | null) ?? null;
 }
 
+/** The element of block `b` inside `root`, and drawn offset `i` in it. */
+export function partAt(root: ParentNode, b: number, i: number): { el: HTMLElement; i: number } | null {
+  const el = root.querySelector<HTMLElement>(`[data-b="${b}"]`);
+  return el ? { el, i: Math.max(0, i) } : null;
+}
+
 /** The drawn point at a DOM place (a node and an offset in it, as ranges and selections give them). */
 export function pointOf(node: Node, offset: number): DrawnPoint | null {
   const block = blockOf(node);
@@ -23,6 +29,29 @@ export function pointOf(node: Node, offset: number): DrawnPoint | null {
     return { b, i: 0 };
   }
   return { b, i: r.toString().length };
+}
+
+/**
+ * The drawn point at a DOM place that can be between blocks (a selection
+ * reaching to a paragraph's edge, or between the parts of one): the start of
+ * the block after it, or with `end`, the end of the block before it.
+ */
+export function pointAround(node: Node, offset: number, end: boolean): DrawnPoint | null {
+  if (blockOf(node)) return pointOf(node, offset);
+  // The first block element at or after the place (blocks in document order).
+  const ref = node.childNodes[offset] ?? null;
+  const after = (el: Node) => (ref ? ref === el || !!(ref.compareDocumentPosition(el) & Node.DOCUMENT_POSITION_FOLLOWING) : !node.contains(el) && !!(node.compareDocumentPosition(el) & Node.DOCUMENT_POSITION_FOLLOWING));
+  const blocks = blocksIn(document);
+  let lo = 0;
+  let hi = blocks.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (after(blocks[mid])) hi = mid;
+    else lo = mid + 1;
+  }
+  const el = end ? blocks[lo - 1] : blocks[lo];
+  if (!el) return null;
+  return { b: Number(el.dataset.b), i: end ? lengthOf(el) : 0 };
 }
 
 /** The DOM place of drawn offset `i` in a block. */
@@ -48,7 +77,13 @@ export function rangeOf(block: HTMLElement, s: number, e: number): Range {
   return r;
 }
 
-/** Text length of a block's drawn text. */
+/** A range over drawn offsets [s, e) of block `b` inside `root`. */
+export function rangeIn(root: ParentNode, b: number, s: number, e: number): Range | null {
+  const el = root.querySelector<HTMLElement>(`[data-b="${b}"]`);
+  return el ? rangeOf(el, s, e) : null;
+}
+
+/** Text length of a block element's drawn text. */
 export const lengthOf = (block: HTMLElement) => block.textContent?.length ?? 0;
 
 /** The first visible box of a range (soft hyphens and line ends can give empty ones). */

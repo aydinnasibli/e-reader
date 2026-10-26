@@ -16,9 +16,13 @@ interface Props {
   theme: Theme;
   title: string;
   chapter?: string;
+  /** The chapter at a slider position being dragged to. */
+  chapterAt?(fraction: number): string | undefined;
   fraction: number;
   /** e.g. "2 h 10 min left in book" */
   info?: string;
+  /** The same, for a slider position being dragged to. */
+  infoAt?(fraction: number): string | undefined;
   /** "Page 412 of 830" for a slider position, in page mode. */
   pageLabel?(fraction: number): string;
   bookmarked: boolean;
@@ -99,11 +103,12 @@ export function Chrome(p: Props) {
         <View style={styles.chapterRow}>
           {chapterButton('prev', p.onPrevChapter)}
           <Text numberOfLines={1} style={[styles.chapter, { color: theme.text }]}>
-            {p.chapter ?? ' '}
+            {(drag !== null && p.chapterAt ? p.chapterAt(drag) : p.chapter) ?? ' '}
           </Text>
           {chapterButton('next', p.onNextChapter)}
         </View>
         <Slider
+          testID="progress-slider"
           style={styles.slider}
           minimumValue={0}
           maximumValue={1}
@@ -131,7 +136,7 @@ export function Chrome(p: Props) {
             </Text>
           </Tap>
           <Text numberOfLines={1} style={[styles.small, styles.info, { color: theme.muted }]}>
-            {p.info ?? ''}
+            {(drag !== null && p.infoAt ? p.infoAt(drag) : p.info) ?? ''}
           </Text>
         </View>
         <View style={[styles.tools, { borderColor: theme.border }]}>

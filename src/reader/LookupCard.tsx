@@ -7,7 +7,8 @@ import * as Haptics from 'expo-haptics';
 import { getLocales } from 'expo-localization';
 import { useEffect, useState } from 'react';
 import { ActivityIndicator, ScrollView, StyleSheet, Text, View } from 'react-native';
-import { type Definition, LANGUAGES, LookupError, type Translation, defineWord, languageName, translateText } from '@/lib/lookup';
+import { normaliseLanguage } from '@/engine/language';
+import { type Definition, LANGUAGES, LookupError, type Sense, type Translation, cleanWord, defineWord, languageName, translateTarget, translateText } from '@/lib/lookup';
 import { setSettings, type Theme, useSettings } from '@/lib/settings';
 import { Tap } from '@/ui/Tap';
 
@@ -27,17 +28,18 @@ interface Props {
 
 type State<T> = { status: 'loading' } | { status: 'done'; value: T | null } | { status: 'error'; offline: boolean };
 
-/** The language to translate into: the saved choice, else the phone's. */
-export function translateTarget(saved: string): string {
-  if (saved) return saved;
-  const phone = getLocales()[0]?.languageCode ?? 'en';
-  return LANGUAGES.find((l) => l.code.slice(0, 2) === phone)?.code ?? phone;
-}
+/** Who a definition is from, as credited under it. */
+const SOURCE_NAMES: Record<Definition['source'], string> = {
+  TDK: 'TDK Güncel Türkçe Sözlük',
+  Wiktionary: 'Wiktionary',
+  Google: 'Google Translate',
+};
 
 /** Show one kind of answer: the parent gives each kind its own card (`key`), so an answer is never read as the other kind. */
 export function LookupCard({ kind, text, lang, theme, onBack, onSwitch }: Props) {
   const settings = useSettings();
-  const to = translateTarget(settings.translateTo);
+  // Remembered per book language: English books into Turkish, Turkish books into English.
+  const to = translateTarget(lang, settings.translateTargets, settings.translateTo, getLocales()[0]?.languageCode ?? 'en');
   const [attempt, setAttempt] = useState(0);
   const [state, setState] = useState<State<Definition | Translation>>({
     status: 'loading',
@@ -84,27 +86,27 @@ export function LookupCard({ kind, text, lang, theme, onBack, onSwitch }: Props)
             </Tap>
           </View>
         );
+      const english = def.english;
       return (
         <>
           <Text style={[styles.word, { color: theme.text }]}>
             {def.word}
             {def.language ? <Text style={[styles.lang, muted]}>{'  ' + def.language}</Text> : null}
           </Text>
-          {def.senses.map((s, i) => (
-            <View key={i} style={styles.sense}>
-              {s.pos ? <Text style={[styles.pos, muted]}>{s.pos.toLowerCase()}</Text> : null}
-              {s.defs.map((d, j) => (
-                <View key={j} style={styles.def}>
-                  <Text style={[styles.num, muted]}>{j + 1}.</Text>
-                  <View style={styles.flex}>
-                    <Text style={[styles.defText, { color: theme.text }]}>{d.text}</Text>
-                    {d.example ? <Text style={[styles.example, muted]}>{d.example}</Text> : null}
-                  </View>
-                </View>
-              ))}
-            </View>
-          ))}
-          <Text style={[styles.source, muted]}>From {def.source}</Text>
+          {/* An inflected word looked up as its base word: what the form itself means. */}
+          {def.gloss ? <Text style={[styles.gloss, muted]}>{`“${cleanWord(text)}”: ${def.gloss}`}</Text> : null}
+          <Senses senses={def.senses} theme={theme} />
+          <Text style={[styles.source, muted]}>From {SOURCE_NAMES[def.source]}</Text>
+          {english ? (
+            <>
+              <Text style={[styles.section, { color: theme.text }]}>
+                In English
+                {english.word !== def.word ? <Text style={[styles.lang, muted]}>{'  ' + english.word}</Text> : null}
+              </Text>
+              <Senses senses={english.senses} theme={theme} />
+              <Text style={[styles.source, muted]}>From {SOURCE_NAMES[english.source]}</Text>
+            </>
+          ) : null}
         </>
       );
     }
@@ -159,7 +161,7 @@ export function LookupCard({ kind, text, lang, theme, onBack, onSwitch }: Props)
               <Tap
                 key={l.code}
                 haptic="select"
-                onPress={() => setSettings({ translateTo: l.code })}
+                onPress={() => setSettings({ translateTargets: { ...settings.translateTargets, [normaliseLanguage(lang) ?? '']: l.code } })}
                 accessibilityLabel={`Translate into ${l.name}`}
                 accessibilityState={{ selected: on }}
                 style={[
@@ -191,6 +193,25 @@ export function LookupCard({ kind, text, lang, theme, onBack, onSwitch }: Props)
       </ScrollView>
     </View>
   );
+}
+
+/** Numbered meanings, grouped by part of speech. */
+function Senses({ senses, theme }: { senses: Sense[]; theme: Theme }) {
+  const muted = { color: theme.muted };
+  return senses.map((s, i) => (
+    <View key={i} style={styles.sense}>
+      {s.pos ? <Text style={[styles.pos, muted]}>{s.pos.toLowerCase()}</Text> : null}
+      {s.defs.map((d, j) => (
+        <View key={j} style={styles.def}>
+          <Text style={[styles.num, muted]}>{j + 1}.</Text>
+          <View style={styles.flex}>
+            <Text style={[styles.defText, { color: theme.text }]}>{d.text}</Text>
+            {d.example ? <Text style={[styles.example, muted]}>{d.example}</Text> : null}
+          </View>
+        </View>
+      ))}
+    </View>
+  ));
 }
 
 const styles = StyleSheet.create({
@@ -228,6 +249,8 @@ const styles = StyleSheet.create({
   },
   word: { fontSize: 22, fontWeight: '700', marginBottom: 4 },
   lang: { fontSize: 14, fontWeight: '400' },
+  gloss: { fontSize: 15, fontStyle: 'italic', marginBottom: 2 },
+  section: { fontSize: 17, fontWeight: '700', marginTop: 18 },
   sense: { marginTop: 10 },
   pos: { fontSize: 13, fontStyle: 'italic', marginBottom: 4 },
   def: { flexDirection: 'row', gap: 6, marginBottom: 6 },

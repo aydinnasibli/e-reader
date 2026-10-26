@@ -31,6 +31,7 @@ function rand() {
 }
 
 const EN = 'the of and to in a is that it was he for on are as with his they at be this from have or by one had not but what all were when we there can an your which their said if do will each about how up out them then she many some so these would other into has more her two like him see time could no make than first been its who now people my made over did down only way find use may water long little very after words called just where most know'.split(' ');
+const TR = 'bir ve bu da de ne için ile ama çok gibi daha o ben sen ki mi diye kadar her şey değil ağaç gölge yaşlı adam eski sokak düşünce ışık kapı deniz kıyı ev pencere lamba çocuk arkadaş şimdi koku süre ağır adım gökyüzü yıldız sabah çay masa balkon kadın çamaşır gazete gün dükkân börek okul çarşı kalabalık akşam rüzgâr yaprak gece uyku fotoğraf hikâye şafak hava nefes'.split(' ');
 const RU = 'и в не на я быть он с что а по это она этот к но они мы как из у который то за свой что весь год от так о для ты же все тот мочь вы человек такой его сказать только или ещё бы себя один как уже до время если сам когда другой вот говорить наш мой знать стать при чтобы дело жизнь кто первый очень два день её новый рука даже во раз где там под можно ну какой после их работа без самый потом надо хотеть ли слово идти большой должен место иметь ничто'.split(' ');
 
 function sentence(words: string[]) {
@@ -78,8 +79,8 @@ function utf8(s: string): Uint8Array {
   return out.slice(0, n);
 }
 
-function cp1251(s: string): Uint8Array {
-  const d = createDecoder('windows-1251', false);
+function oneByte(s: string, enc: 'windows-1251' | 'windows-1254'): Uint8Array {
+  const d = createDecoder(enc, false);
   const rev = new Map<number, number>();
   for (let b = 0; b < 256; b++) rev.set(d.decode(new Uint8Array([b])).charCodeAt(0), b);
   const out = new Uint8Array(s.length);
@@ -151,7 +152,21 @@ export function makeRussianTxt(totalMB: number) {
     parts.push(p);
     size += p.length + 2;
   }
-  return tile(cp1251(parts.join('\r\n') + '\r\n'), totalMB);
+  return tile(oneByte(parts.join('\r\n') + '\r\n', 'windows-1251'), totalMB);
+}
+
+/** Turkish TXT in windows-1254, hard-wrapped at 70 with no blank lines, paragraphs indented. */
+export function makeTurkishTxt(totalMB: number) {
+  const parts: string[] = [];
+  let size = 0;
+  let ch = 1;
+  while (size < MB) {
+    if (size % (100 * 1024) < 600) parts.push(`${ch++}. BÖLÜM`);
+    const p = '    ' + wrap(paragraph(TR), 66);
+    parts.push(p);
+    size += p.length + 2;
+  }
+  return tile(oneByte(parts.join('\r\n') + '\r\n', 'windows-1254'), totalMB);
 }
 
 /** Minimal ZIP writer. Data is stored, or already raw-deflated when `deflated` is given. */
@@ -214,7 +229,7 @@ export function giantChapterHtml(totalMB: number) {
  * EPUB with one giant chapter (pre-deflated, passed in), many small chapters,
  * and lots of large images - the kind of file that makes other readers hang.
  */
-function makeEpub(giant: { data: Uint8Array; size: number }, smallChapters: number, images: number, imageMB: number) {
+export function makeEpub(giant: { data: Uint8Array; size: number }, smallChapters: number, images: number, imageMB: number) {
   const files: { name: string; data: Uint8Array; size?: number; deflated?: boolean }[] = [];
   files.push({ name: 'mimetype', data: utf8('application/epub+zip') });
   files.push({
@@ -248,7 +263,7 @@ function makeEpub(giant: { data: Uint8Array; size: number }, smallChapters: numb
 }
 
 /** UTF-8 FB2 with many sections and big embedded base64 images. */
-function makeFb2(totalMB: number, images: number, imageMB: number) {
+export function makeFb2(totalMB: number, images: number, imageMB: number) {
   const parts: string[] = [];
   let size = 0;
   let s = 1;
@@ -352,7 +367,7 @@ async function measure(label: string, fileName: string, bytes: Uint8Array) {
 }
 
 /** A Kindle book: chapters of English text, PalmDOC-compressed, with images. */
-function makeMobi(totalMB: number, images: number) {
+export function makeMobi(totalMB: number, images: number) {
   // An 8 KB unit (page break, heading, paragraphs) repeated, so its 4 KB text
   // records repeat and the generator compresses each kind once.
   let unit = '<mbp:pagebreak/><h2>Chapter</h2>';
@@ -379,4 +394,6 @@ export async function main() {
   }
   if (want('fb2')) await measure('FB2 UTF-8 + 40 big images', 'big.fb2', makeFb2(50, 40, 1));
   if (want('mobi')) await measure('MOBI PalmDOC + 20 images', 'big.mobi', makeMobi(30, 20));
+  // (Last, so the books above are generated from the same random numbers as before it was added.)
+  if (want('txt1254')) await measure('TXT Turkish windows-1254, wrapped', 'tr.txt', makeTurkishTxt(30));
 }

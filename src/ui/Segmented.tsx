@@ -25,8 +25,9 @@ interface Props<T extends string> {
 export function Segmented<T extends string>({ value, options, render, label, onPick, track, thumb, fill, style, itemStyle }: Props<T>) {
   const [boxes, setBoxes] = useState<Record<string, LayoutRectangle>>({});
   const box = boxes[value];
-  const x = useRef(new Animated.Value(0)).current;
-  const w = useRef(new Animated.Value(0)).current;
+  // In state, not refs: the thumb's style reads them while drawing.
+  const [x] = useState(() => new Animated.Value(0));
+  const [w] = useState(() => new Animated.Value(0));
   const placed = useRef(false);
   useEffect(() => {
     if (!box) return;

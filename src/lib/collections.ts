@@ -105,20 +105,37 @@ export function matches(b: BookEntry, f: Filter): boolean {
   }
 }
 
+let collator: Intl.Collator | null = null;
+/** Compares titles and names as the phone's language sorts them, ignoring case (made once: making one is slow). */
+function compare(a: string, b: string): number {
+  try {
+    collator ??= new Intl.Collator(undefined, { sensitivity: 'accent' });
+    return collator.compare(a, b);
+  } catch {
+    return a.toLocaleLowerCase() < b.toLocaleLowerCase() ? -1 : a.toLocaleLowerCase() > b.toLocaleLowerCase() ? 1 : 0;
+  }
+}
+
+/** Books sorted by `key`. Runs on every library change (each saved reading place), so each book's sort text is worked out once. */
 export function sortBooks(books: BookEntry[], key: SortKey): BookEntry[] {
   const out = [...books];
-  const text = (s: string) => s.toLocaleLowerCase();
   switch (key) {
     case 'recent':
       return out.sort((a, b) => b.openedAt - a.openedAt);
     case 'added':
       return out.sort((a, b) => b.addedAt - a.addedAt);
-    case 'title':
-      return out.sort((a, b) => text(a.title).localeCompare(text(b.title)));
-    case 'author':
-      return out.sort((a, b) => text(a.author || '￿').localeCompare(text(b.author || '￿')) || text(a.title).localeCompare(text(b.title)));
     case 'progress':
       return out.sort((a, b) => (b.percent ?? 0) - (a.percent ?? 0));
+    case 'title':
+    case 'author': {
+      // Books without an author go last.
+      const keyed = out.map((b) => ({ b, author: b.author.trim(), title: b.title.trim() }));
+      keyed.sort((x, y) => {
+        if (key === 'author' && !x.author !== !y.author) return x.author ? -1 : 1;
+        return (key === 'author' ? compare(x.author, y.author) : 0) || compare(x.title, y.title);
+      });
+      return keyed.map((x) => x.b);
+    }
   }
 }
 

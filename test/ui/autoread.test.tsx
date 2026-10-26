@@ -25,6 +25,7 @@ jest.mock('@/lib/library', () => {
     useLiveBook: () => undefined,
     updateBook: () => {},
     reprocessBook: () => {},
+    setBookOpen: () => {},
     sourceFile: () => ({}),
   };
 });

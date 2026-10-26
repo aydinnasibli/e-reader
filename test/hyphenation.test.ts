@@ -31,6 +31,31 @@ describe('hyphenation', () => {
     expect(pickLanguage(undefined, '12345')).toBeNull();
   });
 
+  it('takes the language however the book names it, or tells it from the text', () => {
+    expect(pickLanguage('tur', 'Kitaplarımızdan geldik')).toBe('tr');
+    expect(pickLanguage('Turkish', 'Kitaplarımızdan geldik')).toBe('tr');
+    expect(pickLanguage('tr-TR', 'Kitaplarımızdan geldik')).toBe('tr');
+    // A book that doesn't say (TXT): a paragraph long enough to tell.
+    const tr = 'Bu kitap, uzun bir yolculuğun ve o yolculukta karşılaşılan insanların hikâyesidir. '.repeat(4);
+    expect(pickLanguage(undefined, tr)).toBe('tr');
+    // Too short to tell: by the script.
+    expect(pickLanguage(undefined, 'kitaplarımızdan geldik')).toBe('en');
+  });
+
+  it('Turkish: a word with a capital İ or I breaks where it does in lower case', () => {
+    const show = (w: string) => {
+      const pts = hyphenPoints(w, 'tr');
+      let out = '';
+      for (let i = 0; i < w.length; i++) out += (pts.includes(i) ? '-' : '') + w[i];
+      return out;
+    };
+    expect(show('istanbul')).toBe('is-tan-bul');
+    expect(show('İstanbul')).toBe('İs-tan-bul');
+    expect(show('İnsanlığın')).toBe('İn-san-lı-ğın');
+    expect(show('Öğretmenimiz')).toBe('Öğ-ret-me-ni-miz');
+    expect(show('ISLAKLIĞI')).toBe(show('ıslaklığı').toLocaleUpperCase('tr'));
+  });
+
   it('finds syllable break points', () => {
     const text = 'international';
     const pts = hyphenPoints(text, 'en');
@@ -59,5 +84,15 @@ describe('hyphenation', () => {
     const d = drawn(block, look(undefined));
     expect(d.text).toBe('international');
     expect(toDrawn(d, 5)).toBe(5);
+  });
+});
+
+describe('text that looks like markup', () => {
+  it('a "<" in a paragraph does not stop the rest of it being hyphenated', () => {
+    const text = 'If x<y then everything afterwards needs hyphenation too';
+    const at = text.indexOf('hyphenation');
+    expect(hyphenPoints(text, 'en').filter((p) => p > at && p < at + 'hyphenation'.length).length).toBeGreaterThan(0);
+    // The break points still line up with the text.
+    expect(hyphenPoints('<<international>>', 'en').every((p) => p > 2 && p < 15)).toBe(true);
   });
 });

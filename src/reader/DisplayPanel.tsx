@@ -5,11 +5,12 @@
 
 import Ionicons from '@expo/vector-icons/Ionicons';
 import Slider from '@react-native-community/slider';
+import * as Font from 'expo-font';
 import * as Haptics from 'expo-haptics';
 import { type ReactNode, createContext, useContext, useEffect, useRef, useState } from 'react';
 import { Animated, Platform, Pressable, ScrollView, StyleSheet, Switch, Text, View, useWindowDimensions } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { FONTS, ensureFont, fontFace, isFontLoaded } from '@/lib/fonts';
+import { FONTS, type FontDef, fontFace, isFontLoaded } from '@/lib/fonts';
 import {
   BG_SWATCHES,
   FONT_SIZE,
@@ -36,6 +37,20 @@ const TABS: { key: Tab; label: string }[] = [
   { key: 'colors', label: 'Colours' },
   { key: 'page', label: 'Page' },
 ];
+
+/**
+ * The "Aa" of each font in the panel needs only the font's regular face:
+ * loading every face of every font for it would be many megabytes. A font
+ * read with is loaded whole (fonts.ts) and shown with that.
+ */
+const previewFamily = (id: string) => `${id}-preview`;
+function loadPreview(def: FontDef): Promise<void> {
+  if (!def.files || isFontLoaded(def.id) || Font.isLoaded(previewFamily(def.id))) return Promise.resolve();
+  return Font.loadAsync({ [previewFamily(def.id)]: def.files.regular });
+}
+function previewFace(id: string) {
+  return !isFontLoaded(id) && Font.isLoaded(previewFamily(id)) ? { fontFamily: previewFamily(id) } : fontFace(id, 'regular', false, false);
+}
 
 /** A slider being dragged stops the panel scrolling, which would otherwise take the gesture. */
 const Sliding = createContext<(active: boolean) => void>(() => {});
@@ -72,7 +87,7 @@ export function DisplayPanel({ visible, onClose, settings, theme, onSlide }: Pro
   useEffect(() => {
     if (!visible) return;
     let alive = true;
-    for (const f of FONTS) if (!isFontLoaded(f.id)) ensureFont(f.id).then(() => alive && setFontsTick((t) => t + 1), () => {});
+    for (const f of FONTS) loadPreview(f).then(() => alive && setFontsTick((t) => t + 1), () => {});
     return () => {
       alive = false;
     };
@@ -140,10 +155,11 @@ function TextTab({ s, c, slide }: { s: ReaderSettings; c: Theme; slide: SlideHan
               key={f.id}
               haptic="select"
               accessibilityState={{ selected: active }}
-              onPress={() => ensureFont(f.id).then(() => setSettings({ font: f.id }), () => setSettings({ font: f.id }))}
+              // The page loads the font itself: no waiting for the phone's own copy.
+              onPress={() => setSettings({ font: f.id })}
               style={[styles.fontCard, { backgroundColor: c.bg, borderColor: active ? c.accent : c.border }]}>
-              <Text style={[fontFace(f.id, 'regular', false, false), { color: c.text, fontSize: 26 }]}>Aa</Text>
-              <Text numberOfLines={1} style={[fontFace(f.id, 'regular', false, false), { color: c.text, fontSize: 13 }]}>
+              <Text style={[previewFace(f.id), { color: c.text, fontSize: 26 }]}>Aa</Text>
+              <Text numberOfLines={1} style={[previewFace(f.id), { color: c.text, fontSize: 13 }]}>
                 {f.label}
               </Text>
               {f.note ? <Text style={{ color: c.muted, fontSize: 10 }}>{f.note}</Text> : null}

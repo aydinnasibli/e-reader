@@ -29,10 +29,16 @@ export interface PageFrame {
   /** Space above and below the text (scroll mode: clear of the status bar and the badge). */
   top: number;
   bottom: number;
-  /** Width of one text column; two side by side in a spread, `gap` apart. */
+  /** Width of one text column; columns (pages) follow each other `column + gap` apart, two to a screen in a spread. */
   column: number;
   gap: number;
   spread: boolean;
+  /**
+   * Page mode: the notch or camera at each side. Pages are drawn only
+   * between them, so a screen is `width - inset.left - inset.right` wide and
+   * the middle of a spread is just the margins.
+   */
+  inset?: { left: number; right: number };
 }
 
 export interface Chunk {
@@ -40,10 +46,23 @@ export interface Chunk {
   html: string;
   /** Characters in the chunk, for page numbers. */
   chars: number;
+  /**
+   * Page mode: the chunk goes on from chunk `c - 1` on that chunk's last page
+   * instead of starting a page of its own (the two were cut apart only for
+   * size, in the middle of a chapter; see html.ts joinsBefore). Never two in
+   * a row, so a page depends on at most the chunk before it.
+   */
+  joins?: boolean;
 }
 
-/** Where to show: a drawn point, or the first or last page of a chunk. */
-export type Target = { at: DrawnPoint } | { chunk: number; edge: 'first' | 'last' };
+/**
+ * Where to show: a drawn point, the first or last page of a chunk, or a page
+ * of a chunk by its index (page mode; scroll mode shows the chunk's start).
+ * A point is shown on the page holding it (pages are always cut the same way:
+ * page N always shows the same text); with `top` (the layout changed) its line
+ * is also marked for a moment, to find the place read on the page.
+ */
+export type Target = { at: DrawnPoint; top?: boolean } | { chunk: number; edge: 'first' | 'last' } | { chunk: number; page: number };
 
 export interface PageSetup {
   mode: 'page' | 'scroll';
@@ -55,6 +74,8 @@ export interface PageSetup {
   /** Text shown when there's nothing more yet (still converting), and at the end in scroll mode. */
   processing: string;
   theEnd: string;
+  /** The book's language ('tr'), for the page's own language rules (Turkish i in ligatures, hyphens). */
+  lang?: string;
 }
 
 /** A background mark, in drawn offsets of block `b`. */
@@ -83,20 +104,37 @@ export type ToPage =
   | { t: 'tool'; marking: boolean }
   | { t: 'clearSelection' }
   /** Scroll mode: auto-scroll speed in points a second, 0 = off. */
-  | { t: 'auto'; speed: number };
+  | { t: 'auto'; speed: number }
+  /**
+   * Page mode: how many pages these chunks take in the layout `key` (the
+   * current setup's), each laid out as a chunk starting on a page of its own
+   * (not joined), out of sight. Answered with 'measured'; not at all if `key`
+   * isn't the layout the page has.
+   */
+  | { t: 'measure'; key: string; chunks: Chunk[] };
 
 export type FromPage =
   | { t: 'ready' }
   /**
    * The page (page mode) or the top of the screen (scroll mode) shows from
-   * `first`; the next page starts at `next`. `turned`: a page turn got here.
-   * `key` is the layout it was laid out with.
+   * `first`, in chunk `chunk`; the next page starts at `next`. `turned`: a
+   * page turn got here. `key` is the layout it was laid out with.
    */
   | { t: 'shown'; first: DrawnPoint; next: DrawnPoint | null; chunk: number; turned: boolean; key: string; lastPage: boolean }
-  /** Pages per chunk laid out (page mode), for page numbers; `page` is the column shown, counted in its chunk. */
-  | { t: 'pages'; counts: { c: number; pages: number; chars: number }[]; chunk: number; page: number }
+  /**
+   * Pages per chunk laid out (page mode), for page numbers. A page belongs to
+   * the chunk of its first character, so a chunk's pages are the ones that
+   * start in it: where a chunk goes on from the one before (Chunk.joins), the
+   * page they share is the earlier chunk's last, and a short chunk can have
+   * none. `chunk` and `page` are the chunk of the page shown (in a spread, the
+   * left-hand one) and its index among that chunk's pages; `span` is how many
+   * pages are showing (2 in a spread whose right-hand page has text; absent: 1).
+   */
+  | { t: 'pages'; counts: { c: number; pages: number; chars: number }[]; chunk: number; page: number; span?: 1 | 2 }
   /** The page needs these chunks (it reached the edge of what it has). */
   | { t: 'need'; chunks: number[] }
+  /** The answer to 'measure': pages (columns, as in 'pages') each chunk takes on its own in layout `key`. */
+  | { t: 'measured'; key: string; counts: { c: number; pages: number }[] }
   /** A tap in the middle (page mode), or anywhere off a link (scroll mode). */
   | { t: 'tap' }
   | { t: 'link'; target: string }

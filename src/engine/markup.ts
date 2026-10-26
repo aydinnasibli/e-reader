@@ -7,33 +7,47 @@ export interface MarkupHandler {
   open(name: string, attrs: Record<string, string>, selfClosing: boolean): void;
   close(name: string): void;
   text(text: string): void;
+  /** The content of a <style> or <script> element, as is (no tags, no entities), in pieces. */
+  raw?(text: string): void;
 }
 
-const ENTITIES: Record<string, string> = {
-  amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", nbsp: ' ', shy: '­',
-  mdash: '—', ndash: '–', hellip: '…', laquo: '«', raquo: '»',
-  lsquo: '‘', rsquo: '’', ldquo: '“', rdquo: '”', sbquo: '‚', bdquo: '„',
-  bull: '•', middot: '·', copy: '©', reg: '®', trade: '™', deg: '°',
-  times: '×', divide: '÷', minus: '−', plusmn: '±', sect: '§', para: '¶',
-  dagger: '†', Dagger: '‡', prime: '′', Prime: '″', thinsp: ' ', ensp: ' ',
-  emsp: ' ', zwnj: '‌', zwj: '‍', lrm: '‎', rlm: '‏', euro: '€',
-  pound: '£', yen: '¥', cent: '¢', iexcl: '¡', iquest: '¿', frac12: '½',
-  frac14: '¼', frac34: '¾', sup1: '¹', sup2: '²', sup3: '³', acute: '´',
-  uml: '¨', cedil: '¸', ordf: 'ª', ordm: 'º', not: '¬', micro: 'µ',
-  larr: '←', rarr: '→', uarr: '↑', darr: '↓', harr: '↔', loz: '◊',
-  agrave: 'à', aacute: 'á', acirc: 'â', atilde: 'ã', auml: 'ä', aring: 'å',
-  aelig: 'æ', ccedil: 'ç', egrave: 'è', eacute: 'é', ecirc: 'ê', euml: 'ë',
-  igrave: 'ì', iacute: 'í', icirc: 'î', iuml: 'ï', ntilde: 'ñ', ograve: 'ò',
-  oacute: 'ó', ocirc: 'ô', otilde: 'õ', ouml: 'ö', oslash: 'ø', ugrave: 'ù',
-  uacute: 'ú', ucirc: 'û', uuml: 'ü', yacute: 'ý', yuml: 'ÿ', szlig: 'ß',
-  Agrave: 'À', Aacute: 'Á', Acirc: 'Â', Atilde: 'Ã', Auml: 'Ä', Aring: 'Å',
-  AElig: 'Æ', Ccedil: 'Ç', Egrave: 'È', Eacute: 'É', Ecirc: 'Ê', Euml: 'Ë',
-  Igrave: 'Ì', Iacute: 'Í', Icirc: 'Î', Iuml: 'Ï', Ntilde: 'Ñ', Ograve: 'Ò',
-  Oacute: 'Ó', Ocirc: 'Ô', Otilde: 'Õ', Ouml: 'Ö', Oslash: 'Ø', Ugrave: 'Ù',
-  Uacute: 'Ú', Ucirc: 'Û', Uuml: 'Ü', Yacute: 'Ý', oelig: 'œ', OElig: 'Œ',
-  scaron: 'š', Scaron: 'Š', alpha: 'α', beta: 'β', gamma: 'γ', delta: 'δ',
-  epsilon: 'ε', lambda: 'λ', mu: 'μ', pi: 'π', sigma: 'σ', omega: 'ω',
-};
+// The HTML 4 named entities (as HTML5 decodes them), and a few later ones
+// ebooks use. Names are case-sensitive: &Omega; is Ω, &omega; is ω.
+const ENTITIES: Record<string, string> = {};
+// Latin-1: &nbsp; to &yuml; are U+00A0..U+00FF in order.
+'nbsp iexcl cent pound curren yen brvbar sect uml copy ordf laquo not shy reg macr deg plusmn sup2 sup3 acute micro para middot cedil sup1 ordm raquo frac14 frac12 frac34 iquest Agrave Aacute Acirc Atilde Auml Aring AElig Ccedil Egrave Eacute Ecirc Euml Igrave Iacute Icirc Iuml ETH Ntilde Ograve Oacute Ocirc Otilde Ouml times Oslash Ugrave Uacute Ucirc Uuml Yacute THORN szlig agrave aacute acirc atilde auml aring aelig ccedil egrave eacute ecirc euml igrave iacute icirc iuml eth ntilde ograve oacute ocirc otilde ouml divide oslash ugrave uacute ucirc uuml yacute thorn yuml'
+  .split(' ')
+  .forEach((name, i) => (ENTITIES[name] = String.fromCharCode(0xa0 + i)));
+// Greek: &Alpha; to &Omega; and &alpha; to &omega; follow the Unicode order (there's no capital final sigma).
+'Alpha Beta Gamma Delta Epsilon Zeta Eta Theta Iota Kappa Lambda Mu Nu Xi Omicron Pi Rho - Sigma Tau Upsilon Phi Chi Psi Omega'
+  .split(' ')
+  .forEach((name, i) => {
+    if (name === '-') return;
+    ENTITIES[name] = String.fromCharCode(0x391 + i);
+    ENTITIES[name.toLowerCase()] = String.fromCharCode(0x3b1 + i);
+  });
+for (const pair of (
+  'quot:22 amp:26 apos:27 lt:3c gt:3e QUOT:22 AMP:26 LT:3c GT:3e COPY:a9 REG:ae ' +
+  'OElig:152 oelig:153 Scaron:160 scaron:161 Yuml:178 fnof:192 circ:2c6 tilde:2dc sigmaf:3c2 thetasym:3d1 upsih:3d2 piv:3d6 ' +
+  'ensp:2002 emsp:2003 thinsp:2009 hairsp:200a ZeroWidthSpace:200b zwnj:200c zwj:200d lrm:200e rlm:200f hyphen:2010 ' +
+  'ndash:2013 mdash:2014 horbar:2015 lsquo:2018 rsquo:2019 sbquo:201a ldquo:201c rdquo:201d bdquo:201e dagger:2020 Dagger:2021 ' +
+  'bull:2022 hellip:2026 permil:2030 prime:2032 Prime:2033 lsaquo:2039 rsaquo:203a oline:203e frasl:2044 euro:20ac ' +
+  'image:2111 weierp:2118 real:211c trade:2122 alefsym:2135 frac13:2153 frac23:2154 frac15:2155 frac16:2159 frac18:215b ' +
+  'frac38:215c frac58:215d frac78:215e larr:2190 uarr:2191 rarr:2192 darr:2193 harr:2194 crarr:21b5 lArr:21d0 uArr:21d1 ' +
+  'rArr:21d2 dArr:21d3 hArr:21d4 forall:2200 part:2202 exist:2203 empty:2205 nabla:2207 isin:2208 notin:2209 ni:220b ' +
+  'prod:220f sum:2211 minus:2212 lowast:2217 radic:221a prop:221d infin:221e ang:2220 and:2227 or:2228 cap:2229 cup:222a ' +
+  'int:222b there4:2234 sim:223c cong:2245 asymp:2248 ne:2260 equiv:2261 le:2264 ge:2265 sub:2282 sup:2283 nsub:2284 ' +
+  'sube:2286 supe:2287 oplus:2295 otimes:2297 perp:22a5 sdot:22c5 lceil:2308 rceil:2309 lfloor:230a rfloor:230b ' +
+  'lang:27e8 rang:27e9 loz:25ca spades:2660 clubs:2663 hearts:2665 diams:2666'
+).split(' ')) {
+  const [name, hex] = pair.split(':');
+  ENTITIES[name] = String.fromCharCode(parseInt(hex, 16));
+}
+
+// &#128; to &#159; name the windows-1252 characters there, as old HTML meant them (&#150; is an en dash).
+const C1 = '20ac 81 201a 192 201e 2026 2020 2021 2c6 2030 160 2039 152 8d 17d 8f 90 2018 2019 201c 201d 2022 2013 2014 2dc 2122 161 203a 153 9d 17e 178'
+  .split(' ')
+  .map((h) => parseInt(h, 16));
 
 const ENTITY_RE = /&(#[xX][0-9a-fA-F]+|#[0-9]+|[a-zA-Z][a-zA-Z0-9]*);/g;
 
@@ -41,11 +55,12 @@ export function decodeEntities(s: string): string {
   if (s.indexOf('&') === -1) return s;
   return s.replace(ENTITY_RE, (m, e: string) => {
     if (e[0] === '#') {
-      const cp = e[1] === 'x' || e[1] === 'X' ? parseInt(e.slice(2), 16) : parseInt(e.slice(1), 10);
-      if (!cp || cp > 0x10ffff) return '';
+      let cp = e[1] === 'x' || e[1] === 'X' ? parseInt(e.slice(2), 16) : parseInt(e.slice(1), 10);
+      if (cp >= 0x80 && cp <= 0x9f) cp = C1[cp - 0x80];
+      if (!cp || cp > 0x10ffff || (cp >= 0xd800 && cp <= 0xdfff)) return '\ufffd';
       return String.fromCodePoint(cp);
     }
-    return ENTITIES[e] ?? ENTITIES[e.toLowerCase()] ?? m;
+    return ENTITIES[e] ?? m;
   });
 }
 
@@ -68,6 +83,12 @@ export class MarkupTokenizer {
   private raw: RegExp | null = null;
   /** Skipping an oversized tag: the quote character we're inside, or 0. */
   private skipping: number | null = null;
+  /**
+   * Inside a comment, CDATA section or declaration: what ends it, and whether
+   * its content is text. Searched for as the input arrives, so one that never
+   * ends costs no more than reading past it.
+   */
+  private until: { end: string; text: boolean } | null = null;
 
   constructor(private h: MarkupHandler) {}
 
@@ -96,13 +117,24 @@ export class MarkupTokenizer {
         // Searched in place: lowercasing the buffer can change its length (Turkish İ).
         this.raw.lastIndex = pos;
         const close = this.raw.exec(buf);
-        if (!close) {
-          // Keep enough to see a closing tag cut in half by the next chunk.
-          pos = final ? len : Math.max(pos, len - 64);
-          break;
-        }
-        pos = close.index;
+        // Keep enough to see a closing tag cut in half by the next chunk.
+        const stop = close ? close.index : final ? len : Math.max(pos, len - 64);
+        if (stop > pos) this.h.raw?.(buf.slice(pos, stop));
+        pos = stop;
+        if (!close) break;
         this.raw = null;
+        continue;
+      }
+      if (this.until) {
+        const { end, text } = this.until;
+        const at = buf.indexOf(end, pos);
+        // Keep what could be the start of the end marker cut off by the next chunk.
+        const stop = at >= 0 ? at : final ? len : Math.max(pos, len - end.length + 1);
+        if (text && stop > pos) this.h.text(buf.slice(pos, stop));
+        pos = stop;
+        if (at < 0) break;
+        pos += end.length;
+        this.until = null;
         continue;
       }
       if (this.skipping !== null) {
@@ -151,37 +183,20 @@ export class MarkupTokenizer {
         break;
       }
       const next = buf.charCodeAt(pos + 1);
-      if (next === 33 /* ! */) {
+      if (next === 33 /* ! */ || next === 63 /* ? */) {
+        // Wait for enough input to tell a comment or CDATA section from other declarations.
+        if (!final && len - pos < 9 && ('<!--'.startsWith(buf.slice(pos, pos + 4)) || '<![CDATA['.startsWith(buf.slice(pos)))) break;
         if (buf.startsWith('<!--', pos)) {
-          const end = buf.indexOf('-->', pos + 4);
-          if (end === -1) {
-            if (final) pos = len;
-            break;
-          }
-          pos = end + 3;
-          continue;
+          this.until = { end: '-->', text: false };
+          pos += 4;
+        } else if (buf.startsWith('<![CDATA[', pos)) {
+          this.until = { end: ']]>', text: true };
+          pos += 9;
+        } else {
+          // <!DOCTYPE ...>, <?xml ...?>
+          this.until = { end: '>', text: false };
+          pos += 2;
         }
-        if (buf.startsWith('<![CDATA[', pos)) {
-          const end = buf.indexOf(']]>', pos + 9);
-          if (end === -1) {
-            if (final) {
-              this.h.text(buf.slice(pos + 9));
-              pos = len;
-            }
-            break;
-          }
-          this.h.text(buf.slice(pos + 9, end));
-          pos = end + 3;
-          continue;
-        }
-      }
-      if (next === 33 || next === 63 /* ? */) {
-        const end = buf.indexOf('>', pos);
-        if (end === -1) {
-          if (final) pos = len;
-          break;
-        }
-        pos = end + 1;
         continue;
       }
       const isTagStart = next === 47 /* / */ || (next >= 65 && next <= 90) || (next >= 97 && next <= 122) || next === 95 || next > 127;

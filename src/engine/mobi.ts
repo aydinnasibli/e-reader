@@ -11,15 +11,19 @@
 
 import { createDecoder } from './decode';
 import { HtmlToBlocks } from './html';
-import { BookError, type ByteSource, DRM_MESSAGE, type IngestContext } from './io';
+import { BookError, type ByteSource, CUT_SHORT, DRM_MESSAGE, type IngestContext } from './io';
+import { bookLanguage } from './language';
 import { MarkupTokenizer } from './markup';
 import { ENGINE_VERSION, type ImageRef, type Manifest } from './types';
-import { BookWriter } from './writer';
+import { pictureSize } from './picture';
+import { BookWriter, cleanText, pictureLines } from './writer';
 
 const u16 = (b: Uint8Array, o: number) => (b[o] << 8) | b[o + 1];
 const u32 = (b: Uint8Array, o: number) => ((b[o] << 24) >>> 0) + ((b[o + 1] << 16) | (b[o + 2] << 8) | b[o + 3]);
 
 const NO_INDEX = 0xffffffff;
+/** Bytes of pictures read for their sizes between two pauses. */
+const PROBE_BUDGET = 64 * 1024;
 
 export class MobiError extends BookError {}
 
@@ -32,11 +36,12 @@ interface Pdb {
 
 function readPdb(src: ByteSource): Pdb {
   const head = src.read(0, 78);
-  if (head.length < 78) throw new MobiError('This file is too small to be a Kindle book');
+  if (head.length < 78) throw new MobiError(CUT_SHORT);
   const type = String.fromCharCode(...head.subarray(60, 64));
   const creator = String.fromCharCode(...head.subarray(64, 68));
   const count = u16(head, 76);
   const list = src.read(78, count * 8);
+  if (list.length < count * 8) throw new MobiError(CUT_SHORT);
   const offsets: number[] = [];
   for (let i = 0; i < count; i++) offsets.push(u32(list, i * 8));
   offsets.push(src.size);
@@ -44,7 +49,8 @@ function readPdb(src: ByteSource): Pdb {
 }
 
 export function isMobi(src: ByteSource): boolean {
-  if (src.size < 78) return false;
+  // (Even cut short before its list of records: then it's told it's damaged.)
+  if (src.size < 68) return false;
   const head = src.read(60, 8);
   const tc = String.fromCharCode(...head);
   return tc === 'BOOKMOBI' || tc === 'TEXtREAd';
@@ -197,29 +203,49 @@ const exthNumber = (h: Header, type: number): number | null => {
 export async function ingestMobi(ctx: IngestContext): Promise<Manifest> {
   const { src } = ctx;
   const pdb = readPdb(src);
+  // The list of records at the start still names those a file cut short (a
+  // download that didn't finish) has lost: its header, or text, runs past the
+  // end. (Pictures after the text can go missing alone.)
+  const runsPast = (index: number) => pdb.offsets[index + 1] > src.size;
+  if (runsPast(0)) throw new MobiError(CUT_SHORT);
   const h = readHeader(src, pdb, 0);
   if (h.encryption) throw new MobiError(DRM_MESSAGE);
   if (h.compression === 17480) throw new MobiError('This Kindle book uses HUFF/CDIC compression, which isn’t supported yet.');
   if (h.compression !== 1 && h.compression !== 2) throw new MobiError(`Unknown Kindle compression (${h.compression}).`);
+  const count = Math.min(h.textRecords, pdb.offsets.length - 2 - h.base);
+  if (count > 0 && runsPast(h.base + count)) throw new MobiError(CUT_SHORT);
 
   const kf8 = h.version >= 8;
-  const title = exthString(h, 503) || h.title || ctx.fallbackTitle;
-  const author = exthString(h, 100);
-  const lang = exthString(h, 524) || undefined;
+  const title = cleanText(exthString(h, 503) || h.title || ctx.fallbackTitle);
+  const author = cleanText(exthString(h, 100));
+  const lang = exthString(h, 524);
 
   const w = new BookWriter(ctx.sink);
   const images: Record<string, ImageRef> = {};
   const firstImage = h.firstImage !== NO_INDEX ? h.base + h.firstImage : -1;
 
+  // Each picture's page space, from the size the start of its record gives
+  // (a little more of a JPEG's, as long as not too much is read between pauses).
+  const imageSpace = new Map<string, number>();
+  let probeBudget = PROBE_BUDGET;
   const imageRef = (recIndex: number): string | null => {
     if (firstImage < 0 || recIndex < firstImage || recIndex >= pdb.offsets.length - 1) return null;
     const key = `rec:${recIndex}`;
     if (!images[key]) {
       const off = pdb.offsets[recIndex];
       const len = pdb.offsets[recIndex + 1] - off;
-      const ext = sniffImageExt(src.read(off, 8));
+      const head = src.read(off, Math.min(len, 4 * 1024));
+      const ext = sniffImageExt(head);
       if (!ext) return null;
       images[key] = { pdb: [off, len], ext };
+      probeBudget -= head.length;
+      let size = pictureSize(head);
+      if (!size && ext === 'jpg' && len > head.length && probeBudget >= 16 * 1024) {
+        const more = src.read(off, Math.min(len, 16 * 1024));
+        probeBudget -= more.length;
+        size = pictureSize(more);
+      }
+      if (size) imageSpace.set(key, pictureLines(size[0], size[1]));
     }
     return key;
   };
@@ -253,6 +279,7 @@ export async function ingestMobi(ctx: IngestContext): Promise<Manifest> {
       if (embed) return imageRef(firstImage + base32(embed[1]) - 1);
       return null;
     },
+    imageLines: (key) => imageSpace.get(key),
   });
   const tok = new MarkupTokenizer(html);
   const decoder = createDecoder(h.encoding === 65001 || kf8 ? 'utf-8' : 'windows-1252');
@@ -276,7 +303,6 @@ export async function ingestMobi(ctx: IngestContext): Promise<Manifest> {
   };
   if (plain) tok.feed('<p>');
 
-  const count = Math.min(h.textRecords, pdb.offsets.length - 2 - h.base);
   for (let i = 1; i <= count; i++) {
     const idx = h.base + i;
     const start = pdb.offsets[idx];
@@ -290,22 +316,26 @@ export async function ingestMobi(ctx: IngestContext): Promise<Manifest> {
     if (done >= textEnd) break;
     ctx.progress(i / count);
     await ctx.pause();
+    probeBudget = PROBE_BUDGET;
   }
   feed(decoder.end());
   if (plain) tok.feed('</p>');
   tok.end();
   html.finish();
   w.finish();
+  await ctx.pause();
 
   return {
     v: ENGINE_VERSION,
     format: kf8 ? 'azw3' : 'mobi',
     title,
     author,
-    lang,
+    lang: bookLanguage(lang, w.textSample()),
     totalBlocks: w.totalBlocks,
     totalChars: w.totalChars,
     chunks: w.chunks,
+    weights: w.weights,
+    opens: w.opens,
     toc: w.headings,
     images,
     cover,

@@ -3,7 +3,7 @@
 // own errors are never shown as a translation.
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { LookupError, MYMEMORY_PIECE, MYMEMORY_TOTAL, parseMyMemory, translateText } from '../src/lib/lookup';
+import { LookupError, MYMEMORY_PIECE, MYMEMORY_TOTAL, parseMyMemory, translateTarget, translateText } from '../src/lib/lookup';
 
 type Reply = { status?: number; body: unknown };
 const calls: string[] = [];
@@ -86,5 +86,29 @@ describe('translation', () => {
     ctl.abort();
     await expect(translateText('Hello world.', 'ru', ctl.signal)).rejects.toBeInstanceOf(LookupError);
     expect(viaMyMemory()).toHaveLength(0);
+  });
+});
+
+describe('where a book’s text is translated to', () => {
+  it('remembered per book language: English books into Turkish, Turkish books into English', () => {
+    const chosen = { en: 'tr', tr: 'en' };
+    expect(translateTarget('en-GB', chosen, '', 'tr')).toBe('tr');
+    expect(translateTarget('tur', chosen, '', 'tr')).toBe('en');
+  });
+
+  it('nothing chosen yet: never the book’s own language (Turkish into Turkish says nothing)', () => {
+    // A Turkish phone: Turkish books into English, English ones into Turkish.
+    expect(translateTarget('tr', {}, '', 'tr')).toBe('en');
+    expect(translateTarget('en', {}, '', 'tr')).toBe('tr');
+    // An English phone, an English book: Turkish rather than English.
+    expect(translateTarget('en', {}, '', 'en')).toBe('tr');
+    // A book whose language isn't known: the phone's.
+    expect(translateTarget(undefined, {}, '', 'en')).toBe('en');
+  });
+
+  it('the one choice older versions kept for all books still counts, except for books in that language', () => {
+    expect(translateTarget('en', {}, 'tr', 'en')).toBe('tr');
+    expect(translateTarget('tr', {}, 'tr', 'tr')).toBe('en');
+    expect(translateTarget('ru', {}, 'zh-CN', 'en')).toBe('zh-CN');
   });
 });

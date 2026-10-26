@@ -1,5 +1,5 @@
 // A book's details: cover, title and author (editable), what the file is,
-// and how the reading is going.
+// its language (detected, or set by hand), and how the reading is going.
 
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { Stack, router, useLocalSearchParams } from 'expo-router';
@@ -8,22 +8,63 @@ import { ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useAnnotations } from '@/lib/annotations';
 import { isFinished, useShelves } from '@/lib/collections';
-import { loadManifest, renameBook, restoreBookTitle, useBook } from '@/lib/library';
+import { loadManifest, renameBook, restoreBookTitle, setBookLanguage, useBook } from '@/lib/library';
 import { bookTimeMs, readingSpeed, useStats } from '@/lib/stats';
 import { Cover } from '@/ui/Cover';
 import { confirmRemoveBook } from '@/ui/confirm';
-import { showPrompt } from '@/ui/dialogs';
+import { showActions, showPrompt } from '@/ui/dialogs';
 import { formatBytes, formatMinutes } from '@/ui/format';
+import { useColumnPadding } from '@/ui/layout';
 import { useAppColors } from '@/ui/theme';
 import { Tap } from '@/ui/Tap';
 
 const FORMAT_NAMES: Record<string, string> = { epub: 'EPUB', fb2: 'FB2', txt: 'Plain text', mobi: 'MOBI', azw3: 'AZW3 (Kindle)' };
 const date = (ms: number) => (ms ? new Date(ms).toLocaleDateString(undefined, { day: 'numeric', month: 'long', year: 'numeric' }) : '—');
 
+/**
+ * Languages a book can be set to by hand, the ones read most first. A book's
+ * language decides how its words are hyphenated, the dictionary Look Up uses
+ * and the language translations start from.
+ */
+const LANGUAGES: [code: string, name: string][] = [
+  ['tr', 'Turkish'],
+  ['en', 'English'],
+  ['az', 'Azerbaijani'],
+  ['ru', 'Russian'],
+  ['de', 'German'],
+  ['fr', 'French'],
+  ['es', 'Spanish'],
+  ['it', 'Italian'],
+  ['pt', 'Portuguese'],
+  ['uk', 'Ukrainian'],
+];
+/** Other languages a book may name or be found to be in (see src/engine/language.ts). */
+const OTHER_NAMES: Record<string, string> = {
+  pl: 'Polish',
+  nl: 'Dutch',
+  sv: 'Swedish',
+  cs: 'Czech',
+  sk: 'Slovak',
+  el: 'Greek',
+  be: 'Belarusian',
+  bg: 'Bulgarian',
+  kk: 'Kazakh',
+  uz: 'Uzbek',
+  ar: 'Arabic',
+  fa: 'Persian',
+  he: 'Hebrew',
+  zh: 'Chinese',
+  ja: 'Japanese',
+  ko: 'Korean',
+};
+const languageName = (code: string) => LANGUAGES.find(([c]) => c === code)?.[1] ?? OTHER_NAMES[code] ?? code.toUpperCase();
+
 export default function BookDetails() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const c = useAppColors();
   const insets = useSafeAreaInsets();
+  // A centred column on a tablet or a phone on its side.
+  const column = useColumnPadding(20);
   const book = useBook(id);
   const ann = useAnnotations(id);
   const shelves = useShelves();
@@ -62,6 +103,19 @@ export default function BookDetails() {
     });
   const remove = () => confirmRemoveBook(book, () => router.back());
 
+  // The language the app found (the book's own, or guessed from its text) and the one set by hand.
+  const detected = manifest?.lang;
+  const language = book.lang ? languageName(book.lang) : detected ? `${languageName(detected)} (automatic)` : 'Automatic';
+  const pickLanguage = () =>
+    showActions('Book language', [
+      {
+        label: detected ? `Automatic (${languageName(detected)})` : 'Automatic',
+        checked: !book.lang,
+        onPress: () => setBookLanguage(id, undefined),
+      },
+      ...LANGUAGES.map(([code, name]) => ({ label: name, checked: book.lang === code, onPress: () => setBookLanguage(id, code) })),
+    ]);
+
   const row = (label: string, value: string) => (
     <View style={[styles.row, { borderColor: c.border }]} key={label}>
       <Text style={{ color: c.secondary, fontSize: 15 }}>{label}</Text>
@@ -72,7 +126,7 @@ export default function BookDetails() {
   );
 
   return (
-    <ScrollView style={{ backgroundColor: c.bg }} contentContainerStyle={[styles.body, { paddingBottom: insets.bottom + 48, paddingLeft: insets.left + 20, paddingRight: insets.right + 20 }]}>
+    <ScrollView style={{ backgroundColor: c.bg }} contentContainerStyle={[styles.body, column, { paddingBottom: insets.bottom + 48 }]}>
       <Stack.Screen options={{ title: 'Details', headerStyle: { backgroundColor: c.bg }, headerTintColor: c.text, headerShadowVisible: false }} />
       <View style={styles.top}>
         <Cover book={book} width={110} radius={8} />
@@ -86,7 +140,7 @@ export default function BookDetails() {
             <Ionicons name="pencil" size={13} color={c.secondary} />
           </Tap>
           {book.titleEdited ? (
-            <Tap onPress={() => restoreBookTitle(id)} hitSlop={6}>
+            <Tap onPress={() => restoreBookTitle(id)} style={styles.link}>
               <Text style={{ color: c.accent, fontSize: 13 }}>Use the book’s own title</Text>
             </Tap>
           ) : null}
@@ -117,7 +171,15 @@ export default function BookDetails() {
         {row('Size', formatBytes(book.size))}
         {row('File name', book.fileName)}
         {row('Added', date(book.addedAt))}
-        {manifest?.lang ? row('Language', manifest.lang) : null}
+        <Tap feedback="dim" onPress={pickLanguage} style={[styles.row, styles.tappable, { borderColor: c.border }]} accessibilityLabel="Book language">
+          <Text style={{ color: c.secondary, fontSize: 15 }}>Language</Text>
+          <View style={styles.choice}>
+            <Text style={[styles.value, { color: c.text }]} numberOfLines={1}>
+              {language}
+            </Text>
+            <Ionicons name="chevron-forward" size={16} color={c.secondary} />
+          </View>
+        </Tap>
         {collections.length ? row('Collections', collections.join(', ')) : null}
         {book.status === 'processing' ? row('Status', 'Still being prepared') : null}
         {book.status === 'error' ? row('Status', 'Could not be opened') : null}
@@ -135,13 +197,18 @@ const styles = StyleSheet.create({
   center: { flex: 1, alignItems: 'center', justifyContent: 'center' },
   body: { paddingTop: 20 },
   top: { flexDirection: 'row', gap: 16, alignItems: 'flex-start' },
-  names: { flex: 1, gap: 8, paddingTop: 4 },
-  editable: { flexDirection: 'row', alignItems: 'center', gap: 6, flexWrap: 'wrap' },
+  // Title, author and the link under them are each at least 44 points tall,
+  // a target a finger can hit; that height also spaces them.
+  names: { flex: 1 },
+  editable: { flexDirection: 'row', alignItems: 'center', gap: 6, flexWrap: 'wrap', minHeight: 44 },
+  link: { alignSelf: 'flex-start', minHeight: 44, justifyContent: 'center', paddingRight: 12 },
   title: { fontSize: 21, fontWeight: '700', flexShrink: 1 },
   open: { marginTop: 20, borderRadius: 12, paddingVertical: 13, alignItems: 'center' },
   heading: { fontSize: 12, fontWeight: '600', marginTop: 26, marginBottom: 8, marginLeft: 4 },
   card: { borderRadius: 12, paddingHorizontal: 14 },
   row: { flexDirection: 'row', justifyContent: 'space-between', gap: 16, paddingVertical: 12, borderBottomWidth: StyleSheet.hairlineWidth },
   value: { fontSize: 15, flexShrink: 1, textAlign: 'right' },
+  tappable: { alignItems: 'center', minHeight: 44 },
+  choice: { flexDirection: 'row', alignItems: 'center', gap: 4, flexShrink: 1 },
   remove: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, marginTop: 28, padding: 12 },
 });

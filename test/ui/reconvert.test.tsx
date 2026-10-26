@@ -25,6 +25,8 @@ jest.mock('@/lib/library', () => ({
   updateBook: (...a: unknown[]) => mockUpdateBook(...a),
   reprocessBook: () => {},
   sourceFile: () => ({}),
+  setBookOpen: () => {},
+  isBookOpen: () => false,
 }));
 
 beforeAll(async () => {

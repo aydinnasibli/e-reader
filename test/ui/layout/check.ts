@@ -31,6 +31,7 @@ export const DEVICES: Record<string, Device> = {
   android: { name: 'small Android', width: 360, height: 640, insets: { top: 24, bottom: 16, left: 0, right: 0 }, fontScale: 1, keyboard: 0, platform: 'android' },
   landscape: { name: 'iPhone 15 landscape', width: 844, height: 390, insets: { top: 0, bottom: 21, left: 47, right: 47 }, fontScale: 1, keyboard: 0, platform: 'ios' },
   tablet: { name: 'iPad', width: 1024, height: 1366, insets: { top: 24, bottom: 20, left: 0, right: 0 }, fontScale: 1, keyboard: 0, platform: 'ios' },
+  tabletLandscape: { name: 'iPad landscape', width: 1366, height: 1024, insets: { top: 24, bottom: 20, left: 0, right: 0 }, fontScale: 1, keyboard: 0, platform: 'ios' },
 };
 
 /** The same device with an open keyboard. */
@@ -72,14 +73,21 @@ interface Item {
   label: string;
   /** Page text laid out by the reader's own measuring; not checked against its page box. */
   pageText: boolean;
-  /** Where a top-level element of a scroll view's content is placed from (the scroll view). */
-  base?: Rect;
 }
 
 export interface Problem {
-  kind: 'off-screen' | 'under-keyboard' | 'clipped' | 'spills' | 'overlap' | 'text-overlap';
+  kind: 'off-screen' | 'under-keyboard' | 'clipped' | 'spills' | 'overlap' | 'text-overlap' | 'small-target' | 'long-lines';
   what: string;
   detail: string;
+}
+
+/** An element as laid out (see CheckOptions.laidOut). */
+export interface Laid {
+  label: string;
+  kind: Kind;
+  rect: Rect;
+  /** 0 for the screen, then each open modal (sheet, menu) in order. */
+  layer: number;
 }
 
 type Style = Record<string, any>; // eslint-disable-line @typescript-eslint/no-explicit-any
@@ -198,6 +206,16 @@ const fmt = (r: Rect) => `x ${Math.round(r.x)}…${Math.round(r.x + r.w)}, y ${M
 export interface CheckOptions {
   /** Space taken above the screen's content by a navigation header (screens under one). */
   headerHeight?: number;
+  /**
+   * Also report buttons a finger can't easily hit: less than this many points
+   * either way, counting their hitSlop (which never reaches past the box of
+   * the view they are in).
+   */
+  minTarget?: number;
+  /** Also report paragraphs set in lines of more than about this many characters. */
+  maxLineChars?: number;
+  /** Filled with every element as laid out, the screen's and any open sheet's, for a test to measure. */
+  laidOut?: Laid[];
 }
 
 /** Lay out `tree` (screen.toJSON()) on `device` and list what goes wrong. */
@@ -209,8 +227,6 @@ export async function checkLayout(tree: unknown, device: Device, opts: CheckOpti
   const kb = device.keyboard;
   const items: Item[] = [];
   const roots: { yoga: YogaNode; top: number; height: number }[] = [];
-  /** Scroll content laid out separately, unconstrained along the scroll axis. */
-  const contents: { scroll: Item; content: Host }[] = [];
 
   const newRoot = (top: number, height: number) => {
     const r = y.Node.create();
@@ -220,7 +236,7 @@ export async function checkLayout(tree: unknown, device: Device, opts: CheckOpti
     return r;
   };
 
-  const build = (host: Host | string, parentYoga: YogaNode, parent: Item | null, root: number, scroll: Item | null, hidden: boolean, base?: Rect): void => {
+  const build = (host: Host | string, parentYoga: YogaNode, parent: Item | null, root: number, scroll: Item | null, hidden: boolean): void => {
     if (typeof host === 'string' || host == null) return;
     if (host.type === 'Modal') {
       if (!host.props.visible) return;
@@ -251,7 +267,6 @@ export async function checkLayout(tree: unknown, device: Device, opts: CheckOpti
       hidden: hidden || st.opacity === 0 || st.display === 'none' || host.props.pointerEvents === 'none' && st.opacity === 0,
       label: describe(host),
       pageText: host.type === 'Text' && host.props.textBreakStrategy === 'simple',
-      base,
     };
     items.push(item);
     if (kind === 'text' || kind === 'input') {
@@ -267,8 +282,17 @@ export async function checkLayout(tree: unknown, device: Device, opts: CheckOpti
       return; // nested Text is part of the same paragraph
     }
     if (kind === 'scroll') {
+      // As React Native lays a scroll view out: as tall (or wide) as its content
+      // unless something squeezes it, the content free to run past it.
+      const horizontal = !!host.props.horizontal;
+      node.setOverflow(E.Overflow.Scroll);
+      if (horizontal) node.setFlexDirection(E.FlexDirection.Row);
       const content = (host.children ?? []).find((c): c is Host => typeof c !== 'string');
-      if (content) contents.push({ scroll: item, content });
+      // The content view gets contentContainerStyle (jest's stand-in scroll view
+      // leaves it off), in a row in a horizontal scroll view.
+      const contentStyle = [horizontal && { flexDirection: 'row' }, content?.props.style, host.props.contentContainerStyle, { flexShrink: 0 }];
+      const laidOut = content && { ...content, props: { ...content.props, style: contentStyle } };
+      if (laidOut) build(laidOut, node, item, root, item, item.hidden);
       return;
     }
     for (const c of host.children ?? []) build(c, node, item, root, scroll, item.hidden);
@@ -279,28 +303,14 @@ export async function checkLayout(tree: unknown, device: Device, opts: CheckOpti
   const trees = Array.isArray(tree) ? tree : [tree];
   for (const t of trees) build(t as Host, main, null, 0, null, false);
 
-  // Absolute positions, then scroll contents (which need their scroll view's size first).
+  // Absolute positions.
   const position = (it: Item) => {
     const l = it.yoga.getComputedLayout();
-    const base = it.parent?.rect ?? it.base ?? { x: 0, y: roots[it.root].top, w: W, h: 0 };
+    const base = it.parent?.rect ?? { x: 0, y: roots[it.root].top, w: W, h: 0 };
     it.rect = { x: base.x + l.left, y: base.y + l.top, w: l.width, h: l.height };
   };
   for (const r of roots) r.yoga.calculateLayout(W, r.height, E.Direction.LTR);
   for (const it of items) position(it);
-  for (let i = 0; i < contents.length; i++) {
-    const { scroll, content } = contents[i];
-    const horizontal = !!scroll.host.props.horizontal;
-    const sr = scroll.rect!;
-    const r = y.Node.create();
-    if (horizontal) r.setFlexDirection(E.FlexDirection.Row);
-    const first = items.length;
-    // React Native lays a horizontal scroll view's content out in a row.
-    const laidOut = horizontal ? { ...content, props: { ...content.props, style: [content.props.style, { flexDirection: 'row' }] } } : content;
-    build(laidOut, r, null, scroll.root, scroll, scroll.hidden, sr);
-    r.calculateLayout(horizontal ? undefined : sr.w, horizontal ? sr.h : undefined, E.Direction.LTR);
-    for (let k = first; k < items.length; k++) position(items[k]);
-    r.freeRecursive();
-  }
   // Transforms move what's drawn (sliding pages, sheets), after layout.
   for (const it of items) {
     if (!it.rect) continue;
@@ -346,6 +356,9 @@ export async function checkLayout(tree: unknown, device: Device, opts: CheckOpti
   // backdrop that closes a sheet or panel. Meant to cover what's under them.
   const tapCatcher = (r: Rect) => r.w * r.h > W * H * 0.25;
   const checked = items.filter((it, i) => it.root === topRoot && !it.hidden && !parked(it) && it.rect && it.rect.w > 0 && it.rect.h > 0 && !occluded(it, i));
+  // Scroll views holding a text box: while typing, their buttons must be in view
+  // without scrolling (a number pad has no return key: the Go button is the only way).
+  const forms = new Set(items.filter((it) => it.kind === 'input' && it.scroll).map((it) => it.scroll!));
 
   for (const it of checked) {
     if (it.kind !== 'touch' && it.kind !== 'input' && it.kind !== 'text') continue;
@@ -354,10 +367,15 @@ export async function checkLayout(tree: unknown, device: Device, opts: CheckOpti
     if (it.pageText) continue;
     const where = it.scroll ? { ...it.scroll.rect! } : r;
     if (it.scroll) {
-      // In a scroll view: fine as long as the scroll view itself can be seen and used.
-      const vis = overlapArea(it.scroll.rect!, safe);
-      if (vis < Math.min(44 * 44, it.scroll.rect!.w * it.scroll.rect!.h)) {
-        problems.push({ kind: kb ? 'under-keyboard' : 'off-screen', what: it.label, detail: `its scroll view (${fmt(it.scroll.rect!)}) can't be seen on screen` });
+      // In a scroll view: fine as long as the scroll view itself can be seen and
+      // used (or, inside another one, scrolled into view).
+      let outer = it.scroll;
+      while (outer.scroll) outer = outer.scroll;
+      const vis = overlapArea(outer.rect!, safe);
+      if (vis < Math.min(44 * 44, outer.rect!.w * outer.rect!.h)) {
+        problems.push({ kind: kb ? 'under-keyboard' : 'off-screen', what: it.label, detail: `its scroll view (${fmt(outer.rect!)}) can't be seen on screen` });
+      } else if (kb && it.kind === 'touch' && forms.has(it.scroll) && !inside(r, it.scroll.rect!, 1)) {
+        problems.push({ kind: 'under-keyboard', what: it.label, detail: `at ${fmt(r)}, only reached by scrolling its form (${fmt(it.scroll.rect!)}) while typing` });
       }
     } else if (!inside(where, safe)) {
       const underKb = kb && where.y + where.h > H - kb + 1 && inside(where, { ...safe, h: H - safe.y });
@@ -371,7 +389,8 @@ export async function checkLayout(tree: unknown, device: Device, opts: CheckOpti
     }
     // Cut off by a container that clips (overflow hidden), short of the screen edges;
     // or text spilling out of a fixed-size box you can see (a card, a button).
-    for (let p = it.parent; p; p = p.parent) {
+    // (Past its scroll view, content running on is just scrolled to.)
+    for (let p = it.parent; p && p !== it.scroll; p = p.parent) {
       const pst = StyleSheet.flatten(p.host.props.style) ?? {};
       if (pst.overflow === 'hidden' && p.rect && !inside(r, p.rect, 2)) {
         problems.push({ kind: 'clipped', what: it.label, detail: `at ${fmt(r)} but its container clips at ${fmt(p.rect)}` });
@@ -421,6 +440,41 @@ export async function checkLayout(tree: unknown, device: Device, opts: CheckOpti
       }
     }
   }
+  // Buttons too small for a finger. A touch outside the box of a view never
+  // reaches what's inside it, so hitSlop only counts within its parents (up
+  // to its scroll view: content scrolls into reach).
+  if (opts.minTarget) {
+    for (const it of checked) {
+      if (it.kind !== 'touch' || tapCatcher(it.rect!)) continue;
+      const slop = it.host.props.hitSlop as number | { top?: number; bottom?: number; left?: number; right?: number } | undefined;
+      const sl = typeof slop === 'number' ? { top: slop, bottom: slop, left: slop, right: slop } : (slop ?? {});
+      const r = it.rect!;
+      let hit: Rect = { x: r.x - (sl.left ?? 0), y: r.y - (sl.top ?? 0), w: r.w + (sl.left ?? 0) + (sl.right ?? 0), h: r.h + (sl.top ?? 0) + (sl.bottom ?? 0) };
+      for (let p = it.parent; p && p !== it.scroll; p = p.parent) {
+        if (!p.rect) continue;
+        const x = Math.max(hit.x, p.rect.x);
+        const y = Math.max(hit.y, p.rect.y);
+        hit = { x, y, w: Math.max(0, Math.min(hit.x + hit.w, p.rect.x + p.rect.w) - x), h: Math.max(0, Math.min(hit.y + hit.h, p.rect.y + p.rect.h) - y) };
+      }
+      if (hit.w < opts.minTarget - 0.5 || hit.h < opts.minTarget - 0.5) {
+        problems.push({ kind: 'small-target', what: it.label, detail: `${Math.round(hit.w)}×${Math.round(hit.h)} to touch (drawn at ${fmt(r)}), under ${opts.minTarget}×${opts.minTarget}` });
+      }
+    }
+  }
+  // Lines too long to read comfortably (paragraphs across a tablet).
+  if (opts.maxLineChars) {
+    for (const it of checked) {
+      if (it.kind !== 'text' || it.pageText) continue;
+      const st: Style = StyleSheet.flatten(it.host.props.style) ?? {};
+      const scale = scaleOf(it.host.props, device);
+      const cw = (st.fontSize ?? 14) * scale * CHAR * (/(bold|[6-9]00)/.test(String(st.fontWeight ?? '')) ? 1.06 : 1) + (st.letterSpacing ?? 0) * scale;
+      const perLine = it.rect!.w / cw;
+      if (perLine > opts.maxLineChars && textOf(it.host).length > opts.maxLineChars) {
+        problems.push({ kind: 'long-lines', what: it.label, detail: `about ${Math.round(perLine)} characters a line, at ${fmt(it.rect!)}` });
+      }
+    }
+  }
+  if (opts.laidOut) for (const it of items) if (it.rect) opts.laidOut.push({ label: it.label, kind: it.kind, rect: it.rect, layer: it.root });
   for (const r of roots) r.yoga.freeRecursive();
   return problems;
 }

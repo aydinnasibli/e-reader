@@ -3,7 +3,7 @@
 
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { useEffect, useState } from 'react';
-import { Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
+import { Pressable, StyleSheet, Text, TextInput, View, useWindowDimensions } from 'react-native';
 import { Sheet } from './Sheet';
 import { useAppColors } from './theme';
 import { Tap } from '@/ui/Tap';
@@ -67,6 +67,8 @@ export function DialogHost() {
     close();
   };
   const colors = { bg: c.elevated, text: c.text, border: c.border };
+  // A phone on its side has little room above the keyboard: a one-line box gets its buttons beside it.
+  const beside = useWindowDimensions().height < 500 && dialog?.kind === 'prompt' && !dialog.multiline;
 
   return (
     <Sheet visible={!!dialog} onClose={close} colors={colors} title={dialog?.title} position={dialog?.kind === 'prompt' ? 'top' : 'bottom'} scroll>
@@ -86,7 +88,7 @@ export function DialogHost() {
           </Pressable>
         ))}
       {dialog?.kind === 'prompt' && (
-        <View style={styles.prompt}>
+        <View style={[styles.prompt, beside && styles.promptBeside]}>
           <TextInput
             autoFocus
             value={text}
@@ -94,17 +96,17 @@ export function DialogHost() {
             placeholder={dialog.placeholder}
             placeholderTextColor={c.secondary}
             multiline={dialog.multiline}
-            style={[styles.input, dialog.multiline && styles.multiline, { color: c.text, borderColor: c.border, backgroundColor: c.card }]}
+            style={[styles.input, dialog.multiline && styles.multiline, beside && styles.grow, { color: c.text, borderColor: c.border, backgroundColor: c.card }]}
             onSubmitEditing={submit}
             returnKeyType="done"
           />
           <View style={styles.buttons}>
-            <Tap onPress={close} style={[styles.btn, { backgroundColor: c.chip }]}>
+            <Tap onPress={close} style={[styles.btn, beside && styles.btnBeside, { backgroundColor: c.chip }]}>
               <Text style={{ color: c.text, fontSize: 16 }}>Cancel</Text>
             </Tap>
             <Tap
               onPress={submit}
-              style={[styles.btn, { backgroundColor: c.accent }]}>
+              style={[styles.btn, beside && styles.btnBeside, { backgroundColor: c.accent }]}>
               <Text style={{ color: c.accentText, fontSize: 16, fontWeight: '600' }}>{dialog.confirm ?? 'Save'}</Text>
             </Tap>
           </View>
@@ -120,8 +122,11 @@ const styles = StyleSheet.create({
   label: { flex: 1, fontSize: 17 },
   // The text box gives way first when the card has to shrink (small screens, keyboard up).
   prompt: { paddingHorizontal: 20, paddingTop: 4, gap: 14, flexShrink: 1 },
+  promptBeside: { flexDirection: 'row', gap: 10 },
+  grow: { flex: 1 },
   input: { borderWidth: StyleSheet.hairlineWidth, borderRadius: 10, paddingHorizontal: 14, paddingVertical: 12, fontSize: 17 },
   multiline: { minHeight: 64, height: 110, flexShrink: 1, textAlignVertical: 'top' },
   buttons: { flexDirection: 'row', gap: 10 },
   btn: { flex: 1, alignItems: 'center', paddingVertical: 12, borderRadius: 10 },
+  btnBeside: { flex: 0, justifyContent: 'center', paddingHorizontal: 18 },
 });

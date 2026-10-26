@@ -30,9 +30,12 @@ const hasSelection = () => {
 export function handleTouches(target: () => TouchTarget, marking: () => boolean) {
   let start = { x: 0, y: 0, t: 0 };
   let last = { x: 0, t: 0, vx: 0 };
+  /** Which way the finger went: 'h' a swipe (ours), 'v' anything else (the browser's: scrolling, selecting). */
   let axis: 'h' | 'v' | null = null;
   /** The touch began with text selected: it's for the selection (the browser's). */
   let forSelection = false;
+  /** Two fingers were down (a pinch, a resting thumb): neither a turn nor a tap. */
+  let multi = false;
   let markFrom: ReturnType<typeof pointAtScreen> = null;
   let moved = false;
   let frame = 0;
@@ -42,11 +45,17 @@ export function handleTouches(target: () => TouchTarget, marking: () => boolean)
   document.addEventListener(
     'touchstart',
     (e) => {
+      if (e.touches.length > 1) {
+        multi = true;
+        if (axis === 'h') target().springBack();
+        return;
+      }
       const p = e.touches[0];
       start = { x: p.clientX, y: p.clientY, t: performance.now() };
       last = { x: p.clientX, t: start.t, vx: 0 };
       axis = null;
       moved = false;
+      multi = false;
       forSelection = hasSelection();
       target().touched();
       if (marking()) markFrom = pointAtScreen(p.clientX, p.clientY);
@@ -65,7 +74,7 @@ export function handleTouches(target: () => TouchTarget, marking: () => boolean)
       if (marking()) {
         // The marker pen: the page neither scrolls nor turns.
         e.preventDefault();
-        if (!moved && Math.hypot(dx, dy) < 8) return;
+        if (multi || (!moved && Math.hypot(dx, dy) < 8)) return;
         moved = true;
         const x = p.clientX;
         const y = p.clientY;
@@ -74,8 +83,12 @@ export function handleTouches(target: () => TouchTarget, marking: () => boolean)
         return;
       }
       const t = target();
-      if (forSelection || t.mode !== 'page') return;
-      if (!axis && Math.hypot(dx, dy) > 10) axis = Math.abs(dx) > Math.abs(dy) * 1.5 ? 'h' : 'v';
+      if (forSelection || multi || t.mode !== 'page') return;
+      if (!axis && Math.hypot(dx, dy) > 10) {
+        // A finger held still before it moved is the browser's long press: it's selecting, not turning.
+        const selecting = now - start.t >= LONG_PRESS_MS || hasSelection();
+        axis = !selecting && Math.abs(dx) > Math.abs(dy) * 1.5 ? 'h' : 'v';
+      }
       if (axis === 'h') {
         // Ours: no selecting while swiping.
         e.preventDefault();
@@ -86,6 +99,16 @@ export function handleTouches(target: () => TouchTarget, marking: () => boolean)
   );
 
   const end = (e: TouchEvent, cancelled: boolean) => {
+    if (multi) {
+      // Once the last finger is up, the next touch is a fresh one.
+      if (!e.touches.length) multi = false;
+      if (marking() && moved) {
+        moved = false;
+        cancelAnimationFrame(frame);
+        send({ t: 'markDrag', from: null, to: null, done: true });
+      }
+      return;
+    }
     const p = e.changedTouches[0];
     const dx = p.clientX - start.x;
     const dy = p.clientY - start.y;

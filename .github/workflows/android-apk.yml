@@ -29,7 +29,7 @@ jobs:
 
       - uses: actions/setup-node@v5
         with:
-          node-version: 22
+          node-version: 24
           cache: npm
 
       - uses: actions/setup-java@v5
@@ -42,11 +42,17 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      # Takes about 3 minutes: one that hangs fails here instead of holding up
+      # the update for the job's whole hour.
       - name: Check
+        timeout-minutes: 15
         run: |
           npx tsc --noEmit
           npx expo lint
           npm test
+          # The iPhone's JavaScript bundle, so an error only iOS hits is caught
+          # here too (main is the only branch, so ci.yml doesn't run).
+          npx expo export --platform ios --output-dir "$RUNNER_TEMP/dist-ios"
 
       - name: Generate the native Android project
         run: |
@@ -119,7 +125,7 @@ jobs:
           # --target: tag the commit that was built, not whatever main is now.
           gh release create "$TAG" nec-reader.apk \
             --target "$GITHUB_SHA" \
-            --title "Nec e-book reader 1.0.$BUILD_NUMBER" \
+            --title "Nec Reader 1.0.$BUILD_NUMBER" \
             --notes "${NOTES:-Manual build}" \
             $LATEST
           # Keep the 5 newest builds; older ones are never offered again.

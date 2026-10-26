@@ -83,6 +83,38 @@ describe('sniffFormat', () => {
   });
 });
 
+describe('files that aren’t books', () => {
+  const rand = (n: number) => {
+    let x = 9;
+    return Uint8Array.from({ length: n }, () => ((x = (x * 1103515245 + 12345) >>> 0) >>> 24));
+  };
+
+  it('are refused with a clear message instead of becoming pages of garbage', async () => {
+    const kfx = new Uint8Array(20000);
+    kfx.set(enc('CONT'));
+    kfx.set(rand(19000), 1000);
+    const drmion = new Uint8Array(20000);
+    drmion.set([0xea, 0x44, 0x52, 0x4d, 0x49, 0x4f, 0x4e, 0xee]);
+    drmion.set(rand(19000), 100);
+    await expect(ingestBytes(kfx, 'book.azw')).rejects.toThrow(/Kindle KFX/);
+    await expect(ingestBytes(drmion, 'book.azw3')).rejects.toThrow(/Kindle KFX/);
+    await expect(ingestBytes(enc('%PDF-1.7\n%âãÏÓ\n1 0 obj << /Type /Catalog >> endobj'), 'book.epub')).rejects.toThrow(/PDF/);
+    for (const [bytes, name] of [
+      [rand(50000), 'book.mobi'],
+      [enc('<!DOCTYPE html><html><head><title>403 Forbidden</title></head><body><h1>Access denied</h1></body></html>'), 'book.epub'],
+    ] as const) {
+      const err = await ingestBytes(bytes, name).catch((e) => e);
+      expect(err).toBeInstanceOf(BookError);
+      expect(err.message).toBe('This file isn’t a book the app can open (EPUB, FB2, MOBI, AZW3 or TXT).');
+    }
+  });
+
+  it('a file named .txt is read as text whatever it holds', async () => {
+    const r = await ingestBytes(enc('Plain words.\n'), 'notes.txt');
+    expect(r.manifest.format).toBe('txt');
+  });
+});
+
 describe('bookFileName', () => {
   it('keeps a name that already says what the file is, otherwise adds the format', () => {
     expect(bookFileName('Moby Dick.epub', 'epub')).toBe('Moby Dick.epub');

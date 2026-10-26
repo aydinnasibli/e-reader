@@ -7,12 +7,14 @@ import { Stack, router } from 'expo-router';
 import { useMemo, useState } from 'react';
 import { SectionList, Share, StyleSheet, Text, TextInput, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { fold } from '@/engine/fold';
 import { type Highlight, getAnnotations, removeHighlight, useAnnotationsVersion } from '@/lib/annotations';
 import { exportFileName, notesMarkdown } from '@/lib/exportNotes';
 import { type BookEntry, useLibrary } from '@/lib/library';
 import { shareTextFile } from '@/lib/shareText';
 import { confirmDeleteHighlight, hasNote } from '@/ui/confirm';
 import { showActions } from '@/ui/dialogs';
+import { useColumnPadding } from '@/ui/layout';
 import { highlightColor, useAppColors } from '@/ui/theme';
 import { Tap } from '@/ui/Tap';
 
@@ -21,40 +23,48 @@ interface Section {
   data: Highlight[];
 }
 
+/** A section with what a search looks through, folded (see fold()): per highlight its text, note and chapter, and the book's title. */
+interface Searchable extends Section {
+  title: string;
+  folded: string[];
+}
+
+/** The "With notes" chip is drawn 32 high; the finger gets 44, within the tools row's padding. */
+const CHIP_SLOP = { top: 8, bottom: 4 };
+
 const exportBooks = (sections: Section[]) =>
   sections.map((s) => ({ title: s.book.title, author: s.book.author, highlights: s.data }));
 
 export default function NotesScreen() {
   const c = useAppColors();
   const insets = useSafeAreaInsets();
+  // A centred column on a tablet or a phone on its side, clear of the notch.
+  const column = useColumnPadding();
   const books = useLibrary();
   const version = useAnnotationsVersion();
   const [query, setQuery] = useState('');
   const [notesOnly, setNotesOnly] = useState(false);
 
   // Books with highlights, most recently read first; highlights in reading order.
-  const all = useMemo<Section[]>(
+  // Folded for searching once here, not again for every letter typed.
+  const all = useMemo<Searchable[]>(
     () =>
       [...books]
         .sort((a, b) => b.openedAt - a.openedAt)
-        .map((book) => ({ book, data: getAnnotations(book.id).highlights }))
+        .map((book) => {
+          const data = getAnnotations(book.id).highlights;
+          return { book, data, title: fold(book.title), folded: data.map((h) => fold(`${h.text}\n${h.note ?? ''}\n${h.chapter ?? ''}`)) };
+        })
         .filter((s) => s.data.length),
     [books, version], // eslint-disable-line react-hooks/exhaustive-deps
   );
-  const sections = useMemo(() => {
-    const q = query.trim().toLocaleLowerCase();
+  const sections = useMemo<Section[]>(() => {
+    // Case, accents and the Turkish I/ı/İ/i don't matter: "istanbul" finds "İstanbul".
+    const q = fold(query.trim());
     return all
       .map((s) => ({
-        ...s,
-        data: s.data.filter(
-          (h) =>
-            (!notesOnly || !!h.note?.trim()) &&
-            (!q ||
-              h.text.toLocaleLowerCase().includes(q) ||
-              (h.note ?? '').toLocaleLowerCase().includes(q) ||
-              s.book.title.toLocaleLowerCase().includes(q) ||
-              (h.chapter ?? '').toLocaleLowerCase().includes(q)),
-        ),
+        book: s.book,
+        data: s.data.filter((h, i) => (!notesOnly || !!h.note?.trim()) && (!q || s.folded[i].includes(q) || s.title.includes(q))),
       }))
       .filter((s) => s.data.length);
   }, [all, query, notesOnly]);
@@ -78,17 +88,18 @@ export default function NotesScreen() {
           headerStyle: { backgroundColor: c.bg },
           headerTintColor: c.text,
           headerShadowVisible: false,
+          // A 44-point square: the header ignores taps outside its buttons' boxes.
           headerRight: () =>
             count ? (
-              <Tap onPress={exportAll} hitSlop={10} accessibilityLabel="Export highlights">
+              <Tap onPress={exportAll} style={styles.headerButton} accessibilityLabel="Export highlights">
                 <Ionicons name="share-outline" size={24} color={c.accent} />
               </Tap>
             ) : null,
         }}
       />
       {count ? (
-        // Clear of the notch on a phone turned on its side, like the list below.
-        <View style={[styles.tools, { paddingLeft: 16 + insets.left, paddingRight: 16 + insets.right }]}>
+        // In line with the list below.
+        <View style={[styles.tools, { paddingLeft: 16 + column.paddingLeft, paddingRight: 16 + column.paddingRight }]}>
           <View style={[styles.search, { backgroundColor: c.chip }]}>
             <Ionicons name="search" size={16} color={c.secondary} />
             <TextInput
@@ -104,6 +115,7 @@ export default function NotesScreen() {
           <Tap
             haptic="select"
             onPress={() => setNotesOnly((v) => !v)}
+            hitSlop={CHIP_SLOP}
             style={[styles.chip, { backgroundColor: notesOnly ? c.accent : c.chip }]}
             accessibilityState={{ selected: notesOnly }}>
             <Text style={{ color: notesOnly ? c.accentText : c.text, fontSize: 13, fontWeight: '600' }}>With notes</Text>
@@ -114,7 +126,7 @@ export default function NotesScreen() {
         sections={sections}
         keyExtractor={(h) => h.id}
         stickySectionHeadersEnabled={false}
-        contentContainerStyle={{ paddingBottom: insets.bottom + 40, paddingLeft: insets.left, paddingRight: insets.right }}
+        contentContainerStyle={{ paddingBottom: insets.bottom + 40, ...column }}
         renderSectionHeader={({ section }) => (
           <View style={styles.sectionHead}>
             <View style={{ flex: 1 }}>
@@ -127,7 +139,7 @@ export default function NotesScreen() {
             </View>
             <Tap
               onPress={() => void shareTextFile(exportFileName(section.book.title), notesMarkdown(exportBooks([section])))}
-              hitSlop={10}
+              hitSlop={12}
               accessibilityLabel={`Export ${section.book.title}`}>
               <Ionicons name="share-outline" size={20} color={c.secondary} />
             </Tap>
@@ -172,6 +184,7 @@ export default function NotesScreen() {
 }
 
 const styles = StyleSheet.create({
+  headerButton: { width: 44, height: 44, alignItems: 'center', justifyContent: 'center' },
   tools: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 16, paddingTop: 8, paddingBottom: 4 },
   search: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: 6, borderRadius: 10, paddingHorizontal: 10 },
   input: { flex: 1, fontSize: 15, paddingVertical: 8 },

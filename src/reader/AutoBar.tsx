@@ -10,6 +10,8 @@ import { Tap } from '@/ui/Tap';
 
 interface Props {
   theme: Theme;
+  /** Distance from the bottom of the screen (clear of the page number below the page); the safe area by default. */
+  bottom?: number;
   wpm: number;
   running: boolean;
   /** How long the current page stays; `n` changes for each page. */
@@ -20,7 +22,7 @@ interface Props {
   onStop(): void;
 }
 
-export function AutoBar({ theme, wpm, running, pageTimer, onSlower, onFaster, onToggle, onStop }: Props) {
+export function AutoBar({ theme, bottom, wpm, running, pageTimer, onSlower, onFaster, onToggle, onStop }: Props) {
   const insets = useSafeAreaInsets();
   const fill = useRef(new Animated.Value(0)).current;
   useEffect(() => {
@@ -36,7 +38,7 @@ export function AutoBar({ theme, wpm, running, pageTimer, onSlower, onFaster, on
     </Tap>
   );
   return (
-    <View style={[styles.bar, { bottom: insets.bottom + 12, backgroundColor: theme.chrome, borderColor: theme.border }, running && styles.quiet]}>
+    <View style={[styles.bar, { bottom: bottom ?? insets.bottom + 12, backgroundColor: theme.chrome, borderColor: theme.border }, running && styles.quiet]}>
       {btn('remove', 'Slower', onSlower)}
       <Text style={[styles.speed, { color: theme.text }]} accessibilityLabel={`${wpm} words per minute`}>
         {wpm} wpm

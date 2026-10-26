@@ -13,7 +13,7 @@ import { confirmDeleteHighlight, hasNote } from '@/ui/confirm';
 import { showPrompt } from '@/ui/dialogs';
 import type { HighlightColor } from '@/ui/theme';
 import type { LookupKind } from './LookupCard';
-import { type TextPoint, type TextSel, selectBetween, selectionRanges, selectionText } from './selection';
+import { type TextPoint, type TextSel, exactText, selectBetween, selectionRanges, selectionText } from './selection';
 
 /** A point between words means the closer of the two words. */
 export function nearestWord(text: string, o: number): number {
@@ -32,6 +32,8 @@ interface Options {
   bookTitle: string;
   /** A block's text, or null if it isn't text. */
   textOf(b: number): string | null;
+  /** Whether a block goes on with the paragraph before it (the parts of a long paragraph). */
+  continues?(b: number): boolean;
   chapterOf(b: number): string | undefined;
   /** The colour the highlight tool uses (the last one picked). */
   color: HighlightColor;
@@ -39,41 +41,32 @@ interface Options {
 
 type Range = { b: number; s: number; e: number };
 
-export function useSelection({ bookId, bookTitle, textOf, chapterOf, color }: Options) {
+export function useSelection({ bookId, bookTitle, textOf, continues, chapterOf, color }: Options) {
   const ann = useAnnotations(bookId);
   const [sel, setSel] = useState<TextSel | null>(null);
   /** A definition or translation being shown. */
   const [lookup, setLookup] = useState<{ kind: LookupKind; text: string } | null>(null);
 
+  // Copy and Share take exactly the characters selected; Look Up and Translate the whole words they touch.
   const ranges = sel ? selectionRanges(sel, textOf) : [];
-  const text = sel ? selectionText(sel, textOf) : '';
+  const words = sel ? selectionText(sel, textOf, continues) : '';
+  const exact = sel ? exactText(sel, textOf, continues) : '';
   const highlights = ann.highlights;
 
-  /** Select the word at a point (a long press). */
-  const selectAt = (p: TextPoint) => {
-    const w = nearestWord(textOf(p.b) ?? '', p.o);
-    const at = { b: p.b, o: w };
-    const next = selectBetween(at, at, textOf);
-    if (next) Haptics.selectionAsync().catch(() => {});
-    setSel(next);
-  };
-  const selectDrag = (from: TextPoint, to: TextPoint) => setSel(selectBetween(from, to, textOf));
-  const clear = () => setSel(null);
-
   const copy = () => {
-    Clipboard.setStringAsync(text).catch(() => {});
+    Clipboard.setStringAsync(exact).catch(() => {});
     Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
     setSel(null);
   };
 
   const share = () => {
-    Share.share({ message: `“${text}”\n— ${bookTitle}` }).catch(() => {});
+    Share.share({ message: `“${exact.trim()}”\n— ${bookTitle}` }).catch(() => {});
     setSel(null);
   };
 
   /** Look up the word (one word selected), or translate the selection. */
   const show = (kind: LookupKind) => {
-    setLookup({ kind, text: text.trim() });
+    setLookup({ kind, text: words.trim() });
     setSel(null);
   };
 
@@ -167,10 +160,7 @@ export function useSelection({ bookId, bookTitle, textOf, chapterOf, color }: Op
     setSel,
     ranges,
     /** One word is selected (look up needs that). */
-    oneWord: ranges.length === 1 && !/\s/.test(text.trim()),
-    selectAt,
-    selectDrag,
-    clear,
+    oneWord: ranges.length === 1 && !/\s/.test(words.trim()),
     copy,
     share,
     show,

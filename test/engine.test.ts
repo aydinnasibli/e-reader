@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { Utf8Decoder, createDecoder, sniffEncoding } from '../src/engine/decode';
 import { type MarkupHandler, MarkupTokenizer } from '../src/engine/markup';
 import { BOLD, ITALIC, LINK, SUP, blockText, sliceRuns } from '../src/engine/types';
-import { MAX_BLOCK } from '../src/engine/writer';
+import { CHUNK_CHARS, MAX_BLOCK } from '../src/engine/writer';
 import { enc, ingestBytes } from './helpers';
 
 function encodeLegacy(s: string, encoding: string): Uint8Array {
@@ -186,6 +186,23 @@ describe('EPUB', () => {
     const epub = makeEpub({ 'one.xhtml': '<p>a</p>', 'two b.xhtml': '<p>b</p>' });
     const { manifest } = await ingestBytes(epub, 'x.epub');
     expect(manifest.chunks).toEqual([[0, 0], [1, 1]]);
+  });
+
+  it('says which chunks start a chapter, also after one ending exactly at the size limit', async () => {
+    // Chapter one fills its chunk to the character limit with its last paragraph; chapter two is long enough to be cut for size.
+    const para = (c: string) => `<p>${c.repeat(1999)}.</p>`;
+    const epub = makeEpub({
+      'one.xhtml': `<html><body>${para('a').repeat(CHUNK_CHARS / 2000)}</body></html>`,
+      'two b.xhtml': `<html><body>${para('b').repeat(20)}</body></html>`,
+    });
+    const { manifest, sink } = await ingestBytes(epub, 'x.epub');
+    expect(manifest.chunks.map(([b]) => b)).toEqual([0, 15, 30]);
+    // Chunk 1 starts chapter two (though chunk 0 was cut for size right before it); chunk 2 is cut for size.
+    expect(manifest.opens).toEqual([1]);
+    expect(sink.infos.map((i) => !!i.opens)).toEqual([false, true, false]);
+    // The same with a chunk full of blocks.
+    const many = makeEpub({ 'one.xhtml': `<html><body>${'<p>x</p>'.repeat(600)}</body></html>`, 'two b.xhtml': '<p>b</p>' });
+    expect((await ingestBytes(many, 'x.epub')).manifest.opens).toEqual([1]);
   });
 });
 

@@ -1,7 +1,11 @@
 // Definitions and translations shown inside the app. No keys: definitions come
 // from Wiktionary (every language, explained in English), with Google's
-// dictionary as a fallback; translations from Google Translate, with MyMemory
-// as a fallback.
+// dictionary as a fallback; Turkish words also from the Turkish Language
+// Association's dictionary (TDK), in Turkish, with the English meaning under
+// it. Translations come from Google Translate, with MyMemory as a fallback.
+
+import { fold } from '@/engine/fold';
+import { normaliseLanguage } from '@/engine/language';
 
 export interface Sense {
   /** Part of speech: "Noun", "Verb", ... */
@@ -14,7 +18,11 @@ export interface Definition {
   /** Language the entry is for, e.g. "English". */
   language?: string;
   senses: Sense[];
-  source: 'Wiktionary' | 'Google';
+  source: 'Wiktionary' | 'Google' | 'TDK';
+  /** Under a Turkish definition: what the word means in English. */
+  english?: Definition;
+  /** Google's short translation of the very word selected ("evlerinden": "from their homes"). */
+  gloss?: string;
 }
 
 export interface Translation {
@@ -51,6 +59,19 @@ export const LANGUAGES: { code: string; name: string }[] = [
   { code: 'ko', name: '한국어' },
 ];
 
+/**
+ * The language to translate a book's text into: the one chosen for books in
+ * its language (`chosen`, '' for books whose language isn't known); else the
+ * one chosen by older versions for all books, the phone's, English or
+ * Turkish, whichever isn't the book's own (Turkish into Turkish says nothing).
+ */
+export function translateTarget(bookLang: string | undefined, chosen: Record<string, string>, legacy: string, phone: string): string {
+  const from = normaliseLanguage(bookLang) ?? '';
+  if (chosen[from]) return chosen[from];
+  const target = [legacy, phone, 'en', 'tr'].find((c) => c && normaliseLanguage(c) !== from);
+  return LANGUAGES.find((l) => l.code === target || l.code.slice(0, 2) === target)?.code ?? target ?? 'en';
+}
+
 export function languageName(code?: string): string | undefined {
   if (!code) return undefined;
   const c = code.toLowerCase();
@@ -58,6 +79,15 @@ export function languageName(code?: string): string | undefined {
 }
 
 const TIMEOUT_MS = 12000;
+
+/**
+ * Who is asking, sent to Wikimedia and TDK. Wikimedia refuses requests
+ * without a real User-Agent ("Please set a user-agent", 403), and an Android
+ * app's requests otherwise go out as "okhttp/…"; the Api-User-Agent header
+ * alone isn't taken instead.
+ */
+export const USER_AGENT = 'NecReader/1.0 (https://github.com/aydinnasibli/e-reader; personal e-book reader)';
+const IDENTIFIED = { 'User-Agent': USER_AGENT, 'Api-User-Agent': USER_AGENT };
 
 /** Thrown when there is no connection (`offline`) or the service didn't answer properly. */
 export class LookupError extends Error {
@@ -69,9 +99,11 @@ export class LookupError extends Error {
   }
 }
 
-async function getJson(url: string, headers?: Record<string, string>, signal?: AbortSignal): Promise<unknown | null> {
+async function getJson(url: string, headers?: Record<string, string>, signal?: AbortSignal, timeout = TIMEOUT_MS): Promise<unknown | null> {
+  // The card was closed: nothing more is sent (a listener added now would never hear of it).
+  if (signal?.aborted) throw new LookupError('Cancelled');
   const ctl = new AbortController();
-  const timer = setTimeout(() => ctl.abort(), TIMEOUT_MS);
+  const timer = setTimeout(() => ctl.abort(), timeout);
   const onAbort = () => ctl.abort();
   signal?.addEventListener('abort', onAbort);
   try {
@@ -95,13 +127,24 @@ async function getJson(url: string, headers?: Record<string, string>, signal?: A
   }
 }
 
-/** The word to look up from a selection: no punctuation around it. */
+/** The word to look up from a selection: composed, no punctuation around it (a final accent stays: "kuş" written decomposed). */
 export function cleanWord(text: string): string {
   return text
-    .replace(/[­​]/g, '')
-    .replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, '')
+    .normalize('NFC')
+    .replace(/[\u00AD\u200B]/g, '')
+    .replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{M}\p{N}]+$/gu, '')
     .replace(/\s+/g, ' ')
     .trim();
+}
+
+/**
+ * A word in lower case as its language writes it: Turkish (and Azerbaijani)
+ * I is ı and İ is i ("Işık" → "ışık", "İnsan" → "insan"; JavaScript's own
+ * lower case gives "işık" and "i̇nsan", which no dictionary has).
+ */
+export function lowerWord(word: string, lang?: string): string {
+  const turkic = lang === 'tr' || lang === 'az';
+  return (turkic ? word.replace(/I/g, 'ı') : word).replace(/İ/g, 'i').toLowerCase();
 }
 
 const ENTITIES: Record<string, string> = {
@@ -140,13 +183,16 @@ interface WikiSense {
   }[];
 }
 
-/** Read Wiktionary's answer, preferring the entry in the book's language. */
-export function parseWiktionary(word: string, json: unknown, lang?: string): Definition | null {
+/**
+ * Read Wiktionary's answer, preferring the entry in the book's language, then
+ * English. `only`: that language's entry or nothing.
+ */
+export function parseWiktionary(word: string, json: unknown, lang?: string, only = false): Definition | null {
   if (!json || typeof json !== 'object') return null;
   const byLang = json as Record<string, WikiSense[]>;
   const codes = Object.keys(byLang).filter((k) => Array.isArray(byLang[k]));
-  const want = lang?.slice(0, 2).toLowerCase();
-  const code = (want && codes.find((c) => c === want)) || codes.find((c) => c === 'en') || codes[0];
+  const want = normaliseLanguage(lang);
+  const code = (want && codes.find((c) => c === want)) || (only ? undefined : codes.find((c) => c === 'en') || codes[0]);
   if (!code) return null;
   const senses: Sense[] = [];
   for (const s of byLang[code]) {
@@ -189,6 +235,55 @@ export function parseGoogleDefinitions(word: string, json: unknown): Definition 
   return { word: base ?? word, senses, source: 'Google' };
 }
 
+/** Google's answer with named fields (dj=1): the short translation of the word and the language it detected. */
+export function parseGoogleGloss(json: unknown): { gloss?: string; from?: string } {
+  const j = json as { sentences?: { trans?: unknown }[]; src?: unknown } | null;
+  const gloss = Array.isArray(j?.sentences)
+    ? j.sentences
+        .map((x) => (typeof x?.trans === 'string' ? x.trans : ''))
+        .join('')
+        .trim()
+    : '';
+  return { ...(gloss ? { gloss } : {}), ...(typeof j?.src === 'string' ? { from: j.src } : {}) };
+}
+
+/**
+ * TDK's dictionary (sozluk.gov.tr/gts, unofficial): a list of entries, one
+ * per word of that spelling, [{ madde, anlamlarListe: [{ anlam,
+ * orneklerListe?: [{ ornek }], ozelliklerListe?: [{ tur, tam_adi }] }] }],
+ * or { error } when there's none. Part of speech is the feature of type 3,
+ * usage (mecaz, eskimiş…) of type 4.
+ */
+export function parseTdk(json: unknown): Definition | null {
+  if (!Array.isArray(json)) return null;
+  const senses: Sense[] = [];
+  let word: string | undefined;
+  for (const entry of json as { madde?: unknown; anlamlarListe?: unknown }[]) {
+    if (!entry || !Array.isArray(entry.anlamlarListe)) continue;
+    if (!word && typeof entry.madde === 'string') word = entry.madde;
+    let sense: Sense | null = null;
+    for (const a of entry.anlamlarListe as { anlam?: unknown; orneklerListe?: unknown; ozelliklerListe?: unknown }[]) {
+      if (typeof a?.anlam !== 'string' || !a.anlam.trim()) continue;
+      const features = (Array.isArray(a.ozelliklerListe) ? a.ozelliklerListe : []) as { tur?: unknown; tam_adi?: unknown }[];
+      const named = (tur: string) => features.filter((f) => String(f?.tur) === tur && typeof f.tam_adi === 'string').map((f) => f.tam_adi as string);
+      const pos = named('3').join(', ');
+      // A new part of speech starts a new group; meanings without one belong to the one before.
+      if (!sense || (pos && pos !== sense.pos)) {
+        sense = { pos, defs: [] };
+        senses.push(sense);
+      }
+      const usage = named('4');
+      const examples = (Array.isArray(a.orneklerListe) ? a.orneklerListe : []) as { ornek?: unknown }[];
+      const example = examples.find((x) => typeof x?.ornek === 'string')?.ornek as string | undefined;
+      const text = stripHtml(a.anlam);
+      sense.defs.push({ text: usage.length ? `(${usage.join(', ')}) ${text}` : text, ...(example ? { example: stripHtml(example) } : {}) });
+    }
+  }
+  const kept = senses.filter((x) => x.defs.length).map((x) => ({ ...x, defs: x.defs.slice(0, 8) }));
+  if (!word || !kept.length) return null;
+  return { word, language: 'Turkish', senses: kept, source: 'TDK' };
+}
+
 /** Read Google Translate's answer: [[[translated, original, ...], ...], null, "from", ...]. */
 export function parseTranslation(json: unknown): Omit<Translation, 'source'> | null {
   if (!Array.isArray(json) || !Array.isArray(json[0])) return null;
@@ -203,39 +298,250 @@ export function parseTranslation(json: unknown): Omit<Translation, 'source'> | n
 const gtx = (q: string, to: string, dt: string[], named = false) =>
   `https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl=${encodeURIComponent(to)}&${dt.map((d) => `dt=${d}`).join('&')}${named ? '&dj=1' : ''}&q=${encodeURIComponent(q)}`;
 
+const wiktionaryUrl = (w: string) => `https://en.wiktionary.org/api/rest_v1/page/definition/${encodeURIComponent(w.replace(/ /g, '_'))}`;
+const tdkUrl = (w: string) => `https://sozluk.gov.tr/gts?ara=${encodeURIComponent(w)}`;
+
+// ---------- Turkish base words ----------
+
 /**
- * Definitions of a word. Returns null when no dictionary knows it; throws
- * LookupError when neither could be reached.
+ * Turkish endings, as patterns: A is a or e, I is ı, i, u or ü, D is d or t,
+ * C is c or ç (vowel harmony and consonant assimilation). Verb endings leave a
+ * verb stem, looked up as its infinitive ("geldi" → gel → gelmek).
+ */
+const VERB_ENDINGS =
+  'Iyordu Iyorum Iyorsun Iyoruz Iyorlar Iyor yor mIyor AcAktI AcAğIm AcAğIz AcAk yAcAk mAyAcAk mAlIydI mAlI mIştI mIş mAmIş DIlAr DIğImIz DIğInI DIğIm DIğI DIm DIn DIk DInIz DI mAdI ' +
+  'ArAk yArAk IncA yIncA Ip yIp Abil yAbil mAz mAk mAsI mA sA An yAn Ar Ir r';
+const NOUN_ENDINGS =
+  'lArInDAn lArInDA lArInA lArInI lArIn lArI lAr ImIzIn ImIzDAn ImIzDA ImIzA ImIz InIzIn InIzDAn InIzDA InIz mIz nIz ' +
+  'InDAn nDAn DAn InDA nDA DA InA nA yA A InI nI yI sI I InIn nIn In Im m ylA lA DIr ki CA lIk sIz lI CI yken ken ydI ymIş ysA';
+
+function expand(pattern: string): string[] {
+  const choices: Record<string, string[]> = { A: ['a', 'e'], I: ['ı', 'i', 'u', 'ü'], D: ['d', 't'], C: ['c', 'ç'] };
+  let out = [''];
+  for (const c of pattern) out = out.flatMap((o) => (choices[c] ?? [c]).map((x) => o + x));
+  return out;
+}
+
+/** All endings, longest first, with whether they leave a verb stem. */
+const ENDINGS: [string, boolean][] = [
+  ...VERB_ENDINGS.split(' ').flatMap((p) => expand(p).map((e): [string, boolean] => [e, true])),
+  ...NOUN_ENDINGS.split(' ').flatMap((p) => expand(p).map((e): [string, boolean] => [e, false])),
+].sort((a, b) => b[0].length - a[0].length);
+
+const VOWEL = /[aeıioöuüâîû]/;
+const BACK_VOWELS = 'aıouâû';
+
+/** The infinitive of a verb stem: -mak after a back vowel, -mek after a front one. */
+function infinitive(stem: string): string {
+  const v = [...stem].reverse().find((c) => VOWEL.test(c));
+  return stem + (v && BACK_VOWELS.includes(v) ? 'mak' : 'mek');
+}
+
+/** p, ç, t, k at the end of a word become b, c, d, ğ before an ending: back again ("kitabı" → kitap). */
+function hardened(stem: string): string | null {
+  const to: Record<string, string> = { b: 'p', c: 'ç', d: 't', ğ: 'k', g: 'k' };
+  const last = stem[stem.length - 1];
+  return to[last] ? stem.slice(0, -1) + to[last] : null;
+}
+
+/** TDK is unofficial and sometimes slow: not waited for as long as the others. */
+const TDK_TIMEOUT_MS = 7000;
+/**
+ * TDK's server now and then leaves a connection unanswered (it answers the
+ * next one at once): a second request goes out when the first hasn't
+ * answered after this long, or failed.
+ */
+const TDK_AGAIN_MS = 2500;
+
+/**
+ * TDK's entry for a word (null: TDK has no such word), asked again once if
+ * the first request fails or hangs; the first answer is used. Throws when
+ * neither got one.
+ */
+function askTdk(w: string, signal?: AbortSignal): Promise<Definition | null> {
+  return new Promise((resolve, reject) => {
+    const tries: AbortController[] = [];
+    let failed = 0;
+    let done = false;
+    let again: ReturnType<typeof setTimeout> | null = null;
+    const finish = (f: () => void) => {
+      if (done) return;
+      done = true;
+      if (again) clearTimeout(again);
+      tries.forEach((c) => c.abort());
+      f();
+    };
+    const start = () => {
+      const ctl = new AbortController();
+      tries.push(ctl);
+      const stop = () => ctl.abort();
+      signal?.addEventListener('abort', stop);
+      getJson(tdkUrl(w), IDENTIFIED, ctl.signal, TDK_TIMEOUT_MS)
+        .then(
+          (json) => finish(() => resolve(parseTdk(json))),
+          (e: unknown) => {
+            if (signal?.aborted || ++failed === 2) finish(() => reject(e));
+            // Failed before the second went out: it goes now.
+            else if (tries.length < 2) {
+              if (again) clearTimeout(again);
+              again = null;
+              start();
+            }
+          },
+        )
+        .finally(() => signal?.removeEventListener('abort', stop));
+    };
+    start();
+    again = setTimeout(() => {
+      again = null;
+      if (!done && tries.length < 2) start();
+    }, TDK_AGAIN_MS);
+  });
+}
+
+/** Most base words tried for an inflected one (TDK only knows base words). */
+const MAX_STEMS = 4;
+
+/**
+ * The verb stems an ending may have left, most likely first. -(I)yor takes
+ * the stem's own last vowel: "okuyor" is oku-, "yaşıyor" yaşa- (a and e turn
+ * into ı and i before it), "diyor" de-, and "geliyor" gel-, with the vowel
+ * only joining. A softened last consonant is hardened again ("gidiyor": git-).
+ */
+function verbStems(stem: string, ending: string): string[] {
+  const out: string[] = [];
+  const v = /^[ıiuü]yor/.test(ending) ? ending[0] : null;
+  if (v) {
+    if (v === 'ı' || v === 'i') out.push(stem + (v === 'ı' ? 'a' : 'e'));
+    out.push(stem + v);
+  } else if (ending.startsWith('yor') && /[ıi]$/.test(stem)) {
+    out.push(stem.slice(0, -1) + (stem.endsWith('ı') ? 'a' : 'e'));
+  }
+  out.push(stem);
+  const hard = hardened(stem);
+  if (hard) out.push(hard);
+  return out;
+}
+
+/**
+ * Words a Turkish word may come from, most likely first: its endings trimmed
+ * one after another ("evlerinden" → ev; "kızlarımızın" → kızlarımız, kızlar,
+ * kız), softened consonants hardened again; after a verb ending only verbs,
+ * as infinitives ("okuyorum" → okumak, never "ok", an arrow).
+ */
+export function turkishStems(word: string): string[] {
+  const out: string[] = [];
+  const add = (w: string | null) => {
+    if (w && w !== word && !out.includes(w)) out.push(w);
+  };
+  let stem = word;
+  for (let peel = 0; peel < 3 && out.length < MAX_STEMS; peel++) {
+    const found = ENDINGS.find(([e]) => stem.endsWith(e) && stem.length - e.length >= 2 && VOWEL.test(stem.slice(0, -e.length)));
+    if (!found) break;
+    const [ending, verb] = found;
+    stem = stem.slice(0, -ending.length);
+    if (verb) {
+      for (const v of verbStems(stem, ending)) add(infinitive(v));
+      break;
+    }
+    add(hardened(stem));
+    add(stem);
+  }
+  return out.slice(0, MAX_STEMS);
+}
+
+// ---------- definitions ----------
+
+/** A definition that is only Google's short translation of the word. */
+const glossOnly = (word: string, gloss: string): Definition => ({ word, senses: [{ pos: '', defs: [{ text: gloss }] }], source: 'Google' });
+
+/**
+ * Definitions of a word in a book of language `lang` (unknown: the language
+ * Google detects). Returns null when no dictionary knows it; throws
+ * LookupError when none could be reached.
  */
 export async function defineWord(text: string, lang?: string, signal?: AbortSignal): Promise<Definition | null> {
   const word = cleanWord(text);
   if (!word) return null;
   let reached = false;
-  const tries = word === word.toLowerCase() ? [word] : [word, word.toLowerCase()];
-  for (const w of tries) {
+  // Google, asked once: the word's language when the book doesn't say, its
+  // short translation, and its own dictionary as a fallback.
+  let google: Promise<unknown> | null = null;
+  const askGoogle = () =>
+    (google ??= getJson(gtx(word, 'en', ['t', 'md'], true), undefined, signal).then(
+      (json) => {
+        reached = true;
+        return json;
+      },
+      (e) => {
+        if (signal?.aborted) throw e;
+        return null;
+      },
+    ));
+  const language = normaliseLanguage(lang) ?? normaliseLanguage(parseGoogleGloss(await askGoogle()).from);
+  /** Google's translation of the word, when it says something the word doesn't. */
+  const gloss = async () => {
+    const g = parseGoogleGloss(await askGoogle()).gloss;
+    return g && fold(g) !== fold(word) ? g : undefined;
+  };
+  const wiktionary = async (w: string, only: boolean) => {
     try {
-      const json = await getJson(
-        `https://en.wiktionary.org/api/rest_v1/page/definition/${encodeURIComponent(w.replace(/ /g, '_'))}`,
-        {
-          Accept: 'application/json',
-          'Api-User-Agent': 'NecReader/1.0 (e-book reader app)',
-        },
-        signal,
-      );
+      const def = parseWiktionary(w, await getJson(wiktionaryUrl(w), { Accept: 'application/json', ...IDENTIFIED }, signal), language, only);
       reached = true;
-      const def = parseWiktionary(w, json, lang);
-      if (def) return def;
+      return def;
     } catch (e) {
       if (signal?.aborted) throw e;
+      return null;
     }
+  };
+
+  if (language === 'tr') {
+    const lower = lowerWord(word, 'tr');
+    const stems = turkishStems(lower);
+    // Asked meanwhile: the English entry for the word as it is, and Google's translation of it.
+    const asIs = wiktionary(lower, true).catch(() => null);
+    const meaning = gloss().catch(() => undefined);
+    // TDK: the word, or else the word it comes from (TDK only lists base words),
+    // one at a time: a burst of requests is what TDK's server is likeliest to leave unanswered.
+    let turkish: Definition | null = null;
+    try {
+      for (const w of [lower, ...stems]) {
+        turkish = await askTdk(w, signal);
+        reached = true;
+        if (turkish) break;
+      }
+    } catch (e) {
+      if (signal?.aborted) throw e;
+      // TDK out of reach for now: the English meaning stands alone.
+    }
+    // The English meaning: Wiktionary's Turkish entry for the base word, or the word, or a word it may come from.
+    const base = turkish && turkish.word !== lower ? turkish.word : null;
+    let english = (base ? await wiktionary(base, true) : null) ?? (await asIs);
+    if (!english && !turkish) {
+      const others = [...(word !== lower ? [word] : []), ...stems.slice(0, 2)];
+      english = (await Promise.all(others.map((w) => wiktionary(w, true)))).find(Boolean) ?? null;
+    }
+    const g = await meaning;
+    if (signal?.aborted) throw new LookupError('Cancelled');
+    if (!english && g) english = glossOnly(word, g);
+    // Google's translation of the very word, unless it is already the English meaning shown.
+    const extra = g && english?.source !== 'Google' ? { gloss: g } : {};
+    if (turkish) return { ...turkish, ...(english ? { english } : {}), ...extra };
+    if (english) return { ...english, ...extra };
+    if (!reached) throw new LookupError('No connection', true);
+    return null;
   }
-  try {
-    const def = parseGoogleDefinitions(word, await getJson(gtx(word, 'en', ['t', 'md'], true), undefined, signal));
-    reached = true;
+
+  const lower = lowerWord(word, language);
+  for (const w of [...new Set([word, lower])]) {
+    const def = await wiktionary(w, false);
     if (def) return def;
-  } catch (e) {
-    if (!reached || signal?.aborted) throw e;
   }
+  const def = parseGoogleDefinitions(word, await askGoogle());
+  if (def) return def;
+  const g = await gloss();
+  if (g) return glossOnly(word, g);
+  if (!reached) throw new LookupError('No connection', true);
   return null;
 }
 

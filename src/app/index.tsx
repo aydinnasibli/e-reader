@@ -1,10 +1,12 @@
 import Ionicons from '@expo/vector-icons/Ionicons';
 import * as Haptics from 'expo-haptics';
 import { Stack, router } from 'expo-router';
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { FlashList } from '@shopify/flash-list';
-import { ActivityIndicator, Alert, Pressable, ScrollView, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
+import { ActivityIndicator, Alert, BackHandler, Pressable, ScrollView, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import type { SearchBarCommands } from 'react-native-screens';
+import { fold } from '@/engine/fold';
 import {
   type Filter,
   SORT_LABELS,
@@ -32,10 +34,13 @@ import { CURRENT_BUILD, canSelfUpdate, checkForUpdate } from '@/lib/appUpdate';
 import { useCrashes } from '@/lib/crashLog';
 import { backUp, restoreFromFile } from '@/ui/backupDialogs';
 import { showCrashLog } from '@/ui/crashDialogs';
+import { COLUMN_WIDTH, gridColumns } from '@/ui/layout';
 import { type AppColors, useAppColors } from '@/ui/theme';
 import { Tap } from '@/ui/Tap';
 
 const GAP = 16;
+/** Chips are drawn 34 high; the finger gets 44 (see styles.chips for the room above and below). */
+const CHIP_SLOP = { top: 4, bottom: 6 };
 
 export default function Library() {
   const c = useAppColors();
@@ -51,21 +56,44 @@ export default function Library() {
   const addingShared = useAddingSharedFile();
   const [statsOpen, setStatsOpen] = useState(false);
   const crashes = useCrashes();
-  const columns = width >= 700 ? 5 : 3;
+  const columns = gridColumns(width);
   const cellWidth = (width - GAP * (columns + 1)) / columns;
+  // The update bar and the "Continue reading" card span whole columns of the
+  // grid, at most the shared column's width: the whole phone, part of a tablet.
+  const span = Math.min(columns, Math.max(1, Math.floor((COLUMN_WIDTH + GAP) / (cellWidth + GAP))));
+  const topWidth = span * cellWidth + (span - 1) * GAP;
 
+  // The search field in the header. On Android it opens from its icon, and
+  // Back closes it: otherwise the first Back only drops the keyboard and the
+  // next one leaves the app.
+  const search = useRef<SearchBarCommands>(null);
+  const [searching, setSearching] = useState(false);
+  useEffect(() => {
+    if (!searching) return;
+    const sub = BackHandler.addEventListener('hardwareBackPress', () => {
+      // A screen opened from the library is on top: Back is for it.
+      if (router.canGoBack()) return false;
+      search.current?.cancelSearch();
+      setSearching(false);
+      setQuery('');
+      return true;
+    });
+    return () => sub.remove();
+  }, [searching]);
+
+  // Case, accents and the Turkish I/ı/İ/i don't matter: "istanbul" finds
+  // "İstanbul", "ilik" finds "ILIK". Folded once per change to the shelf.
+  const q = fold(query.trim());
+  const searchText = useMemo(() => new Map(books.map((b) => [b.id, fold(`${b.title}\n${b.author}`)])), [books]);
   const visible = useMemo(() => {
-    const q = query.trim().toLocaleLowerCase();
-    const filtered = books.filter(
-      (b) => matches(b, filter) && (!q || b.title.toLocaleLowerCase().includes(q) || b.author.toLocaleLowerCase().includes(q)),
-    );
+    const filtered = books.filter((b) => matches(b, filter) && (!q || !!searchText.get(b.id)?.includes(q)));
     return sortBooks(filtered, shelves.sort);
-  }, [books, filter, query, shelves.sort]);
+  }, [books, searchText, filter, q, shelves.sort]);
 
   // "Continue reading" card: the last book opened that isn't finished.
   const current = useMemo(
-    () => (filter.kind === 'all' && !query ? sortBooks(books, 'recent').find((b) => (b.percent ?? 0) > 0 && !isFinished(b) && b.status !== 'error') : undefined),
-    [books, filter, query],
+    () => (filter.kind === 'all' && !q ? sortBooks(books, 'recent').find((b) => (b.percent ?? 0) > 0 && !isFinished(b) && b.status !== 'error') : undefined),
+    [books, filter, q],
   );
 
   const add = async () => {
@@ -74,6 +102,13 @@ export default function Library() {
     try {
       const res = await importBooks();
       if (res.failed.length) Alert.alert("Couldn't add some books", `There may not be enough free space:\n\n${res.failed.join('\n')}`);
+      // Picked from a cloud app or service that wouldn't let this app read them.
+      if (res.unreadable.length) {
+        Alert.alert(
+          "Couldn't read some files",
+          `The app or service they're in didn't let this app read them. Save them to the phone (Files or Downloads) and add them from there:\n\n${res.unreadable.join('\n')}`,
+        );
+      }
       if (res.skipped.length) Alert.alert('Some files were skipped', `Supported formats: EPUB, FB2, MOBI, AZW3 and TXT:\n\n${res.skipped.join('\n')}`);
       if (res.duplicates.length) {
         const list = res.duplicates.map(([file, title]) => (file === title || !title ? file : `${file} — “${title}”`)).join('\n');
@@ -199,7 +234,7 @@ export default function Library() {
   const header = (
     // The grid's content is inset by half a gap; undo that for the full-width header.
     <View style={{ marginHorizontal: shelves.view === 'grid' ? -GAP / 2 : 0 }}>
-      <UpdateBanner />
+      <UpdateBanner style={{ maxWidth: topWidth }} />
       {addingShared ? (
         <View style={styles.adding}>
           <ActivityIndicator />
@@ -213,15 +248,16 @@ export default function Library() {
             haptic="select"
             onPress={() => setFilter(ch.f)}
             onLongPress={ch.onLong}
+            hitSlop={CHIP_SLOP}
             style={[styles.chip, { backgroundColor: active(ch.f) ? c.text : c.chip }]}>
             <Text style={{ color: active(ch.f) ? c.bg : c.text, fontSize: 14, fontWeight: '600' }}>{ch.label}</Text>
           </Tap>
         ))}
-        <Tap onPress={() => newCollection()} style={[styles.chip, { backgroundColor: c.chip }]} accessibilityLabel="New collection">
+        <Tap onPress={() => newCollection()} hitSlop={CHIP_SLOP} style={[styles.chip, { backgroundColor: c.chip }]} accessibilityLabel="New collection">
           <Ionicons name="add" size={18} color={c.text} />
         </Tap>
       </ScrollView>
-      {current ? <ContinueCard book={current} c={c} onPress={() => open(current)} /> : null}
+      {current ? <ContinueCard book={current} c={c} width={topWidth} onPress={() => open(current)} /> : null}
       {current && visible.length ? <Text style={[styles.section, { color: c.text }]}>All books</Text> : null}
     </View>
   );
@@ -253,26 +289,41 @@ export default function Library() {
           headerLargeStyle: { backgroundColor: c.bg },
           headerTintColor: c.text,
           headerSearchBarOptions: {
+            ref: search,
             placeholder: 'Search title or author',
             hideWhenScrolling: true,
+            // Android draws the search icon and text black unless told, even on a dark header.
+            headerIconColor: c.text,
+            textColor: c.text,
+            hintTextColor: c.secondary,
+            tintColor: c.accent,
             onChangeText: (e) => setQuery(e.nativeEvent.text),
+            onOpen: () => setSearching(true),
+            onClose: () => {
+              setSearching(false);
+              setQuery('');
+            },
             onCancelButtonPress: () => setQuery(''),
           },
+          // Each button is a 44-point square: a finger-sized target that the
+          // header doesn't cut down (it ignores taps outside its buttons' boxes).
           headerRight: () => (
             <View style={styles.headerButtons}>
-              <Tap onPress={() => router.push('/notes')} hitSlop={10} accessibilityLabel="Highlights and notes">
+              <Tap onPress={() => router.push('/notes')} style={styles.headerButton} accessibilityLabel="Highlights and notes">
                 <Ionicons name="color-wand-outline" size={22} color={c.text} />
               </Tap>
-              <Tap onPress={() => setStatsOpen(true)} hitSlop={10} accessibilityLabel="Reading stats">
+              <Tap onPress={() => setStatsOpen(true)} style={styles.headerButton} accessibilityLabel="Reading stats">
                 <Ionicons name="stats-chart-outline" size={22} color={c.text} />
               </Tap>
-              <Tap onPress={viewMenu} hitSlop={10} accessibilityLabel="View options">
+              <Tap onPress={viewMenu} style={styles.headerButton} accessibilityLabel="View options">
                 <Ionicons name="options-outline" size={24} color={c.text} />
               </Tap>
               {importing ? (
-                <ActivityIndicator />
+                <View style={styles.headerButton}>
+                  <ActivityIndicator />
+                </View>
               ) : (
-                <Tap onPress={add} hitSlop={10} accessibilityLabel="Add books">
+                <Tap onPress={add} style={styles.headerButton} accessibilityLabel="Add books">
                   <Ionicons name="add" size={28} color={c.accent} />
                 </Tap>
               )}
@@ -328,10 +379,10 @@ function Progress({ value, c }: { value: number; c: AppColors }) {
   );
 }
 
-function ContinueCard({ book, c, onPress }: { book: BookEntry; c: AppColors; onPress(): void }) {
+function ContinueCard({ book, c, width, onPress }: { book: BookEntry; c: AppColors; width: number; onPress(): void }) {
   const pct = book.percent ?? 0;
   return (
-    <Tap feedback="card" onPress={onPress} style={[styles.continue, { backgroundColor: c.card }]}>
+    <Tap feedback="card" onPress={onPress} style={[styles.continue, { backgroundColor: c.card, maxWidth: width }]} accessibilityLabel={`Continue reading: ${book.title}`}>
       <Cover book={book} width={78} />
       <View style={styles.continueBody}>
         <Text style={[styles.kicker, { color: c.secondary }]}>CONTINUE READING</Text>
@@ -365,7 +416,7 @@ function GridCell({ book, width, c, onPress, onLongPress }: { book: BookEntry; w
           <Cover book={book} width={width} />
           {status ? (
             <View style={[styles.badge, book.status === 'error' && { backgroundColor: c.danger }]}>
-              <Text style={styles.badgeText}>{status}</Text>
+              <Text style={[styles.badgeText, book.status === 'error' && { color: c.dangerText }]}>{status}</Text>
             </View>
           ) : null}
         </View>
@@ -420,8 +471,11 @@ function ListRow({ book, c, onPress, onLongPress }: { book: BookEntry; c: AppCol
 }
 
 const styles = StyleSheet.create({
-  headerButtons: { flexDirection: 'row', alignItems: 'center', gap: 18 },
+  headerButtons: { flexDirection: 'row', alignItems: 'center' },
+  headerButton: { width: 44, height: 44, alignItems: 'center', justifyContent: 'center' },
   adding: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingHorizontal: GAP, paddingBottom: 10 },
+  // Room above and below the chips for their larger touch area (CHIP_SLOP):
+  // a touch outside the row would never reach them.
   chips: { paddingHorizontal: GAP, paddingTop: 4, paddingBottom: 12, gap: 8 },
   chip: { paddingHorizontal: 14, paddingVertical: 6, minHeight: 34, borderRadius: 17, alignItems: 'center', justifyContent: 'center' },
   continue: {

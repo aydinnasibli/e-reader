@@ -4,7 +4,7 @@
 
 import type { ToPage } from '../protocol';
 import { listen, send } from './bridge';
-import { setMarks } from './marks';
+import { setMarking, setMarks } from './marks';
 import { Paged } from './paged';
 import { Scrolled } from './scrolled';
 import { clearSelection, watchSelection } from './selection';
@@ -17,8 +17,18 @@ let view: Paged | Scrolled | null = null;
 let marking = false;
 let tapForward = false;
 
+const FACE = /@font-face\{[^}]*\}/g;
+
+/**
+ * The book's styles. Its font faces go in a style of their own, changed only
+ * when they change: a face made again is loaded from its file again, and the
+ * pages are measured only once it has.
+ */
 function setBookStyle(css: string) {
-  document.getElementById('book')!.textContent = css;
+  const faces = (css.match(FACE) ?? []).join('');
+  const fonts = document.getElementById('fonts')!;
+  if (fonts.textContent !== faces) fonts.textContent = faces;
+  document.getElementById('book')!.textContent = faces ? css.replace(FACE, '') : css;
 }
 
 /**
@@ -42,10 +52,14 @@ listen((m) => {
 });
 
 async function handle(m: ToPage) {
+  // What moves the strip waits for a page turn to land (Paged.idle).
+  if (view instanceof Paged && (m.t === 'setup' || m.t === 'content' || m.t === 'add' || m.t === 'drop' || m.t === 'go' || m.t === 'measure')) await view.idle();
   switch (m.t) {
     case 'setup': {
       const s = m.setup;
       tapForward = s.tapForward;
+      // The book's language: the browser's own rules for it (Turkish i in ligatures, base.css).
+      document.documentElement.lang = s.lang ?? '';
       setBookStyle(s.css);
       document.documentElement.dataset.mode = s.mode;
       if (s.mode !== mode || !view) {
@@ -55,15 +69,19 @@ async function handle(m: ToPage) {
         view = mode === 'page' ? new Paged(viewport) : new Scrolled(scrollRoot);
       }
       await fontsLoaded();
+      // (A turn may have started while the fonts loaded.)
+      if (view instanceof Paged) await view.idle();
       view.configure(s, m.key, m.target);
       return;
     }
     case 'content':
       await fontsLoaded();
+      if (view instanceof Paged) await view.idle();
       view?.setContent(m.chunks, m.target, m.key);
       return;
     case 'add':
       await fontsLoaded();
+      if (view instanceof Paged) await view.idle();
       view?.add(m.chunks);
       return;
     case 'drop':
@@ -80,11 +98,17 @@ async function handle(m: ToPage) {
       marking = m.marking;
       document.documentElement.classList.toggle('marking', marking);
       if (marking) clearSelection();
+      setMarking(marking);
       return;
     case 'clearSelection':
       return clearSelection();
     case 'auto':
       return view instanceof Scrolled ? view.auto(m.speed) : undefined;
+    case 'measure':
+      if (!(view instanceof Paged)) return;
+      await fontsLoaded();
+      await view.idle();
+      return view.measureChunks(m.key, m.chunks);
   }
 }
 

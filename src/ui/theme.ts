@@ -1,5 +1,6 @@
 // App-wide colours for everything outside the reading page (the page uses the
-// reader themes in lib/settings).
+// reader themes in lib/settings). Text in them is at least 4.5:1 against what
+// it's drawn on (WCAG AA; test/ui/theme.test.tsx checks the pairs used).
 
 import { useColorScheme } from 'react-native';
 
@@ -11,8 +12,11 @@ export interface AppColors {
   secondary: string;
   border: string;
   accent: string;
+  /** Text on an accent-coloured button. */
   accentText: string;
   danger: string;
+  /** Text on a danger-coloured badge. */
+  dangerText: string;
   chip: string;
   dark: boolean;
 }
@@ -22,11 +26,12 @@ const LIGHT: AppColors = {
   card: '#FFFFFF',
   elevated: '#FFFFFF',
   text: '#1C1C1E',
-  secondary: '#6E6E73',
+  secondary: '#66666B',
   border: '#D8D5CE',
-  accent: '#2F6FEB',
+  accent: '#2568EA',
   accentText: '#FFFFFF',
-  danger: '#D93025',
+  danger: '#D52F24',
+  dangerText: '#FFFFFF',
   chip: '#E8E5DE',
   dark: false,
 };
@@ -39,8 +44,10 @@ const DARK: AppColors = {
   secondary: '#9E9EA4',
   border: '#3A3A40',
   accent: '#5B95FF',
-  accentText: '#FFFFFF',
+  // Dark on these light fills: white on them is under 3:1.
+  accentText: '#111113',
   danger: '#FF6B5E',
+  dangerText: '#111113',
   chip: '#2A2A30',
   dark: true,
 };

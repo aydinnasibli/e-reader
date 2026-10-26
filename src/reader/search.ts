@@ -2,9 +2,15 @@
 // Results stream in as they're found, so the first hits in a 100 MB book show
 // up immediately while the rest is still being searched.
 
+import { fold } from '@/engine/fold';
 import { type Block, type ChunkFile, blockText } from '@/engine/types';
 import { chunkFile } from '@/lib/storage';
 import type { BookData } from './book';
+
+// Capitals, accents and the Turkish dotted and dotless i make no difference
+// ("ilik" finds "ILIK" and "ılık"), and offsets in the folded text are
+// offsets in the book's.
+export { fold };
 
 export interface Hit {
   b: number;
@@ -18,21 +24,6 @@ export interface Hit {
 
 export const MAX_HITS = 1000;
 const CONTEXT = 40;
-
-/** Case-folding that keeps string length, so offsets stay valid. */
-export function fold(s: string): string {
-  const low = s.toLowerCase();
-  if (low.length === s.length) return low.replace(/ё/g, 'е');
-  // Some capitals lowercase to two characters (Turkish İ -> i + dot); fold
-  // those one by one so every offset still lines up with the original text.
-  let out = '';
-  for (const ch of s) {
-    let l = ch.toLowerCase();
-    if (l.length !== ch.length) l = ch === 'İ' ? 'i' : ch;
-    out += l === 'ё' ? 'е' : l;
-  }
-  return out;
-}
 
 /** All matches of an already-folded query in one block. */
 export function findInBlock(block: Block, b: number, q: string, out: Hit[], limit: number) {
@@ -62,7 +53,8 @@ export interface SearchProgress {
 
 /** Start searching; returns a function that cancels the search. */
 export function searchBook(book: BookData, query: string, onUpdate: (p: SearchProgress) => void): () => void {
-  const q = fold(query.trim());
+  // Typed text is composed (NFC), as the book's is.
+  const q = fold(query.trim().normalize('NFC'));
   let cancelled = false;
   if (q.length < 2) {
     onUpdate({ hits: [], done: 1, finished: true });

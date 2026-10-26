@@ -10,6 +10,12 @@ describe('when a book is finished', () => {
     for (const t of ['Chapter 12', 'Epilogue', 'The Notes of a Madman', 'Глава 3', 'Index Cards and Other Stories']) expect(isBackMatter(t)).toBe(false);
   });
 
+  it('Turkish titles in capitals, with the dotted and dotless i', () => {
+    for (const t of ['YAZAR HAKKINDA', 'İçindekiler', 'İÇİNDEKİLER', 'DİZİN', 'KAYNAKÇA', 'TEŞEKKÜRLER', 'Yazar hakkında'])
+      expect(isBackMatter(t)).toBe(true);
+    expect(isBackMatter('BİRİNCİ BÖLÜM')).toBe(false);
+  });
+
   // Blocks are 100 characters each here.
   const at = (b: number) => b * 100;
 

@@ -1,12 +1,16 @@
 // Reader-side access to a converted book: loads chunks on demand (keeping a
 // small cache), maps positions to percentages, and extracts images lazily.
 
+import { File, FileMode } from 'expo-file-system';
 import { Image } from 'react-native';
+import { guessLanguage } from '@/engine/language';
 import type { Block, ChunkFile, Manifest, Position, TocEntry } from '@/engine/types';
-import { blockLength } from '@/engine/types';
+import { blockLength, blockText } from '@/engine/types';
 import { ZipArchive, readZipData } from '@/engine/zip';
 import { type BookEntry, type LiveBook, sourceFile } from '@/lib/library';
 import { FileSource, chunkFile, imageFile, safeImageName } from '@/lib/storage';
+import { svgSize } from './svgSize';
+import { joinsBefore } from './web/html';
 
 const CACHE_CHUNKS = 12;
 
@@ -18,6 +22,10 @@ export interface ImageInfo {
 
 export class BookData {
   chunks: [number, number][] = [];
+  /** Page space of each chunk (see Manifest.weights); null for books converted before weights existed. */
+  weights: number[] | null = null;
+  /** The chunks that start a chapter (Manifest.opens); undefined for books converted before the converter told them. */
+  opens: readonly number[] | undefined;
   totalBlocks = 0;
   totalChars = 0;
   /** True once conversion has finished. */
@@ -28,6 +36,8 @@ export class BookData {
   manifest: Manifest | null = null;
 
   private cache = new Map<number, Block[]>();
+  /** Chunks the reader shows: never dropped from the cache (their text is read from it at any time). */
+  private kept = new Set<number>();
   private loading = new Map<number, Promise<Block[]>>();
   private src: FileSource | null = null;
   private zip: ZipArchive | null | undefined;
@@ -39,6 +49,8 @@ export class BookData {
   setManifest(m: Manifest) {
     this.manifest = m;
     this.chunks = m.chunks;
+    this.weights = m.weights?.length === m.chunks.length ? m.weights : null;
+    this.opens = m.opens;
     this.totalBlocks = m.totalBlocks;
     this.totalChars = m.totalChars;
     this.toc = m.toc;
@@ -49,6 +61,8 @@ export class BookData {
   setLive(live: LiveBook) {
     if (this.complete) return;
     this.chunks = live.chunks;
+    this.weights = live.weights?.length === live.chunks.length ? live.weights : null;
+    this.opens = live.opens;
     this.totalBlocks = live.totalBlocks;
     this.totalChars = live.totalChars;
     this.progress = live.progress;
@@ -62,6 +76,29 @@ export class BookData {
   get estimatedChars() {
     if (this.complete) return this.totalChars;
     return this.progress > 0.01 ? this.totalChars / this.progress : this.totalChars * 10;
+  }
+
+  /** What page numbers are counted in: the converter's weights, or characters for books without them. */
+  get weightUnit(): 'w' | 'c' {
+    return this.weights ? 'w' : 'c';
+  }
+
+  /** How much page space chunk `i` takes (see weightUnit). */
+  chunkWeight(i: number): number {
+    return this.weights ? (this.weights[i] ?? 0) : this.chunkChars(i);
+  }
+
+  /** The weight of every chunk converted so far. */
+  chunkWeights(): number[] {
+    return this.weights ?? this.chunks.map((_, i) => this.chunkChars(i));
+  }
+
+  /** The whole book's weight, estimated from progress while it's still converting. */
+  get estimatedWeight(): number {
+    let known = 0;
+    for (let i = 0; i < this.chunks.length; i++) known += this.chunkWeight(i);
+    if (this.complete) return known;
+    return this.progress > 0.01 ? known / this.progress : known * 10;
   }
 
   chunkStart(i: number) {
@@ -90,6 +127,47 @@ export class BookData {
     return Math.max(0, lo);
   }
 
+  /**
+   * Whether chunk `i` goes on from the one before on its last page (page
+   * mode): the two were cut apart only for size, in the middle of a chapter.
+   */
+  joins(i: number): boolean {
+    return joinsBefore(i, (x) => this.chunkChars(x), (x) => this.chunkEnd(x) - this.chunkStart(x), this.opens);
+  }
+
+  /** The chunk holding character `n` of the book. */
+  chunkOfChar(n: number): number {
+    let lo = 0;
+    let hi = this.chunks.length - 1;
+    while (lo < hi) {
+      const mid = (lo + hi + 1) >> 1;
+      if (this.chunks[mid][1] <= n) lo = mid;
+      else hi = mid - 1;
+    }
+    return Math.max(0, lo);
+  }
+
+  /** How far into its chunk a position is (0..1), in characters. */
+  fractionInChunk(pos: Position): number {
+    const c = this.chunkOf(pos.b);
+    const chars = this.chunkChars(c);
+    return chars > 0 ? Math.min(1, Math.max(0, (this.charOffset(pos) - (this.chunks[c]?.[1] ?? 0)) / chars)) : 0;
+  }
+
+  /**
+   * The block at a fraction of the book, at once, without reading anything:
+   * exact to the chunk, estimated inside it (for labels while the slider is dragged).
+   */
+  blockAtFraction(fraction: number): number {
+    if (!this.chunks.length) return 0;
+    const target = Math.max(0, Math.min(this.totalChars - 1, fraction * this.estimatedChars));
+    const c = this.chunkOfChar(target);
+    const chars = this.chunkChars(c);
+    const blocks = this.chunkEnd(c) - this.chunkStart(c);
+    const f = chars > 0 ? (target - this.chunks[c][1]) / chars : 0;
+    return this.chunkStart(c) + Math.min(Math.max(0, blocks - 1), Math.floor(f * blocks));
+  }
+
   cached(i: number): Block[] | undefined {
     return this.cache.get(i);
   }
@@ -97,6 +175,11 @@ export class BookData {
   block(b: number): Block | undefined {
     const i = this.chunkOf(b);
     return this.cache.get(i)?.[b - this.chunkStart(i)];
+  }
+
+  /** The chunks the reader shows now: kept in memory until it shows others. */
+  keep(chunks: Iterable<number>) {
+    this.kept = new Set(chunks);
   }
 
   /** Called when book data can't be read (damaged files). */
@@ -111,6 +194,15 @@ export class BookData {
       this.onError?.(e);
       return new Promise<Block[]>(() => {});
     });
+  }
+
+  /**
+   * Load a chunk the reader doesn't need to go on (measuring a layout, the
+   * place a chip goes back to): a damaged one fails here, quietly, rather
+   * than stop the book (onError).
+   */
+  tryLoadChunk(i: number): Promise<Block[]> {
+    return this.readChunk(i);
   }
 
   private readChunk(i: number): Promise<Block[]> {
@@ -129,13 +221,21 @@ export class BookData {
           const blocks = (JSON.parse(t) as ChunkFile).b;
           this.cache.set(i, blocks);
           this.loading.delete(i);
-          while (this.cache.size > CACHE_CHUNKS) this.cache.delete(this.cache.keys().next().value!);
+          this.trim();
           return blocks;
         });
       p.catch(() => this.loading.delete(i));
       this.loading.set(i, p);
     }
     return p;
+  }
+
+  /** Drop the chunks used longest ago, beyond the cache's size; never the ones the reader shows. */
+  private trim() {
+    for (const c of this.cache.keys()) {
+      if (this.cache.size <= CACHE_CHUNKS) break;
+      if (!this.kept.has(c)) this.cache.delete(c);
+    }
   }
 
   /** Characters before a position. Needs the position's chunk loaded. */
@@ -160,13 +260,7 @@ export class BookData {
   async positionAt(fraction: number): Promise<Position> {
     if (!this.chunks.length) return { b: 0, o: 0 };
     const target = Math.max(0, Math.min(this.totalChars - 1, fraction * this.estimatedChars));
-    let lo = 0;
-    let hi = this.chunks.length - 1;
-    while (lo < hi) {
-      const mid = (lo + hi + 1) >> 1;
-      if (this.chunks[mid][1] <= target) lo = mid;
-      else hi = mid - 1;
-    }
+    const lo = this.chunkOfChar(target);
     const blocks = await this.loadChunk(lo);
     let n = this.chunks[lo][1];
     for (let k = 0; k < blocks.length; k++) {
@@ -176,6 +270,22 @@ export class BookData {
       n += len;
     }
     return { b: this.chunks[lo][0] + blocks.length - 1, o: 0 };
+  }
+
+  /**
+   * The language of the book's text, guessed from the chunk at `at` (books
+   * converted before languages were worked out, until converted again);
+   * undefined when the text doesn't tell.
+   */
+  async guessLanguage(at: Position): Promise<string | undefined> {
+    if (!this.chunks.length) return undefined;
+    const blocks = await this.loadChunk(Math.min(this.chunkOf(at.b), this.chunks.length - 1));
+    let sample = '';
+    for (const b of blocks) {
+      if (sample.length > 6000) break;
+      if (b.r) sample += blockText(b) + '\n';
+    }
+    return guessLanguage(sample);
   }
 
   /** The table of contents entry a block falls under. */
@@ -193,15 +303,22 @@ export class BookData {
     return this.imageSizes.get(key);
   }
 
-  /** Resolve an image key to a file URI and pixel size, extracting it on first use. */
+  /**
+   * Resolve an image key to a file URI and pixel size, extracting it on first
+   * use. While the book is still being converted a picture may not be there
+   * yet (FB2 keeps them at the end of the file): that isn't remembered, so
+   * it's looked for again next time.
+   */
   imageInfo(key: string): Promise<ImageInfo | null> {
     let p = this.images.get(key);
     if (!p) {
+      const final = this.complete;
       p = this.resolveImage(key)
-        .then((uri) => (uri ? getSize(uri) : null))
+        .then((uri) => (uri ? sizeOf(uri) : null))
         .catch(() => null)
         .then((info) => {
-          this.imageSizes.set(key, info);
+          if (info || final) this.imageSizes.set(key, info);
+          else this.images.delete(key);
           return info;
         });
       this.images.set(key, p);
@@ -228,7 +345,7 @@ export class BookData {
     }
     // Still converting: look the image up directly. FB2 pictures are already
     // written, named after their id (see fb2.ts).
-    for (const ext of ['jpg', 'png', 'gif']) {
+    for (const ext of ['jpg', 'png', 'gif', 'svg']) {
       const f = imageFile(this.entry.id, `b_${key.replace(/[^A-Za-z0-9._-]/g, '_')}.${ext}`);
       if (f.exists) return f.uri;
     }
@@ -267,7 +384,12 @@ export class BookData {
   }
 }
 
-function getSize(uri: string): Promise<ImageInfo> {
+/** A picture's size: SVGs from their own markup (the image loader can't open them), others from the loader. */
+async function sizeOf(uri: string): Promise<ImageInfo | null> {
+  if (/\.svg$/i.test(uri)) {
+    const size = svgSize(fileHead(uri));
+    return size ? { uri, ...size } : null;
+  }
   return new Promise((resolve, reject) =>
     Image.getSize(
       uri,
@@ -275,4 +397,17 @@ function getSize(uri: string): Promise<ImageInfo> {
       (e) => reject(e),
     ),
   );
+}
+
+/** The start of a file, as text (enough for an SVG's opening tag). */
+function fileHead(uri: string): string {
+  const h = new File(uri).open(FileMode.ReadOnly);
+  try {
+    const bytes = h.readBytesSync(Math.min(8192, h.size ?? 8192));
+    let s = '';
+    for (let i = 0; i < bytes.length; i++) s += String.fromCharCode(bytes[i]);
+    return s;
+  } finally {
+    h.close();
+  }
 }

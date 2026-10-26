@@ -1,10 +1,12 @@
 // Highlights and search hits as backgrounds behind text. With the CSS Custom
 // Highlight API (Chrome 105+, Safari 17.2+) nothing in the page changes, so
 // a selection being made isn't disturbed; older WebViews get spans wrapped
-// around the text instead.
+// around the text instead. So does the page while the highlight tool is out:
+// the text can't be selected then, and WebKit doesn't draw highlights over
+// text that can't be selected.
 
 import type { PageMark } from '../protocol';
-import { rangeOf } from './text';
+import { rangeIn } from './text';
 
 type HighlightRegistry = Map<string, unknown> & { clear(): void };
 type HighlightCtor = new (...ranges: Range[]) => unknown;
@@ -13,6 +15,7 @@ const HighlightClass = (globalThis as { Highlight?: HighlightCtor }).Highlight;
 export const nativeHighlights = !!registry && !!HighlightClass;
 
 let current: PageMark[] = [];
+let marking = false;
 
 function style(): HTMLStyleElement {
   let el = document.getElementById('marks') as HTMLStyleElement | null;
@@ -59,15 +62,22 @@ export function setMarks(marks: PageMark[]) {
   draw();
 }
 
+/** The highlight tool is out (or put away). */
+export function setMarking(on: boolean) {
+  if (on === marking) return;
+  marking = on;
+  draw();
+}
+
 /** Draw the marks again (blocks were added to the page). */
 export function draw() {
+  const native = nativeHighlights && !marking;
   const byColor = new Map<string, Range[]>();
-  if (!nativeHighlights) unwrap();
+  unwrap();
   for (const m of current) {
-    const block = document.querySelector<HTMLElement>(`[data-b="${m.b}"]`);
-    if (!block || m.e <= m.s) continue;
-    const r = rangeOf(block, m.s, m.e);
-    if (nativeHighlights) byColor.set(m.color, [...(byColor.get(m.color) ?? []), r]);
+    const r = m.e > m.s ? rangeIn(document, m.b, m.s, m.e) : null;
+    if (!r) continue;
+    if (native) byColor.set(m.color, [...(byColor.get(m.color) ?? []), r]);
     else wrap(r, m.color);
   }
   if (!nativeHighlights) return;

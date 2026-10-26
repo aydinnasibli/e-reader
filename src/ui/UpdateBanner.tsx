@@ -1,13 +1,16 @@
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { useEffect } from 'react';
-import { ActivityIndicator, AppState, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, AppState, type StyleProp, StyleSheet, Text, View, type ViewStyle } from 'react-native';
 import { canSelfUpdate, checkForUpdate, cleanOldDownloads, dismissUpdateError, installUpdate, snoozeUpdate, useUpdateState } from '@/lib/appUpdate';
 import { formatBytes } from './format';
 import { useAppColors } from './theme';
 import { Tap } from '@/ui/Tap';
 
-/** "New version available" bar at the top of the library (Android APK only). */
-export function UpdateBanner() {
+/**
+ * "New version available" bar at the top of the library (Android APK only),
+ * also shown on the error screen. Its buttons are 44 points tall.
+ */
+export function UpdateBanner({ style }: { style?: StyleProp<ViewStyle> }) {
   const c = useAppColors();
   const s = useUpdateState();
 
@@ -25,7 +28,7 @@ export function UpdateBanner() {
   // Only a check asked for from the menu shows this.
   if (s.kind === 'checking') {
     return (
-      <View style={[styles.bar, { backgroundColor: c.card, borderColor: c.border }]}>
+      <View style={[styles.bar, { backgroundColor: c.card, borderColor: c.border }, style]}>
         <ActivityIndicator color={c.accent} />
         <Text style={[styles.title, styles.body, { color: c.text }]}>Checking for updates…</Text>
       </View>
@@ -34,7 +37,7 @@ export function UpdateBanner() {
 
   if (s.kind === 'error') {
     return (
-      <View style={[styles.bar, { backgroundColor: c.card, borderColor: c.border }]}>
+      <View style={[styles.bar, { backgroundColor: c.card, borderColor: c.border }, style]}>
         <Ionicons name="alert-circle-outline" size={22} color={c.danger} />
         <View style={styles.body}>
           <Text style={[styles.title, { color: c.text }]}>Update failed</Text>
@@ -42,7 +45,7 @@ export function UpdateBanner() {
             {s.message}
           </Text>
         </View>
-        <Tap onPress={dismissUpdateError} hitSlop={10}>
+        <Tap onPress={dismissUpdateError} style={styles.target}>
           <Text style={{ color: c.accent, fontWeight: '600' }}>OK</Text>
         </Tap>
       </View>
@@ -52,7 +55,7 @@ export function UpdateBanner() {
   const update = s.update;
   const busy = s.kind === 'downloading' || s.kind === 'installing';
   return (
-    <View style={[styles.bar, { backgroundColor: c.card, borderColor: c.border }]}>
+    <View style={[styles.bar, { backgroundColor: c.card, borderColor: c.border }, style]}>
       <Ionicons name="cloud-download-outline" size={22} color={c.accent} />
       <View style={styles.body}>
         <Text style={[styles.title, { color: c.text }]}>
@@ -75,10 +78,12 @@ export function UpdateBanner() {
       </View>
       {!busy && (
         <View style={styles.actions}>
-          <Tap onPress={() => installUpdate(update)} style={[styles.btn, { backgroundColor: c.accent }]}>
-            <Text style={{ color: c.accentText, fontWeight: '700' }}>Update</Text>
+          <Tap onPress={() => installUpdate(update)} style={styles.target} accessibilityLabel="Update">
+            <View style={[styles.btn, { backgroundColor: c.accent }]}>
+              <Text style={{ color: c.accentText, fontWeight: '700' }}>Update</Text>
+            </View>
           </Tap>
-          <Tap onPress={snoozeUpdate} hitSlop={8} accessibilityLabel="Not now">
+          <Tap onPress={snoozeUpdate} style={styles.target} accessibilityLabel="Not now">
             <Text style={{ color: c.secondary, fontSize: 13 }}>Not now</Text>
           </Tap>
         </View>
@@ -101,7 +106,9 @@ const styles = StyleSheet.create({
   body: { flex: 1, gap: 3 },
   title: { fontSize: 15, fontWeight: '700' },
   btn: { paddingHorizontal: 14, paddingVertical: 8, borderRadius: 10 },
-  actions: { alignItems: 'center', gap: 6 },
+  // What a finger can hit: at least 44 points around the drawn button or link.
+  target: { minWidth: 44, minHeight: 44, alignItems: 'center', justifyContent: 'center' },
+  actions: { alignItems: 'center' },
   track: { height: 4, borderRadius: 2, overflow: 'hidden', marginTop: 4 },
   fill: { height: 4 },
 });

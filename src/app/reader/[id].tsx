@@ -1,24 +1,26 @@
 import * as Haptics from 'expo-haptics';
 import * as ScreenOrientation from 'expo-screen-orientation';
 import { type ErrorBoundaryProps, router, useLocalSearchParams } from 'expo-router';
-import { StatusBar } from 'expo-status-bar';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ActivityIndicator, AppState, BackHandler, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
+import { ActivityIndicator, AppState, BackHandler, type LayoutChangeEvent, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
+import { normaliseLanguage } from '@/engine/language';
 import { type Position, blockText } from '@/engine/types';
 import { addBookmark, highlightsByBlock, removeBookmark, useAnnotations } from '@/lib/annotations';
 import { useRecordScreenError } from '@/lib/crashLog';
-import { getBook, loadManifest, reprocessBook, updateBook, useBookStatus, useLiveBook } from '@/lib/library';
-import { useFontReady } from '@/lib/fonts';
+import { getBook, loadManifest, reprocessBook, setBookOpen, updateBook, useBookStatus, useLiveBook } from '@/lib/library';
+import { snippetAt } from '@/lib/remap';
+import { ensureFont } from '@/lib/fonts';
 import { type ReaderSettings, setSettings, useReaderTheme, useSettings } from '@/lib/settings';
 import { ReadingTracker, charsPerMinute, readingSpeed } from '@/lib/stats';
 import { BookData } from '@/reader/book';
 import { Chrome } from '@/reader/Chrome';
 import type { Mark } from '@/reader/marks';
-import { pageAtFraction, pagesBetween } from '@/reader/pageNumbers';
+import { pageAtFraction } from '@/reader/pageNumbers';
 import { LookupSheet } from '@/reader/LookupSheet';
 import type { TextPoint } from '@/reader/selection';
 import { SelectionMenu } from '@/reader/SelectionMenu';
-import { type PageInfo, type PageSelection, WebReader } from '@/reader/web/WebReader';
+import { type PageInfo, type PageSelection, SCROLL_BADGE, WebReader, useReadingArea } from '@/reader/web/WebReader';
+import { FOOTER } from '@/reader/web/frame';
 import { useSelection } from '@/reader/useSelection';
 import { AutoBar } from '@/reader/AutoBar';
 import { CHARS_PER_WORD, pageDelay, scrollSpeed, stepWpm } from '@/reader/autoRead';
@@ -34,6 +36,7 @@ import { LivePreview } from '@/reader/LivePreview';
 import { NoteSheet } from '@/reader/NoteSheet';
 import { useScreenAwake } from '@/reader/screenAwake';
 import { NavigatorSheet, SearchSheet } from '@/reader/Sheets';
+import { SystemBars } from '@/reader/SystemBars';
 import { ErrorScreen } from '@/ui/ErrorScreen';
 import { formatMinutes } from '@/ui/format';
 import { highlightColor } from '@/ui/theme';
@@ -41,6 +44,10 @@ import { Tap } from '@/ui/Tap';
 
 const before = (a: Position, b: Position) => a.b < b.b || (a.b === b.b && a.o <= b.o);
 const strictlyBefore = (a: Position, b: Position) => a.b < b.b || (a.b === b.b && a.o < b.o);
+
+/** The place is saved a moment after it stops changing, and at least this often while it keeps changing (auto-scroll). */
+const SAVE_DEBOUNCE_MS = 800;
+const SAVE_EVERY_MS = 5000;
 
 export default function ReaderScreen() {
   // `b`/`o`: open at that place instead of where reading left off (from the highlights screen).
@@ -57,15 +64,27 @@ export default function ReaderScreen() {
       ScreenOrientation.lockAsync(OrientationLock.DEFAULT).catch(() => {});
     };
   }, [settings.rotation]);
-  // Pages are measured with the real font, so wait until it's loaded.
-  const fontReady = useFontReady(settings.font);
+  // The page loads its font itself; the phone's own text (the preview while a
+  // slider is dragged, notes) uses it too once it's loaded, in the background.
+  useEffect(() => {
+    ensureFont(settings.font).catch(() => {});
+  }, [settings.font]);
   const status = useBookStatus(id);
   const live = useLiveBook(id);
   const ann = useAnnotations(id);
 
+  // The library doesn't swap in a book converted again while it's open here.
+  // It's marked open before its manifest is read: a swap in between would
+  // leave the reader with the old manifest over the new chunks (and its saves
+  // would put an old place over the one moved to the new blocks).
+  const opened = useRef<string | null>(null);
   const book = useMemo(() => {
     const entry = getBook(id);
     if (!entry) return null;
+    if (opened.current !== id) {
+      setBookOpen(id, true);
+      opened.current = id;
+    }
     const b = new BookData(entry);
     if (entry.status === 'ready') {
       const m = loadManifest(id);
@@ -74,6 +93,16 @@ export default function ReaderScreen() {
     return b;
   }, [id]);
   useEffect(() => () => book?.close(), [book]);
+  useEffect(() => {
+    if (book && opened.current !== id) {
+      setBookOpen(id, true);
+      opened.current = id;
+    }
+    return () => {
+      if (opened.current) setBookOpen(opened.current, false);
+      opened.current = null;
+    };
+  }, [id, book]);
 
   // Keep the book in sync while it is still converting, and when it finishes.
   const [version, setVersion] = useState(0);
@@ -96,8 +125,27 @@ export default function ReaderScreen() {
 
   const savedPos = useMemo<Position>(() => getBook(id)?.position ?? { b: 0, o: 0 }, [id]);
   const startPos = useMemo<Position>(() => (atB !== undefined ? { b: Number(atB) || 0, o: Number(atO) || 0 } : savedPos), [savedPos, atB, atO]);
+
+  // The book's language: set by hand in Book details, or the book's own. A
+  // book converted before languages were worked out has neither: it's told
+  // from the text before anything is drawn (hyphenation and the page's text
+  // depend on it, and must not change under the reader).
+  const [guessedLang, setGuessedLang] = useState<string | null | undefined>(undefined);
+  const ownLang = normaliseLanguage(getBook(id)?.lang ?? book?.manifest?.lang);
+  const lang = ownLang ?? guessedLang ?? undefined;
+  const needGuess = !!book && !ownLang && guessedLang === undefined;
+  const canGuess = !!book && book.chunkCount > 0;
+  useEffect(() => {
+    if (!needGuess || !canGuess || !book) return;
+    let alive = true;
+    book.guessLanguage(startPos).then((g) => alive && setGuessedLang(g ?? null));
+    return () => {
+      alive = false;
+    };
+  }, [needGuess, canGuess, book, startPos]);
+
   // Readers open at `latest`; bumping `jump.key` makes them jump there.
-  const [jump, setJump] = useState({ pos: startPos, key: 0 });
+  const [jump, setJump] = useState<{ pos: Position; key: number; page?: number }>({ pos: startPos, key: 0 });
   const [pos, setPos] = useState<Position>(startPos);
   const [end, setEnd] = useState<Position | undefined>(undefined);
   const [chrome, setChrome] = useState(false);
@@ -105,10 +153,6 @@ export default function ReaderScreen() {
   const [searchMark, setSearchMark] = useState<{ b: number; s: number; e: number } | null>(null);
   const [failed, setFailed] = useState<string | null>(null);
   const [note, setNote] = useState<string | null>(null);
-  const onLink = useCallback((target: string) => {
-    setChrome(false);
-    setNote(target);
-  }, []);
   useEffect(() => {
     if (book) book.onError = (e) => setFailed(e instanceof Error ? e.message : String(e));
   }, [book]);
@@ -122,7 +166,7 @@ export default function ReaderScreen() {
   );
   const storyEndRef = useRef(storyEndBlock);
   storyEndRef.current = storyEndBlock;
-  /** Where reading started since the last jump. */
+  /** Where reading started since the last jump: the place the jump landed (or the book opened). */
   const runStart = useRef<Position | null>(null);
   const finishedHere = useRef(false);
   const [endChip, setEndChip] = useState(false);
@@ -148,48 +192,77 @@ export default function ReaderScreen() {
 
   // Reading time: page turns feed the tracker; jumps reset it.
   const tracker = useRef(new ReadingTracker(id)).current;
+  /** A jump (or opening the book) whose place hasn't been read on from yet. */
   const jumped = useRef(true);
 
-  // Save the position a moment after it stops changing, and when leaving.
+  // The place read is saved a moment after it stops changing, and when
+  // leaving. After a jump (a highlight, a search result, the contents, a page
+  // number) the saved place only moves once the reader reads on from where it
+  // landed; leaving straight away keeps the place jumped from.
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const lastSave = useRef(0);
   const latest = useRef(startPos);
+  /**
+   * The place read before jumps not read on from yet, with its percent
+   * (worked out while it was read: its chunk may be out of memory by the time
+   * it's saved); null when the place read is where the reader is.
+   */
+  const jumpedFrom = useRef<{ pos: Position; percent?: number } | null>(atB !== undefined ? { pos: savedPos, percent: getBook(id)?.percent } : null);
   const save = useCallback(() => {
     if (!book) return;
+    lastSave.current = Date.now();
+    const kept = jumpedFrom.current;
+    const place = kept?.pos ?? latest.current;
     // Still converting up to the saved place: its percent can't be worked out yet.
-    if (!book.complete && latest.current.b >= book.totalBlocks) return updateBook(id, { openedAt: Date.now() });
-    updateBook(id, { position: latest.current, percent: book.fraction(latest.current), openedAt: Date.now() });
+    if (!book.complete && place.b >= book.totalBlocks) return updateBook(id, { openedAt: Date.now() });
+    const percent = kept ? kept.percent : book.fraction(place);
+    updateBook(id, { position: place, ...(percent !== undefined ? { percent } : {}), openedAt: Date.now() });
   }, [book, id]);
+  /**
+   * The chip's way back: the place, page turns since, the page number the
+   * footer showed there in its layout (the chip says the same while the
+   * layout hasn't changed), and how far into its chunk the place is (for
+   * the page it's on, in another layout).
+   */
+  const [back, setBack] = useState<{ pos: Position; turns: number; shown?: { page: number; key: string }; f?: number } | null>(
+    atB !== undefined ? { pos: savedPos, turns: 0 } : null,
+  );
   const onPosition = useCallback(
-    (p: Position, e?: Position, turnedToLast?: boolean) => {
+    (p: Position, e: Position | undefined, turned: boolean, turnedToLast: boolean) => {
       const prev = latest.current;
       latest.current = p;
       setPos(p);
       setEnd(e);
       if (book) {
-        const step = {
-          runStart: jumped.current ? null : (runStart.current?.b ?? null),
-          prev: prev.b,
-          now: p.b,
-          turnedToLast: !!turnedToLast,
-          storyEnd: storyEndRef.current,
-        };
-        if (finishesBook(step)) reachEnd();
-        if (jumped.current) runStart.current = p;
         const ch = book.charOffset(p);
-        if (jumped.current) tracker.reset(ch);
-        else {
+        if (!turned) {
+          // A jump landing (or the page laid out again): reading starts here, once the reader reads on.
+          if (jumped.current) {
+            runStart.current = p;
+            tracker.reset(ch);
+          }
+        } else {
+          // Only reading on finishes a book: not a jump, nor the same page laid out again.
+          const step = { runStart: runStart.current?.b ?? null, prev: prev.b, now: p.b, turnedToLast, storyEnd: storyEndRef.current };
+          if (finishesBook(step)) reachEnd();
           if (autoRunning.current) tracker.autoTurn(ch);
           else tracker.turn(ch);
+          jumped.current = false;
+          // Read on from a jump: this is the place read now.
+          jumpedFrom.current = null;
           setBack((bk) => (!bk ? bk : bk.turns >= 10 ? null : { ...bk, turns: bk.turns + 1 }));
         }
-        jumped.current = false;
       }
       if (saveTimer.current) clearTimeout(saveTimer.current);
-      saveTimer.current = setTimeout(save, 800);
+      // Saved at least every few seconds while the place keeps changing (auto-scroll reports it all the time).
+      if (Date.now() - lastSave.current > SAVE_EVERY_MS) save();
+      else saveTimer.current = setTimeout(save, SAVE_DEBOUNCE_MS);
     },
     [save, book, tracker, reachEnd],
   );
   useEffect(() => {
+    // Opening the book isn't a save: the first one waits for the place to change.
+    lastSave.current = Date.now();
     const sub = AppState.addEventListener('change', (s) => {
       // Time in other apps (or with the screen locked) isn't reading.
       if (s !== 'active') {
@@ -209,23 +282,48 @@ export default function ReaderScreen() {
   const [pageInfo, setPageInfo] = useState<PageInfo | null>(null);
   const pageInfoRef = useRef(pageInfo);
   pageInfoRef.current = pageInfo;
-  useEffect(() => setPageInfo(null), [settings.mode]);
 
   // "Back to where I was": the place before the last jump, until used,
-  // dismissed, or read past (about ten page turns on).
-  // Opened at a highlight: offer the way back to where reading left off.
-  // `shown` is the page number the footer showed there, so the chip says the
-  // same, as long as the pages are the same size (no font change since).
-  const [back, setBack] = useState<{ pos: Position; turns: number; shown?: PageInfo } | null>(atB !== undefined ? { pos: savedPos, turns: 0 } : null);
-  const goTo = useCallback((p: Position, mark?: { s: number; e: number }, remember = true) => {
-    if (remember) setBack({ pos: latest.current, turns: 0, shown: pageInfoRef.current ?? undefined });
-    latest.current = p;
+  // dismissed, or read past (about ten page turns on). Opened at a highlight:
+  // the way back to where reading left off. `shown` is the page number the
+  // footer showed there, in its layout: the chip says the same while the
+  // layout hasn't changed.
+  /** Jump to `p` (with `page`, to that page by its number: the page mode reader lands on it exactly). */
+  const goTo = useCallback(
+    (p: Position, mark?: { s: number; e: number }, remember = true, page?: number) => {
+      const info = pageInfoRef.current;
+      const here = latest.current;
+      if (remember) {
+        setBack({ pos: here, turns: 0, shown: info ? { page: info.page, key: info.key } : undefined, f: book?.fractionInChunk(here) });
+        // The place read stays where it was until the reader reads on from where this lands.
+        jumpedFrom.current ??= { pos: here, percent: book?.fraction(here) };
+      } else if (jumpedFrom.current && jumpedFrom.current.pos.b === p.b && jumpedFrom.current.pos.o === p.o) {
+        // Back at the place read: it's where the reader is again (not so for a place only jumped to).
+        jumpedFrom.current = null;
+      }
+      latest.current = p;
     jumped.current = true;
-    setSearchMark(mark ? { b: p.b, ...mark } : null);
-    setJump((j) => ({ pos: p, key: j.key + 1 }));
-    setSheet(null);
-    setChrome(false);
-  }, []);
+      setSearchMark(mark ? { b: p.b, ...mark } : null);
+      setJump((j) => ({ pos: p, key: j.key + 1, page }));
+      setSheet(null);
+      setChrome(false);
+    },
+    [book],
+  );
+  // The place the chip goes back to may be in a chunk not in memory (opened at a highlight):
+  // read it, to tell the page it's on.
+  const backAt = back && back.f === undefined ? back.pos : null;
+  useEffect(() => {
+    if (!backAt || !book) return;
+    let alive = true;
+    book.tryLoadChunk(book.chunkOf(backAt.b)).then(
+      () => alive && setBack((bk) => (bk && bk.pos.b === backAt.b && bk.pos.o === backAt.o ? { ...bk, f: book.fractionInChunk(backAt) } : bk)),
+      () => {},
+    );
+    return () => {
+      alive = false;
+    };
+  }, [backAt?.b, backAt?.o, book]); // eslint-disable-line react-hooks/exhaustive-deps
   // Auto page turn (page mode) / auto-scroll (scroll mode). A tap in the
   // middle of the page pauses it rather than opening the menu.
   const [auto, setAuto] = useState<{ running: boolean } | null>(null);
@@ -242,6 +340,20 @@ export default function ReaderScreen() {
     if (autoRunning.current) setAuto({ running: false });
     else setChrome((c) => !c);
   }, []);
+
+  // A link on the page: a note opens over the page; any other place in the
+  // book (a note's link back to its reference) is jumped to.
+  const onLink = useCallback(
+    (target: string) => {
+      setChrome(false);
+      const m = book?.manifest;
+      const anchor = m?.anchors?.[target];
+      // To the page with the reference itself, where the converter says where in its paragraph it is.
+      if (anchor !== undefined && !m?.notes?.[target]) goTo({ b: anchor, o: m?.anchorOffsets?.[target] ?? 0 });
+      else setNote(target);
+    },
+    [book, goTo],
+  );
 
   // Display sliders: `draft` holds the values being dragged, drawn by
   // LivePreview. On release the values are saved and the preview stays until
@@ -282,7 +394,6 @@ export default function ReaderScreen() {
     if (draftTimer.current) clearTimeout(draftTimer.current);
   }, []);
 
-
   // Selecting text: a long press selects a word, with a menu to copy, look
   // up, translate or share it, and handles at both ends to move it. The
   // highlight tool (bottom menu) is a marker: a tap or a drag highlights, or
@@ -299,6 +410,8 @@ export default function ReaderScreen() {
     bookId: id,
     bookTitle: book?.entry.title ?? '',
     textOf,
+    // A long paragraph stored in parts: copied as the one paragraph it is.
+    continues: (b) => !!book?.block(b)?.c,
     chapterOf: (b) => book?.chapterAt(b)?.t,
     color: settings.highlightColor,
   });
@@ -318,6 +431,17 @@ export default function ReaderScreen() {
   useEffect(() => {
     if (!sel) setSelEnds(null);
   }, [sel]);
+  // Scroll mode: the text scrolled under the selection, so its menu no longer
+  // points at it; it shows again when the page tells where the selection is now.
+  const settingsRef = useRef(settings);
+  settingsRef.current = settings;
+  const onReaderPosition = useCallback(
+    (p: Position, e: Position | undefined, turned: boolean, turnedToLast: boolean) => {
+      if (turned && settingsRef.current.mode === 'scroll') setSelEnds(null);
+      onPosition(p, e, turned, turnedToLast);
+    },
+    [onPosition],
+  );
   // The highlight tool: a tap highlights the word tapped (or takes a highlight away), a drag what it covers.
   const onMarkTap = useCallback((p: TextPoint | null) => {
     if (p) selectionRef.current.markTap(p);
@@ -409,10 +533,21 @@ export default function ReaderScreen() {
     if (pageBookmarks.length) for (const bm of pageBookmarks) removeBookmark(id, bm.id);
     else {
       const blk = book.block(pos.b);
-      const snippet = blk ? blockText(blk).slice(pos.o, pos.o + 140).replace(/\s+/g, ' ').trim() : '';
+      // The label the library also makes for a bookmark moved to a book converted again.
+      const snippet = snippetAt(blk ? blockText(blk) : '', pos.o);
       addBookmark(id, { b: pos.b, o: pos.o, snippet, chapter: book.chapterAt(pos.b)?.t });
     }
   };
+
+  // The menu shows unless the display panel has taken its place; the system bars show with it.
+  const menu = chrome && sheet !== 'display';
+  // The reader's own size, once laid out (see useReadingArea).
+  const [box, setBox] = useState<{ width: number; height: number } | null>(null);
+  const onBox = useCallback((e: LayoutChangeEvent) => {
+    const { width, height } = e.nativeEvent.layout;
+    setBox((b) => (b && b.width === width && b.height === height ? b : { width, height }));
+  }, []);
+  const { area, settled, steady } = useReadingArea(menu, box);
 
   if (!book) {
     return <ErrorScreen title="Book not found" actions={[{ label: 'Back to library', onPress: () => router.back(), primary: true }]} />;
@@ -438,13 +573,11 @@ export default function ReaderScreen() {
     );
   }
 
-  if (book.chunkCount === 0 || !fontReady) {
+  if (book.chunkCount === 0 || needGuess) {
     return (
       <View style={[styles.center, { backgroundColor: theme.bg }]}>
         <ActivityIndicator color={theme.muted} />
-        <Text style={{ color: theme.muted, marginTop: 12 }}>
-          {book.chunkCount === 0 ? `Preparing book… ${Math.round((live?.progress ?? 0) * 100)}%` : 'Loading font…'}
-        </Text>
+        {book.chunkCount === 0 ? <Text style={{ color: theme.muted, marginTop: 12 }}>{`Preparing book… ${Math.round((live?.progress ?? 0) * 100)}%`}</Text> : null}
         <Tap onPress={() => router.back()} style={{ marginTop: 24 }}>
           <Text style={{ color: theme.accent, fontSize: 16 }}>Back to library</Text>
         </Tap>
@@ -460,28 +593,54 @@ export default function ReaderScreen() {
   const chapterLeft = nextChapter !== null ? (book.charOffset({ b: nextChapter, o: 0 }) - here) / speed : null;
   const bookLeft = (book.estimatedChars - here) / speed;
   const footerRight = chapterLeft !== null && chapterLeft > 0 ? `${formatMinutes(chapterLeft)} left in chapter` : `${formatMinutes(bookLeft)} left`;
-  const pagesLeftInChapter = pageInfo && nextChapter !== null ? pagesBetween(here, book.charOffset({ b: nextChapter, o: 0 }), pageInfo.cpp) : null;
   const fraction = book.fraction(pos);
-  const pageLabel = pageInfo ? (f: number) => `Page ${pageAtFraction(f, fraction, pageInfo.page, pageInfo.total)} of ${pageInfo.total}` : undefined;
-  const chromeInfo = !book.complete
-    ? `Preparing book ${Math.round(book.progress * 100)}%`
-    : pagesLeftInChapter
-      ? `${pagesLeftInChapter} ${pagesLeftInChapter === 1 ? 'page' : 'pages'} left in chapter · ${formatMinutes(bookLeft)} left`
-      : `${formatMinutes(bookLeft)} left in book`;
+  const numbers = pageInfo?.numbers;
+  /** The page a place is on, in the layout's numbering (exact at a chunk's start, estimated inside it). */
+  const pageOfPlace = (p: Position) => numbers!.at(book.chunkOf(p.b), book.fractionInChunk(p));
+  /** Pages from page `n` to the start of the chapter after block `b`. */
+  const pagesLeftFrom = (n: number, b: number) => {
+    const next = chapterTarget(book.toc, { b, o: 0 }, 1);
+    return numbers && next !== null ? Math.max(0, pageOfPlace({ b: next, o: 0 }) - n) : null;
+  };
+  /** The page the slider at `f` stands for: the one shown where reading is, the first and last at its ends (the last converted so far, while converting). */
+  const sliderPage = pageInfo ? (f: number) => Math.min(numbers!.ready, pageAtFraction(f, fraction, pageInfo.page, pageInfo.total)) : undefined;
+  const pageLabel = sliderPage ? (f: number) => `Page ${sliderPage(f)} of ${pageInfo!.approx ? '~' : ''}${pageInfo!.total}` : undefined;
+  const infoAt = (pagesLeft: number | null) =>
+    !book.complete
+      ? `Preparing book ${Math.round(book.progress * 100)}%`
+      : pagesLeft
+        ? `${pagesLeft} ${pagesLeft === 1 ? 'page' : 'pages'} left in chapter · ${formatMinutes(bookLeft)} left`
+        : `${formatMinutes(bookLeft)} left in book`;
+  const chromeInfo = infoAt(pageInfo ? pagesLeftFrom(pageInfo.page, pos.b) : null);
+  // While the slider is dragged: the chapter and pages left where it would go.
+  const dragChapter = (f: number) => book.chapterAt(book.blockAtFraction(f))?.t;
+  const dragInfo = (f: number) => infoAt(sliderPage ? pagesLeftFrom(sliderPage(f), book.blockAtFraction(f)) : null);
+  /** Go to page `n` by its number, or to a fraction of the book. */
+  const goToPlace = async (f: number, n?: number) => goTo(await book.positionAt(f), undefined, true, n);
+  const backLabel = back
+    ? pageInfo
+      ? `Back to page ${back.shown && back.shown.key === pageInfo.key ? back.shown.page : numbers!.at(book.chunkOf(back.pos.b), back.f ?? book.fractionInChunk(back.pos))}`
+      : `Back to ${Math.round(book.fraction(back.pos) * 100)}%`
+    : '';
+  // Bars at the bottom stay clear of the page number (or scroll mode's strip).
+  const overFooter = area.bottom + (settings.mode === 'page' ? FOOTER : SCROLL_BADGE) + 6;
 
-  // The menu shows unless the display panel has taken its place; the status bar shows with it.
-  const menu = chrome && sheet !== 'display';
   return (
-    <View style={{ flex: 1, backgroundColor: theme.bg }}>
-      <StatusBar hidden={!menu} style={theme.dark ? 'light' : 'dark'} />
+    <View testID="reader-screen" style={{ flex: 1, backgroundColor: theme.bg }} onLayout={onBox}>
+      <SystemBars shown={menu} dark={theme.dark} />
       <WebReader
         book={book}
+        lang={lang}
         settings={settings}
         theme={theme}
+        area={area}
+        settled={settled}
+        steady={steady}
         start={latest.current}
         startKey={jump.key}
+        startPage={jump.page}
         version={version}
-        onPosition={onPosition}
+        onPosition={onReaderPosition}
         onTap={toggleChrome}
         marksFor={marksFor}
         onLink={onLink}
@@ -500,7 +659,6 @@ export default function ReaderScreen() {
         onMarkDrag={onMarkDrag}
         onSelection={onSelection}
         selected={!!sel}
-        statusBar={menu}
       />
       {endChip && !chrome && !highlighting && !sel && !sheet ? (
         <BackChip
@@ -513,15 +671,7 @@ export default function ReaderScreen() {
       ) : back && !chrome && !highlighting && !sel && !sheet && !auto ? (
         <BackChip
           theme={theme}
-          label={
-            pageInfo
-              ? `Back to page ${
-                  back.shown && Math.abs(back.shown.cpp - pageInfo.cpp) < pageInfo.cpp * 0.02
-                    ? back.shown.page
-                    : Math.min(pageInfo.total, Math.floor(book.charOffset(back.pos) / pageInfo.cpp) + 1)
-                }`
-              : `Back to ${Math.round(book.fraction(back.pos) * 100)}%`
-          }
+          label={backLabel}
           onPress={() => {
             const to = back.pos;
             setBack(null);
@@ -530,14 +680,16 @@ export default function ReaderScreen() {
           onDismiss={() => setBack(null)}
         />
       ) : null}
-      {draft ? <LivePreview book={book} settings={{ ...settings, ...draft }} theme={theme} pos={pos} /> : null}
+      {draft ? <LivePreview book={book} lang={lang} area={area} settings={{ ...settings, ...draft }} theme={theme} pos={pos} /> : null}
       <Chrome
         visible={menu}
         theme={theme}
         title={book.entry.title}
         chapter={book.chapterAt(pos.b)?.t}
+        chapterAt={dragChapter}
         fraction={fraction}
         info={chromeInfo}
+        infoAt={dragInfo}
         pageLabel={pageLabel}
         bookmarked={pageBookmarks.length > 0}
         onBack={() => router.back()}
@@ -554,7 +706,8 @@ export default function ReaderScreen() {
           setChrome(false);
           setHighlighting(true);
         }}
-        onSeek={async (f) => goTo(await book.positionAt(f))}
+        // With page numbers the slider goes to the page its label says.
+        onSeek={(f) => void goToPlace(f, sliderPage?.(f))}
         onGoTo={() => setSheet('goto')}
         onPrevChapter={prevChapter !== null ? () => goTo({ b: prevChapter, o: 0 }) : undefined}
         onNextChapter={nextChapter !== null ? () => goTo({ b: nextChapter, o: 0 }) : undefined}
@@ -565,6 +718,7 @@ export default function ReaderScreen() {
       {auto && !chrome && !highlighting && !sel ? (
         <AutoBar
           theme={theme}
+          bottom={overFooter}
           wpm={autoWpm}
           running={auto.running}
           pageTimer={pageTimer}
@@ -577,6 +731,7 @@ export default function ReaderScreen() {
       {highlighting ? (
         <HighlightBar
           theme={theme}
+          bottom={overFooter}
           color={settings.highlightColor}
           made={selection.made.length > 0}
           hasNote={!!selection.made[0]?.note}
@@ -603,10 +758,11 @@ export default function ReaderScreen() {
       <GoToSheet
         visible={sheet === 'goto'}
         theme={theme}
-        page={pageInfo}
+        page={pageInfo ? { page: pageInfo.page, total: pageInfo.total, approx: pageInfo.approx, ready: pageInfo.numbers.ready } : null}
+        preparing={book.complete ? null : Math.round(book.progress * 100)}
         fraction={fraction}
         onClose={() => setSheet(null)}
-        onGo={async (f) => goTo(await book.positionAt(f))}
+        onGo={(f, page) => void goToPlace(f, page)}
       />
       <DisplayPanel
         visible={sheet === 'display'}
@@ -620,6 +776,7 @@ export default function ReaderScreen() {
       />
       <NoteSheet
         book={book}
+        lang={lang}
         target={note}
         settings={settings}
         theme={theme}
@@ -629,7 +786,7 @@ export default function ReaderScreen() {
           goTo(p);
         }}
       />
-      <LookupSheet lookup={selection.lookup} lang={book.manifest?.lang} theme={theme} onChange={selection.setLookup} />
+      <LookupSheet lookup={selection.lookup} lang={lang} theme={theme} onChange={selection.setLookup} />
     </View>
   );
 }
@@ -644,6 +801,8 @@ export function ErrorBoundary({ error, retry }: ErrorBoundaryProps) {
     <ErrorScreen
       title="The reader hit a problem"
       message={error.message}
+      // A build that keeps crashing here can still be replaced by a newer one.
+      offerUpdate
       actions={[
         { label: 'Try again', onPress: retry, primary: true },
         { label: 'Back to library', onPress: () => router.back() },

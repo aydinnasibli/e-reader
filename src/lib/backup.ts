@@ -7,11 +7,13 @@
 
 import Constants from 'expo-constants';
 import { File } from 'expo-file-system';
-import type { Position } from '@/engine/types';
+import { normaliseLanguage } from '@/engine/language';
+import { ENGINE_VERSION, type Manifest, type Position } from '@/engine/types';
 import { HIGHLIGHT_COLORS } from '@/ui/theme';
 import { type Annotations, type Bookmark, type Highlight, getAnnotations } from './annotations';
 import { SORT_LABELS, type SortKey, type ViewMode, collectionNamed, getShelves, setSort, setView } from './collections';
-import { fingerprintBook, flushLibrary, getBooks, loadManifest, updateBook } from './library';
+import { type BookEntry, bookConversion, fingerprintBook, flushLibrary, getBooks, loadManifest, queueMarks, updateBook, withoutSwaps } from './library';
+import { type Anchor, anchorsOn, marksOf } from './remap';
 import { type SavedBook, addPending, applySaved } from './restore';
 import { getSettings, sanitizeSettings, setSettings } from './settings';
 import { type BookStats, getStats, mergeDays } from './stats';
@@ -33,30 +35,60 @@ export interface Backup {
   books: SavedBook[];
 }
 
-export function createBackup(now = Date.now()): Backup {
+/**
+ * Where a book's marks are in its conversion, with their text and the text
+ * around them, so that a phone with another conversion of the book (another
+ * converter version) finds them all the same. Highlights' own text is left
+ * out: it is the highlight's.
+ */
+async function anchorsFor(b: BookEntry, ann: Annotations, manifest: Manifest): Promise<Record<string, Anchor> | undefined> {
+  if (!ann.highlights.length && !ann.bookmarks.length && !b.position) return undefined;
+  try {
+    const conv = bookConversion(b.id, manifest);
+    if (!conv) return undefined;
+    const anchors = await anchorsOn(conv, marksOf(ann.highlights, ann.bookmarks, b.position));
+    const own = new Map(ann.highlights.map((h) => [`h${h.id}`, h.text]));
+    for (const [key, a] of Object.entries(anchors)) if (own.get(key) === a.text) anchors[key] = { ...a, text: undefined as unknown as string };
+    return JSON.parse(JSON.stringify(anchors)) as Record<string, Anchor>;
+  } catch {
+    return undefined; // the block numbers and texts are still there
+  }
+}
+
+/** A backup of everything; no book's new conversion is swapped in while it is made (library.ts withoutSwaps). */
+export function createBackup(now = Date.now()): Promise<Backup> {
+  return withoutSwaps(() => makeBackup(now));
+}
+
+async function makeBackup(now: number): Promise<Backup> {
   const shelves = getShelves();
   const names = new Map(shelves.collections.map((c) => [c.id, c.name]));
   const stats = getStats();
-  const books = getBooks().flatMap((b): SavedBook[] => {
+  const books: SavedBook[] = [];
+  for (const b of getBooks()) {
     // Without a readable file there's nothing to recognise the book by later.
     const fp = fingerprintBook(b);
-    if (!fp) return [];
-    return [
-      {
-        fp,
-        title: b.title,
-        author: b.author,
-        ...(b.titleEdited ? { titleEdited: true } : {}),
-        ...(b.status === 'ready' ? { engine: loadManifest(b.id)?.v } : {}),
-        ...(b.position ? { position: b.position, percent: b.percent } : {}),
-        ...(b.finished ? { finished: true } : {}),
-        openedAt: b.openedAt,
-        collections: (b.collections ?? []).flatMap((id) => names.get(id) ?? []),
-        annotations: getAnnotations(b.id),
-        ...(stats.books[b.id] ? { stats: stats.books[b.id] } : {}),
-      },
-    ];
-  });
+    if (!fp) continue;
+    const annotations = getAnnotations(b.id);
+    // One conversion's manifest for both its version and the anchors read from it.
+    const manifest = b.status === 'ready' ? loadManifest(b.id) : null;
+    const anchors = manifest ? await anchorsFor(b, annotations, manifest) : undefined;
+    books.push({
+      fp,
+      title: b.title,
+      author: b.author,
+      ...(b.titleEdited ? { titleEdited: true } : {}),
+      ...(manifest ? { engine: manifest.v } : {}),
+      ...(b.position ? { position: b.position, percent: b.percent } : {}),
+      ...(b.finished ? { finished: true } : {}),
+      openedAt: b.openedAt,
+      collections: (b.collections ?? []).flatMap((id) => names.get(id) ?? []),
+      annotations,
+      ...(anchors ? { anchors } : {}),
+      ...(b.lang ? { lang: b.lang } : {}),
+      ...(stats.books[b.id] ? { stats: stats.books[b.id] } : {}),
+    });
+  }
   return {
     kind: BACKUP_KIND,
     version: 1,
@@ -113,6 +145,23 @@ function annotations(v: unknown): Annotations {
   return { highlights: list(o.highlights).flatMap(highlight), bookmarks: list(o.bookmarks).flatMap(bookmark) };
 }
 
+/** Longest text kept in an anchor (a long highlight's own text is the highlight's). */
+const ANCHOR_TEXT = 4000;
+
+function anchors(v: unknown, ann: Annotations): Record<string, Anchor> | undefined {
+  if (!isObj(v)) return undefined;
+  const keys = new Set(['place', ...ann.highlights.map((h) => `h${h.id}`), ...ann.bookmarks.map((x) => `m${x.id}`)]);
+  const out: Record<string, Anchor> = {};
+  for (const [key, a] of Object.entries(v)) {
+    if (!keys.has(key) || !isObj(a)) continue;
+    const at = num(a.at) && a.at >= 0 && a.at <= 1 ? { at: a.at } : index(a.b) && index(a.o) ? { b: a.b, o: a.o } : null;
+    if (!at) continue;
+    const text = (k: string, max: number) => (str(a[k]) ? { [k]: (a[k] as string).slice(0, max) } : {});
+    out[key] = { ...at, ...text('text', ANCHOR_TEXT), ...text('before', 200), ...text('after', 200) } as Anchor;
+  }
+  return Object.keys(out).length ? out : undefined;
+}
+
 function bookStats(v: unknown): BookStats | undefined {
   if (!isObj(v) || !num(v.ms) || v.ms < 0) return undefined;
   return { ms: v.ms, ...(num(v.sMs) && num(v.sChars) ? { sMs: v.sMs, sChars: v.sChars } : {}) };
@@ -122,6 +171,9 @@ function savedBook(v: unknown): SavedBook[] {
   if (!isObj(v) || !str(v.fp) || !v.fp) return [];
   const pos = position(v.position);
   const stats = bookStats(v.stats);
+  const ann = annotations(v.annotations);
+  const marks = anchors(v.anchors, ann);
+  const lang = str(v.lang) ? normaliseLanguage(v.lang) : undefined;
   return [
     {
       fp: v.fp,
@@ -133,7 +185,9 @@ function savedBook(v: unknown): SavedBook[] {
       ...(v.finished === true ? { finished: true } : {}),
       ...(num(v.openedAt) ? { openedAt: v.openedAt } : {}),
       collections: list(v.collections).filter(str),
-      annotations: annotations(v.annotations),
+      annotations: ann,
+      ...(marks ? { anchors: marks } : {}),
+      ...(lang ? { lang } : {}),
       ...(stats ? { stats } : {}),
     },
   ];
@@ -164,8 +218,17 @@ export function parseBackup(text: string): Backup | null {
   };
 }
 
-export async function readBackupFile(uri: string): Promise<Backup | null> {
-  return parseBackup(await new File(uri).text());
+/** Bigger than any backup this app makes (thousands of highlights are a few MB): not read at all. */
+export const MAX_BACKUP_BYTES = 50 * 1024 * 1024;
+
+/** The picked file is too big to be a backup. */
+export class BackupTooBig extends Error {}
+
+/** Read a picked file as a backup; `size` is what the picker says, if anything. */
+export async function readBackupFile(uri: string, size?: number): Promise<Backup | null> {
+  const file = new File(uri);
+  if ((size || file.size || 0) > MAX_BACKUP_BYTES) throw new BackupTooBig();
+  return parseBackup(await file.text());
 }
 
 export interface RestoreResult {
@@ -173,6 +236,8 @@ export interface RestoreResult {
   applied: number;
   /** Titles of books whose data waits for their file to be added. */
   waiting: string[];
+  /** Titles of books whose data couldn't be saved (the phone is full): restoring again later puts it back. */
+  failed: string[];
 }
 
 /**
@@ -194,6 +259,7 @@ export function restoreBackup(backup: Backup): RestoreResult {
     if (fp) here.set(fp, b.id);
   }
   const waiting: SavedBook[] = [];
+  const failed: string[] = [];
   let applied = 0;
   for (const saved of backup.books) {
     const local = { ...saved, collections: (saved.collections ?? []).flatMap((n) => ids.get(n) ?? []) };
@@ -203,11 +269,19 @@ export function restoreBackup(backup: Backup): RestoreResult {
       waiting.push(local);
       continue;
     }
-    const patch = applySaved(book.id, book, local);
-    if (Object.keys(patch).length) updateBook(book.id, patch);
-    applied++;
+    // The converter version of this phone's conversion of the book: the backup's block numbers are only good for that one.
+    const converted = book.status === 'ready' ? (book.engine ?? loadManifest(book.id)?.v) : ENGINE_VERSION;
+    try {
+      const patch = applySaved(book.id, book, local, converted, queueMarks);
+      if (Object.keys(patch).length) updateBook(book.id, patch);
+      applied++;
+    } catch {
+      // Its marks couldn't be saved to be placed (the phone is full); the others go on.
+      failed.push(saved.title || 'Untitled');
+    }
   }
-  if (waiting.length) addPending(waiting);
+  const title = (w: SavedBook) => w.title || 'Untitled';
+  if (waiting.length && !addPending(waiting)) failed.push(...waiting.map(title));
   flushLibrary();
-  return { applied, waiting: waiting.map((w) => w.title || 'Untitled') };
+  return { applied, waiting: waiting.map(title), failed };
 }

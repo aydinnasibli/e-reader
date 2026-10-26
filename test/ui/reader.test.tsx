@@ -40,6 +40,7 @@ jest.mock('@/lib/library', () => {
     useLiveBook: () => undefined,
     updateBook: (...a: unknown[]) => mockUpdateBook(...a),
     reprocessBook: () => {},
+    setBookOpen: () => {},
     sourceFile: () => ({}),
   };
 });
@@ -57,6 +58,9 @@ beforeAll(async () => {
   require('@/lib/storage').testChunks.set('moby/0', JSON.stringify({ b: blocks }));
 });
 beforeEach(() => setSettings({ mode: 'page', fontSize: 19, indent: false, hyphenate: false, align: 'left', pageTurn: 'none', seenTapZones: true }));
+// A test that fails with fake timers on must not leave them on: the next
+// test's timeout would never fire and the whole run would hang (it did in CI).
+afterEach(() => jest.useRealTimers());
 
 /** Open the book: the page gets set up, then the chunk, and shows the first page. */
 async function openBook() {
@@ -71,7 +75,7 @@ it('the page gets the book: its look first, then the chunk around the place, wit
   expect(setup.setup.mode).toBe('page');
   expect(setup.setup.css).toContain('font-size:19px');
   expect(page().text(1)).toBe(P1);
-  expect(page().last('content')!.target).toEqual({ at: { b: 0, i: 0 } });
+  expect(page().last('content')!.target).toEqual({ at: { b: 0, i: 0 }, top: true });
 }, 30000);
 
 it('size slider: the text follows the slider live, then the page is laid out at the new size', async () => {
@@ -85,7 +89,7 @@ it('size slider: the text follows the slider live, then the page is laid out at 
   await act(() => fireEvent(slider, 'slidingComplete', 28));
   // The page is set up again at 28, at the same place.
   await waitFor(() => expect(page().last('setup')!.setup.css).toContain('font-size:28px'));
-  expect(page().last('setup')!.target).toEqual({ at: { b: 0, i: 0 } });
+  expect(page().last('setup')!.target).toEqual({ at: { b: 0, i: 0 }, top: true });
   // Once the page shows it, the preview goes.
   await waitFor(() => expect(screen.queryAllByText(P1)).toEqual([]), { timeout: 5000 });
 }, 30000);
@@ -113,14 +117,14 @@ it('a selection ended on the page closes the menu', async () => {
   expect(screen.queryByLabelText('Copy')).toBeNull();
 }, 30000);
 
-it('more than one word: no Look Up, the whole words are copied', async () => {
+it('more than one word: no Look Up; exactly the characters selected are copied', async () => {
   const copy = jest.spyOn(Clipboard, 'setStringAsync');
   await openBook();
-  // From inside "Call" to inside "Ishmael": whole words.
+  // From inside "Call" to inside "Ishmael".
   await select(1, 10);
   expect(screen.queryByLabelText('Look Up')).toBeNull();
   await fireEvent.press(screen.getByLabelText('Copy'));
-  expect(copy).toHaveBeenLastCalledWith('Call me Ishmael.');
+  expect(copy).toHaveBeenLastCalledWith('all me Is');
 }, 30000);
 
 describe('highlight tool', () => {
@@ -210,7 +214,8 @@ describe('page numbers, back after a jump, auto page turn', () => {
   }, 30000);
 
   it('auto page turn: started from the menu, speed, pause and stop; it asks the page to turn', async () => {
-    jest.useFakeTimers();
+    // Faking setImmediate stalls the test renderer on Node 22 (CI's Node).
+    jest.useFakeTimers({ doNotFake: ['setImmediate'] });
     await openBook();
     await tapMiddle();
     await fireEvent.press(screen.getByLabelText('Auto page turn'));

@@ -4,7 +4,7 @@
 // a test lists them all at once.
 
 import { screen } from '@testing-library/react-native';
-import { type Device, type Problem, checkLayout, withFontScale, withKeyboard } from './check';
+import { type CheckOptions, type Device, type Problem, checkLayout, withFontScale, withKeyboard } from './check';
 
 export interface Finding extends Problem {
   device: string;
@@ -17,7 +17,7 @@ export function auditor(device: Device) {
   return {
     found,
     /** Lay out what's rendered now and note what goes wrong, as `scene`. */
-    async check(scene: string, opts: { headerHeight?: number } = {}) {
+    async check(scene: string, opts: Omit<CheckOptions, 'laidOut'> = {}) {
       const tree = screen.toJSON();
       const hasInput = (function find(n: unknown): boolean {
         if (Array.isArray(n)) return n.some(find);

@@ -10,7 +10,7 @@
 // Expo Go registers for no file types, so nothing arrives there.
 
 import { File, Paths } from 'expo-file-system';
-import { router } from 'expo-router';
+import { router, usePathname } from 'expo-router';
 import { useEffect, useSyncExternalStore } from 'react';
 import { Alert, Platform } from 'react-native';
 import { getBook, importSharedFile, loadLibrary } from './library';
@@ -25,10 +25,27 @@ export function isSharedFileUrl(url: string): boolean {
 // from another app can be copied before the first screen is up.
 let markReady: () => void;
 const navigationReady = new Promise<void>((resolve) => (markReady = resolve));
+/** The screen showing now (its route), followed by the root layout. */
+let shown = '/';
 
 /** Called by the root layout once it is mounted: shared books can be opened from then on. */
 export function useSharedFileNavigation() {
+  const path = usePathname();
+  useEffect(() => {
+    shown = path;
+  }, [path]);
   useEffect(() => markReady(), []);
+}
+
+/**
+ * Open a book in the reader. A book being read is replaced rather than
+ * covered: each reader left underneath keeps its page (a web view) in memory,
+ * and a few of them run the phone out of it.
+ */
+function openReader(id: string) {
+  const to = { pathname: '/reader/[id]', params: { id } } as const;
+  if (shown.startsWith('/reader/')) router.replace(to);
+  else router.push(to);
 }
 
 const launchFile = () => new File(Paths.document, 'launch.json');
@@ -92,21 +109,23 @@ export async function openSharedFile(url: string, initial = false): Promise<void
   const known = initial ? launchedBefore(url) : null;
   if (known) {
     await navigationReady;
-    router.push({ pathname: '/reader/[id]', params: { id: known } });
+    openReader(known);
     return;
   }
   setInFlight(url, true);
   try {
-    const res = await importSharedFile(url).catch(() => ({ failed: true }) as const);
+    const res = await importSharedFile(url).catch(() => ({ failed: 'unreadable' }) as const);
     dropInboxCopy(url);
     if (initial && 'book' in res) saveJson(launchFile(), { url, bookId: res.book.id });
     await navigationReady;
     // A book that failed to prepare before opens too: the reader explains and offers to try again.
-    if ('book' in res) router.push({ pathname: '/reader/[id]', params: { id: res.book.id } });
+    if ('book' in res) openReader(res.book.id);
     else if ('unsupported' in res) {
       Alert.alert('This file isn’t a book the app can open', 'Books can be EPUB, FB2, MOBI, AZW3 or TXT files.');
+    } else if (res.failed === 'space') {
+      Alert.alert('Not enough free space', 'There isn’t enough free space on this phone for this book. Free some up, then open it again.');
     } else {
-      Alert.alert('Couldn’t open this file', 'The app it came from may not allow reading it, or there isn’t enough free space.');
+      Alert.alert('Couldn’t open this file', 'The app it came from didn’t let this app read it. Save it to the phone (Files or Downloads) and open it from there.');
     }
   } finally {
     setInFlight(url, false);

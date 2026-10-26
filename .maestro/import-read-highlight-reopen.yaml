@@ -7,8 +7,9 @@
 #   adb push the-sea.epub /sdcard/Download/
 #   maestro test .maestro/import-read-highlight-reopen.yaml
 # The picker steps are Android's (DocumentsUI); iOS needs the file in
-# Files > On My iPhone instead.
-appId: com.nec.ebookreader
+# Files > On My iPhone instead (the app id is the same on both:
+# com.aydinnasibli.nec, app.json).
+appId: com.aydinnasibli.nec
 ---
 - launchApp:
     clearState: true

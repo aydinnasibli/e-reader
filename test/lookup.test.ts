@@ -1,5 +1,19 @@
-import { describe, expect, it } from 'vitest';
-import { MAX_ENCODED, cleanWord, fitForRequest, parseGoogleDefinitions, parseTranslation, parseWiktionary, stripHtml, wellFormed } from '../src/lib/lookup';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import {
+  MAX_ENCODED,
+  USER_AGENT,
+  cleanWord,
+  defineWord,
+  fitForRequest,
+  lowerWord,
+  parseGoogleDefinitions,
+  parseTdk,
+  parseTranslation,
+  parseWiktionary,
+  stripHtml,
+  turkishStems,
+  wellFormed,
+} from '../src/lib/lookup';
 
 describe('in-app dictionary and translation', () => {
   it('cleans the selected word', () => {
@@ -69,5 +83,213 @@ describe('in-app dictionary and translation', () => {
     const broken = 'a\uD800b\uDC00c😀';
     expect(() => encodeURIComponent(wellFormed(broken))).not.toThrow();
     expect(wellFormed(broken)).toBe('a\uFFFDb\uFFFDc😀');
+  });
+});
+
+// ---------- Look Up on the network (a fake one shaped like the real answers, captured live) ----------
+
+const json = (status: number, body: unknown) => ({ ok: status < 400, status, text: () => Promise.resolve(JSON.stringify(body)) });
+const sense = (language: string, definition: string) => [{ partOfSpeech: 'Noun', language, definitions: [{ definition }] }];
+/** en.wiktionary's REST definitions: exact titles only ("işık" and "i̇nsan" are 404); "insan" lists Albanian first. */
+const WIKT: Record<string, Record<string, unknown[]>> = {
+  ışık: { tr: sense('Turkish', 'light (electromagnetic wave)') },
+  insan: { sq: sense('Albanian', 'person, human'), tr: sense('Turkish', 'human') },
+  kuş: { tr: sense('Turkish', 'bird') },
+  ev: { az: sense('Azerbaijani', 'house'), tr: sense('Turkish', 'house, home') },
+  serendipity: { en: sense('English', 'a happy accident') },
+};
+/** TDK: base words only, case-sensitive, verbs as infinitives; { error } when there's nothing. */
+const TDK: Record<string, unknown[]> = {
+  ev: [{ madde: 'ev', anlamlarListe: [{ anlam: 'Bir kimsenin veya ailenin içinde yaşadığı yer', ozelliklerListe: [{ tur: '3', tam_adi: 'isim' }] }, { anlam: '► aile', orneklerListe: [{ ornek: 'Evine bağlı bir adam.' }], ozelliklerListe: [{ tur: '4', tam_adi: 'mecaz' }] }] }],
+  ışık: [{ madde: 'ışık', anlamlarListe: [{ anlam: 'Cisimleri görmeyi sağlayan fiziksel enerji', ozelliklerListe: [{ tur: '3', tam_adi: 'isim' }] }] }],
+  insan: [{ madde: 'insan', anlamlarListe: [{ anlam: 'Düşünme ve konuşma yeteneği olan canlı', ozelliklerListe: [{ tur: '3', tam_adi: 'isim' }] }] }],
+  gelmek: [{ madde: 'gelmek', anlamlarListe: [{ anlam: 'Ulaşmak, varmak', ozelliklerListe: [{ tur: '3', tam_adi: 'nesnesiz' }] }] }],
+  kitap: [{ madde: 'kitap', anlamlarListe: [{ anlam: 'Ciltli veya ciltsiz olarak bir araya getirilmiş basılı veya yazılı kâğıt yaprakların bütünü' }] }],
+};
+/** Google's dt=md answer for a Turkish word: no dictionary, only its translation and detected language. */
+const GLOSS: Record<string, string> = { evlerinden: 'from their homes', işık: 'Light', ışık: 'Light', insan: 'human', geldiler: 'they came' };
+
+let calls: { host: string; q: string; headers: Record<string, string> }[] = [];
+function network({ tdk = true, wikimedia = true } = {}) {
+  calls = [];
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async (url: string, init?: { headers?: Record<string, string> }) => {
+      const u = new URL(url);
+      const q = u.hostname === 'en.wiktionary.org' ? decodeURIComponent(u.pathname.split('/').pop()!).replace(/_/g, ' ') : (u.searchParams.get('ara') ?? u.searchParams.get('q') ?? '');
+      calls.push({ host: u.hostname, q, headers: init?.headers ?? {} });
+      if (u.hostname === 'en.wiktionary.org') {
+        if (!wikimedia) throw new TypeError('Network request failed');
+        // Wikimedia turns away requests without a proper User-Agent (Android's default is okhttp's).
+        if (!/NecReader/.test(init?.headers?.['User-Agent'] ?? '')) return json(403, { title: 'Please set a user-agent' });
+        return WIKT[q] ? json(200, WIKT[q]) : json(404, { type: 'not_found' });
+      }
+      if (u.hostname === 'sozluk.gov.tr') {
+        if (!tdk) throw new TypeError('Network request failed');
+        return json(200, TDK[q] ?? { error: 'Sonuç bulunamadı' });
+      }
+      if (u.hostname === 'translate.googleapis.com') return json(200, { sentences: [{ trans: GLOSS[q.toLocaleLowerCase('tr')] ?? q, orig: q }], src: /[ışğİ]|evler|insan|gel/i.test(q) ? 'tr' : 'en' });
+      throw new TypeError('Network request failed');
+    }),
+  );
+}
+afterEach(() => vi.unstubAllGlobals());
+
+describe('looking up words', () => {
+  it('Wiktionary is asked with a User-Agent of the app’s own (else Wikimedia answers 403)', async () => {
+    network();
+    expect((await defineWord('serendipity', 'en'))?.senses[0].defs[0].text).toBe('a happy accident');
+    expect(calls[0].headers['User-Agent']).toBe(USER_AGENT);
+  });
+
+  it('a Turkish word gets TDK’s Turkish definition with the English meaning under it', async () => {
+    network();
+    const def = await defineWord('Işık', 'tr-TR');
+    expect(def).toMatchObject({ word: 'ışık', source: 'TDK', english: { word: 'ışık', source: 'Wiktionary', senses: [{ defs: [{ text: 'light (electromagnetic wave)' }] }] } });
+    expect(def?.senses[0]).toEqual({ pos: 'isim', defs: [{ text: 'Cisimleri görmeyi sağlayan fiziksel enerji' }] });
+    expect(calls.find((c) => c.host === 'sozluk.gov.tr')?.headers['User-Agent']).toBe(USER_AGENT);
+  });
+
+  it('an inflected word is looked up as the word it comes from, with Google’s translation of the form itself', async () => {
+    network();
+    const def = await defineWord('evlerinden,', 'tr');
+    expect(def).toMatchObject({ word: 'ev', source: 'TDK', gloss: 'from their homes', english: { senses: [{ defs: [{ text: 'house, home' }] }] } });
+    // Usage labels and examples come along.
+    expect(def?.senses[0].defs[1]).toEqual({ text: '(mecaz) ► aile', example: 'Evine bağlı bir adam.' });
+    // A few requests at most.
+    expect(calls.filter((c) => c.host === 'sozluk.gov.tr').length).toBeLessThanOrEqual(5);
+  });
+
+  it('a verb form is looked up as its infinitive', async () => {
+    network();
+    // Wiktionary has no entry for it here: Google's translation of the form is the English meaning.
+    expect(await defineWord('Geldiler', 'tr')).toMatchObject({ word: 'gelmek', source: 'TDK', english: { source: 'Google', senses: [{ defs: [{ text: 'they came' }] }] } });
+  });
+
+  it('turkishStems: endings trimmed, softened consonants hardened, verb stems as infinitives', () => {
+    expect(turkishStems('evlerinden')).toContain('ev');
+    expect(turkishStems('kitabı')[0]).toBe('kitap');
+    expect(turkishStems('geliyordu')).toContain('gelmek');
+    expect(turkishStems('kızlarımızın')).toContain('kız');
+    expect(turkishStems('ev')).toEqual([]);
+  });
+
+  it('a -yor verb is looked up as its own verb: the stem’s last vowel isn’t taken for the ending', () => {
+    const cases: [string, string][] = [
+      ['okuyor', 'okumak'], // not okmak, nor ok (an arrow)
+      ['okuyorum', 'okumak'],
+      ['yaşıyor', 'yaşamak'], // not yaş (age)
+      ['arıyor', 'aramak'],
+      ['taşıyor', 'taşımak'], // not taşmak (to overflow)
+      ['uyuyor', 'uyumak'], // not uymak (to conform)
+      ['yıkıyor', 'yıkamak'], // not yıkmak (to demolish)
+      ['istiyorum', 'istemek'],
+      ['diyor', 'demek'],
+      ['gidiyor', 'gitmek'],
+    ];
+    for (const [form, verb] of cases) expect([form, turkishStems(form)]).toEqual([form, expect.arrayContaining([verb])]);
+    // After a verb ending, only verbs: never the bare stem, which may be another word.
+    expect(turkishStems('okuyor')).not.toContain('ok');
+    expect(turkishStems('yaşıyor')).not.toContain('yaş');
+  });
+
+  it('Look Up on "okuyorum" shows TDK’s "okumak", not "ok" (an arrow), though TDK has both', async () => {
+    network();
+    TDK.okumak = [{ madde: 'okumak', anlamlarListe: [{ anlam: 'Yazılı bir metni sesli veya sessiz olarak dile çevirmek', ozelliklerListe: [{ tur: '3', tam_adi: 'nesnesiz' }] }] }];
+    TDK.ok = [{ madde: 'ok', anlamlarListe: [{ anlam: 'Yayla atılan, ucu sivri, ince, uzun çubuk', ozelliklerListe: [{ tur: '3', tam_adi: 'isim' }] }] }];
+    try {
+      expect((await defineWord('okuyorum', 'tr'))?.word).toBe('okumak');
+    } finally {
+      delete TDK.okumak;
+      delete TDK.ok;
+    }
+  });
+
+  it('with TDK out of reach: Wiktionary’s Turkish entry, found the Turkish way ("İnsan" is "insan", not "i̇nsan")', async () => {
+    network({ tdk: false });
+    expect(await defineWord('İnsan', 'tr')).toMatchObject({ word: 'insan', language: 'Turkish', source: 'Wiktionary' });
+    expect((await defineWord('Işık', 'tr'))?.word).toBe('ışık');
+    // An inflected word Wiktionary doesn't have: Google's translation instead of "No dictionary entry".
+    expect(JSON.stringify(await defineWord('evlerinden', 'tr'))).toContain('from their homes');
+  });
+
+  it('TDK not answering once (its server sometimes drops a connection) doesn’t lose the Turkish definition: it is asked again', async () => {
+    TDK.ılık = [{ madde: 'ılık', anlamlarListe: [{ anlam: 'Soğukla sıcak arası, ne soğuk ne sıcak', ozelliklerListe: [{ tur: '3', tam_adi: 'sıfat' }] }] }];
+    try {
+      // The first request fails outright.
+      network();
+      const real = fetch as unknown as (u: string, i?: unknown) => Promise<unknown>;
+      let tdkCalls = 0;
+      vi.stubGlobal(
+        'fetch',
+        vi.fn((url: string, init?: unknown) => (new URL(url).hostname === 'sozluk.gov.tr' && ++tdkCalls === 1 ? Promise.reject(new TypeError('Network request failed')) : real(url, init))),
+      );
+      expect(await defineWord('ılık', 'tr')).toMatchObject({ word: 'ılık', source: 'TDK' });
+      expect(tdkCalls).toBe(2);
+
+      // The first request is left unanswered: a second goes out after a moment, and its answer is used.
+      network();
+      const real2 = fetch as unknown as (u: string, i?: { signal?: AbortSignal }) => Promise<unknown>;
+      tdkCalls = 0;
+      vi.stubGlobal(
+        'fetch',
+        vi.fn((url: string, init?: { signal?: AbortSignal }) => {
+          if (new URL(url).hostname === 'sozluk.gov.tr' && ++tdkCalls === 1) {
+            return new Promise((_resolve, reject) => init?.signal?.addEventListener('abort', () => reject(new Error('Aborted'))));
+          }
+          return real2(url, init);
+        }),
+      );
+      const started = Date.now();
+      expect(await defineWord('ılık', 'tr')).toMatchObject({ word: 'ılık', source: 'TDK' });
+      expect(Date.now() - started).toBeLessThan(5000);
+    } finally {
+      delete TDK.ılık;
+    }
+  }, 15000);
+
+  it('TDK out of reach: asked twice at most, its base words not tried one by one, and the English meaning shown', async () => {
+    network({ tdk: false });
+    const def = await defineWord('evlerinden', 'tr');
+    expect(calls.filter((c) => c.host === 'sozluk.gov.tr')).toHaveLength(2);
+    expect(JSON.stringify(def)).toContain('from their homes');
+  });
+
+  it('a book with no language (a TXT file): the word’s language as Google detects it, not the first one Wiktionary lists', async () => {
+    network({ tdk: false });
+    expect((await defineWord('insan'))?.language).toBe('Turkish');
+  });
+
+  it('nothing reachable: says there’s no connection', async () => {
+    network({ tdk: false, wikimedia: false });
+    vi.stubGlobal('fetch', vi.fn(async () => Promise.reject(new TypeError('Network request failed'))));
+    await expect(defineWord('ışık', 'tr')).rejects.toMatchObject({ offline: true });
+  });
+
+  it('no request goes out after the card was closed', async () => {
+    const card = new AbortController();
+    const hosts: string[] = [];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string) => {
+        hosts.push(new URL(url).hostname);
+        // Wiktionary answers with nothing usable, and the person closes the card meanwhile.
+        card.abort();
+        return { ok: true, status: 200, text: () => Promise.resolve('{}') };
+      }),
+    );
+    await defineWord('serendipity', 'en', card.signal).catch(() => null);
+    expect(hosts).toEqual(['en.wiktionary.org']);
+  });
+
+  it('text written decomposed keeps its last letter: "kuş" is not cut to "kus"', () => {
+    expect(cleanWord('kuş'.normalize('NFD'))).toBe('kuş');
+    expect(lowerWord('IŞIK', 'tr')).toBe('ışık');
+    expect(lowerWord('İstanbul', 'en')).toBe('istanbul');
+  });
+
+  it('reads TDK’s answer, and its "not found"', () => {
+    expect(parseTdk({ error: 'Sonuç bulunamadı' })).toBeNull();
+    expect(parseTdk(TDK.gelmek)).toEqual({ word: 'gelmek', language: 'Turkish', source: 'TDK', senses: [{ pos: 'nesnesiz', defs: [{ text: 'Ulaşmak, varmak' }] }] });
   });
 });

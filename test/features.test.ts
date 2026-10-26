@@ -41,6 +41,21 @@ describe('search', () => {
     expect(hits[1].before).toBe('Ёлка и ');
   });
 
+  it('Turkish: dotted and dotless i, capitals or not, all match; accents make no difference', () => {
+    const hits = (text: string, query: string) => {
+      const out: Hit[] = [];
+      findInBlock({ k: 'p', r: [text] }, 0, fold(query.trim()), out, 100);
+      return out.map((h) => h.match);
+    };
+    expect(hits('Işık yandı. Odada ışık vardı.', 'ışık')).toEqual(['Işık', 'ışık']);
+    expect(hits('IŞIK', 'ışık')).toEqual(['IŞIK']);
+    expect(hits('Odada ışık vardı.', 'Işık')).toEqual(['ışık']);
+    expect(hits('İstanbul ve istanbul', 'istanbul')).toEqual(['İstanbul', 'istanbul']);
+    // "ILIK" (typed without Turkish letters) finds "ılık" and the heading "ILIK".
+    expect(hits('ILIK bir rüzgâr; ılık su.', 'ILIK')).toEqual(['ILIK', 'ılık']);
+    expect(hits('Kırmızı güneş', 'kirmizi gunes')).toEqual(['Kırmızı güneş']);
+  });
+
   it('respects the hit limit', () => {
     const hits: Hit[] = [];
     findInBlock(block, 0, 'л', hits, 2);

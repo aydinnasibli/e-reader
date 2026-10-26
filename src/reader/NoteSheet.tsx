@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { ActivityIndicator, ScrollView, StyleSheet, Text, View } from 'react-native';
-import type { Block, Position } from '@/engine/types';
+import { type Block, type Position, type Run, makeRun, runLink, runStyle, runText } from '@/engine/types';
 import type { ReaderSettings, Theme } from '@/lib/settings';
 import { Sheet } from '@/ui/Sheet';
 import type { BookData } from './book';
@@ -15,8 +15,31 @@ const MAX_BLOCKS = 12;
 
 type State = { kind: 'loading' } | { kind: 'missing'; reason: string } | { kind: 'ready'; start: number; blocks: Block[] };
 
+/** Words a note's link back to its reference is often written with. */
+const BACK_LABEL = /^[\s[(]*(?:back|return|geri|dön|назад|↩︎?|↑|⇑|⤴|\^)[\s.)\]]*$/iu;
+
+/**
+ * A note without its link back to the reference (the popup is over the
+ * reference already): a link written like one ("Back", "↩"), or a short one
+ * ("1", "[1]") to a place that isn't a note (`anchors`). Null if nothing is left.
+ */
+export function withoutBackLinks(b: Block, anchors: Record<string, number> | undefined): Block | null {
+  if (!b.r) return b;
+  const runs = b.r.filter((r: Run) => {
+    const link = runLink(r);
+    const text = runText(r);
+    return !link || !(BACK_LABEL.test(text) || (anchors?.[link] !== undefined && text.trim().length <= 4));
+  });
+  if (runs.length === b.r.length) return b;
+  // What the link leaves behind at the start ("1. " of a numbered note whose number was the link).
+  if (runs.length) runs[0] = makeRun(runText(runs[0]).replace(/^[\s.):\]]+/u, ''), runStyle(runs[0]), runLink(runs[0]));
+  const text = runs.map(runText).join('');
+  return text.trim() ? { ...b, r: runs } : null;
+}
+
 export function NoteSheet({
   book,
+  lang,
   target,
   settings,
   theme,
@@ -24,6 +47,8 @@ export function NoteSheet({
   onGo,
 }: {
   book: BookData;
+  /** The book's language (hyphenation). */
+  lang?: string;
   target: string | null;
   settings: ReaderSettings;
   theme: Theme;
@@ -55,8 +80,9 @@ export function NoteSheet({
         for (; b < end && b - first < blocks.length; b++) out.push(blocks[b - first]);
         if (b - first >= blocks.length && b < end && c + 1 >= book.chunkCount) break;
       }
-      // A note's own number heading ("1") adds nothing in a popup.
-      const shown = out.length > 1 && out[0].k === 'h' ? out.slice(1) : out;
+      // A note's own number heading ("1") adds nothing in a popup, nor does its link back to the reference.
+      const anchors = book.manifest?.anchors;
+      const shown = (out.length > 1 && out[0].k === 'h' ? out.slice(1) : out).map((b) => withoutBackLinks(b, anchors)).filter((b): b is Block => !!b);
       if (alive) setState({ kind: 'ready', start, blocks: shown });
     })();
     return () => {
@@ -75,7 +101,7 @@ export function NoteSheet({
           <ScrollView style={styles.body} contentContainerStyle={styles.bodyPad}>
             {state.blocks.map((b, i) =>
               b.r ? (
-                <BlockText key={i} block={b} look={lookOf(b, small, book.manifest?.lang)} theme={theme} noTopMargin={i === 0} />
+                <BlockText key={i} block={b} look={lookOf(b, small, lang)} theme={theme} noTopMargin={i === 0} />
               ) : b.k === 'sp' || b.k === 'hr' ? (
                 <Spacer key={i} block={b} settings={small} theme={theme} />
               ) : null,

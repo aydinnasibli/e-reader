@@ -11,6 +11,8 @@ import { Tap } from '@/ui/Tap';
 
 interface Props {
   theme: Theme;
+  /** Distance from the bottom of the screen (clear of the page number below the page); the safe area by default. */
+  bottom?: number;
   /** The colour new highlights get (marked). */
   color: HighlightColor;
   /** A highlight was just made: Note, Copy and Remove are for it. */
@@ -24,7 +26,7 @@ interface Props {
   onDone(): void;
 }
 
-export function HighlightBar({ theme, color, made, hasNote, onColor, onNote, onCopy, onRemove, onDone }: Props) {
+export function HighlightBar({ theme, bottom, color, made, hasNote, onColor, onNote, onCopy, onRemove, onDone }: Props) {
   const insets = useSafeAreaInsets();
   const action = (icon: keyof typeof Ionicons.glyphMap, label: string, onPress: () => void) => (
     <Tap onPress={onPress} hitSlop={6} accessibilityRole="button" accessibilityLabel={label} style={styles.action}>
@@ -35,7 +37,7 @@ export function HighlightBar({ theme, color, made, hasNote, onColor, onNote, onC
     </Tap>
   );
   return (
-    <View style={[styles.panel, { bottom: insets.bottom + 12, backgroundColor: theme.chrome, borderColor: theme.border }]}>
+    <View style={[styles.panel, { bottom: bottom ?? insets.bottom + 12, backgroundColor: theme.chrome, borderColor: theme.border }]}>
       <View style={styles.row}>
         {(Object.keys(HIGHLIGHT_COLORS) as HighlightColor[]).map((c) => (
           <Tap

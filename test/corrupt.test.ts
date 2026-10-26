@@ -4,7 +4,8 @@
 
 import { strToU8, zipSync } from 'fflate';
 import { describe, expect, it } from 'vitest';
-import { BookError } from '../src/engine/io';
+import { sniffFormat } from '../src/engine/ingest';
+import { BookError, CUT_SHORT } from '../src/engine/io';
 import { MAX_ENTRY_BYTES, ZipArchive } from '../src/engine/zip';
 import { MemorySource, enc, ingestBytes } from './helpers';
 import { buildMobi } from './mobiFixture';
@@ -74,6 +75,52 @@ describe.each([
       expect(Date.now() - t0, `case ${i} took too long`).toBeLessThan(3000);
     }
   }, 120_000);
+});
+
+describe('books cut short (a download that didn’t finish)', () => {
+  const cuts = (bytes: Uint8Array, at = [0.2, 0.5, 0.9, 0.99]) => at.map((f) => bytes.subarray(0, Math.floor(bytes.length * f)));
+  const sniff = (bytes: Uint8Array) => sniffFormat(new MemorySource(bytes));
+
+  it('an EPUB or a zipped FB2 is still known for what it is, and said to be damaged', async () => {
+    for (const [bytes, format] of [[epub(), 'epub'], [zipSync({ 'book.fb2': fb2() }), 'fb2.zip']] as const) {
+      for (const cut of cuts(bytes)) {
+        expect(sniff(cut)).toBe(format);
+        // Shared without a name, or picked by its name.
+        await expect(ingestBytes(cut, 'document')).rejects.toThrow(CUT_SHORT);
+        await expect(ingestBytes(cut, `x.${format}`)).rejects.toThrow(CUT_SHORT);
+      }
+    }
+    // Any other ZIP cut short still isn't a book.
+    const docx = zipSync({ '[Content_Types].xml': strToU8('<Types/>'.repeat(50)), 'word/document.xml': strToU8('<w:document/>'.repeat(200)) });
+    for (const cut of cuts(docx)) expect(sniff(cut)).toBeNull();
+  });
+
+  it('an FB2 cut in its text is damaged; cut in the pictures after it, all its text is still there', async () => {
+    const xml = new TextDecoder().decode(fb2()).replace('</FictionBook>', `<binary id="p.jpg" content-type="image/jpeg">${'QUJD'.repeat(4000)}</binary></FictionBook>`);
+    const whole = await ingestBytes(enc(xml), 'x.fb2');
+    for (const at of [xml.indexOf('<body>') - 20, xml.indexOf('<body>') + 500, xml.indexOf('</body>') - 3]) {
+      const cut = enc(xml.slice(0, at));
+      expect(sniff(cut)).toBe('fb2');
+      await expect(ingestBytes(cut, 'document')).rejects.toThrow(CUT_SHORT);
+    }
+    const inPicture = await ingestBytes(enc(xml.slice(0, xml.indexOf('<binary') + 3000)), 'x.fb2');
+    expect(inPicture.blocks).toEqual(whole.blocks);
+  });
+
+  it('a MOBI or AZW3 whose text is cut short is still known as a Kindle book, and said to be damaged', async () => {
+    const html = `<html><body>${'<p>Paragraph of text.</p>'.repeat(600)}</body></html>`;
+    for (const [bytes, format] of [[buildMobi({ title: 'T', html }), 'mobi'], [buildMobi({ title: 'T', html, kf8: true }), 'azw3']] as const) {
+      expect((await ingestBytes(bytes, 'x')).manifest.format).toBe(format);
+      for (const cut of cuts(bytes)) {
+        expect(sniff(cut)).toBe(format);
+        await expect(ingestBytes(cut, 'document')).rejects.toThrow(CUT_SHORT);
+      }
+      // Cut before its list of records ends.
+      const head = bytes.subarray(0, 70);
+      expect(sniff(head)).toMatch(/^(mobi|azw3)$/);
+      await expect(ingestBytes(head, `x.${format}`)).rejects.toThrow(CUT_SHORT);
+    }
+  });
 });
 
 /** Patch the central-directory size fields of one entry. */

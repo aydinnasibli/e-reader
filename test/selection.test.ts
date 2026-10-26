@@ -1,38 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { cutRange } from '../src/lib/highlightRanges';
-import { dragRanges, selectBetween, selectionRanges, selectionText, tapWord, tokenize, tokensFor, wordAt } from '../src/reader/selection';
+import { dragRanges, exactText, selectBetween, selectionRanges, selectionText } from '../src/reader/selection';
 
 const TEXT = 'The quick brown fox jumps over the lazy dog';
-
-describe('word selection', () => {
-  const tokens = tokenize(TEXT);
-  const word = (i: number) => tokens[i].text;
-
-  it('finds the word at a character, or the nearest one on a space', () => {
-    expect(word(wordAt(tokens, 0))).toBe('The');
-    expect(word(wordAt(tokens, 12))).toBe('brown');
-    expect(word(wordAt(tokens, 9))).toBe('quick'); // the space after "quick"
-    expect(word(wordAt(tokens, 999))).toBe('dog');
-    expect(wordAt(tokenize('   '), 1)).toBe(-1);
-  });
-
-  it('long-press selects one word; taps extend; a tap inside starts over', () => {
-    const fox = wordAt(tokens, TEXT.indexOf('fox'));
-    let sel = { a: fox, z: fox };
-    sel = tapWord(sel, wordAt(tokens, TEXT.indexOf('over')));
-    expect(tokens.slice(sel.a, sel.z + 1).map((t) => t.text).join('')).toBe('fox jumps over');
-    sel = tapWord(sel, wordAt(tokens, TEXT.indexOf('jumps')));
-    expect(sel).toEqual({ a: wordAt(tokens, TEXT.indexOf('jumps')), z: wordAt(tokens, TEXT.indexOf('jumps')) });
-  });
-
-  it('maps a character range to the words it touches', () => {
-    const s = TEXT.indexOf('brown');
-    const sel = tokensFor(tokens, s, s + 'brown fox'.length)!;
-    expect(word(sel.a)).toBe('brown');
-    expect(word(sel.z)).toBe('fox');
-    expect(tokensFor(tokens, 3, 4)).toBeNull(); // only a space
-  });
-});
 
 describe('highlight ranges', () => {
   const h = (id: string, s: number, e: number, b = 0) => ({ id, b, s, e, text: TEXT.slice(s, e) });
@@ -118,16 +88,20 @@ describe('selection with handles', () => {
 });
 
 
-describe('Chinese and Japanese (no spaces between words)', () => {
-  it('a long press selects one character, not the whole sentence', () => {
-    const zh = '我们在海上航行。The ship 很大';
-    const t = tokenize(zh);
-    expect(t[wordAt(t, 1)].text).toBe('们');
-    expect(t[wordAt(t, 9)].text).toBe('The');
-    expect(t.filter((x) => x.word).map((x) => x.text)).toEqual(['我', '们', '在', '海', '上', '航', '行', '。', 'The', 'ship', '很', '大']);
-    const ja = 'ひらがなとカタカナ';
-    expect(tokenize(ja).map((x) => x.text)).toHaveLength(ja.length);
-    // Offsets still line up with the text.
-    for (const x of tokenize(zh)) expect(zh.slice(x.start, x.start + x.text.length)).toBe(x.text);
+describe('copying a selection', () => {
+  const texts: Record<number, string | null> = { 0: 'The quick brown fox', 1: null, 2: 'jumps over the lazy dog' };
+  const textOf = (b: number) => texts[b] ?? null;
+
+  it('takes exactly the characters selected, not the whole words', () => {
+    // From inside "quick" to inside "brown" (the last character is included).
+    expect(exactText({ a: { b: 0, o: 6 }, z: { b: 0, o: 11 } }, textOf)).toBe('ick br');
+    expect(selectionText({ a: { b: 0, o: 6 }, z: { b: 0, o: 11 } }, textOf)).toBe('quick brown');
+  });
+
+  it('across paragraphs, past a picture, either way round', () => {
+    expect(exactText({ a: { b: 0, o: 16 }, z: { b: 2, o: 4 } }, textOf)).toBe('fox\njumps');
+    expect(exactText({ a: { b: 2, o: 4 }, z: { b: 0, o: 16 } }, textOf)).toBe('fox\njumps');
+    // Up to the end of a paragraph (a selection ending at the start of the next).
+    expect(exactText({ a: { b: 0, o: 16 }, z: { b: 0, o: Number.MAX_SAFE_INTEGER } }, textOf)).toBe('fox');
   });
 });

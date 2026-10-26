@@ -14,7 +14,7 @@ const quote = (s: string) =>
     .join('\n');
 
 export function notesMarkdown(books: ExportBook[], date = new Date()): string {
-  const out: string[] = ['# Highlights & notes', '', `_Exported from Nec e-book reader on ${date.toLocaleDateString()}_`];
+  const out: string[] = ['# Highlights & notes', '', `_Exported from Nec Reader on ${date.toLocaleDateString()}_`];
   for (const b of books) {
     if (!b.highlights.length) continue;
     out.push('', `## ${b.title}${b.author ? ` — ${b.author}` : ''}`);

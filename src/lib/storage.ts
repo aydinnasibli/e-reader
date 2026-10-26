@@ -6,6 +6,7 @@
 //   <documents>/books/<id>/manifest.json
 //   <documents>/books/<id>/c/<n>.json   chunks
 //   <documents>/books/<id>/img/...      extracted images
+//   <documents>/books/<id>/next/...     a conversion by a newer converter, until it takes over (library.ts)
 
 import { Directory, File, type FileHandle, FileMode, Paths } from 'expo-file-system';
 import { strToU8 } from 'fflate';
@@ -18,6 +19,11 @@ export function booksDir() {
 
 export function bookDir(id: string) {
   return new Directory(Paths.document, 'books', id);
+}
+
+/** Where a book is converted again (manifest.json, c/, img/) while it is read as it was. */
+export function nextDir(id: string) {
+  return new Directory(Paths.document, 'books', id, 'next');
 }
 
 export function chunkFile(id: string, index: number) {
@@ -75,26 +81,33 @@ export class FileSource implements ByteSource {
   }
 }
 
+/** Writes a conversion into `root` (the book's folder, or nextDir() when converting it again). */
 export class FileSink implements BookSink {
+  private chunks: Directory;
+  private images: Directory;
+
   constructor(
-    private id: string,
+    id: string,
     private onChunk?: (index: number, info: ChunkInfo) => void,
+    root: Directory = bookDir(id),
   ) {
-    ensureDir(new Directory(bookDir(id), 'c'));
-    ensureDir(new Directory(bookDir(id), 'img'));
+    this.chunks = new Directory(root, 'c');
+    this.images = new Directory(root, 'img');
+    ensureDir(this.chunks);
+    ensureDir(this.images);
   }
 
   writeChunk(index: number, json: string, info: ChunkInfo) {
-    chunkFile(this.id, index).writeSync(json);
+    new File(this.chunks, `${index}.json`).writeSync(json);
     this.onChunk?.(index, info);
   }
 
   writeImage(name: string, data: Uint8Array) {
-    imageFile(this.id, name).writeSync(data);
+    new File(this.images, name).writeSync(data);
   }
 
   writeImageBase64(name: string, base64: string) {
-    imageFile(this.id, name).writeSync(base64, { encoding: 'base64' });
+    new File(this.images, name).writeSync(base64, { encoding: 'base64' });
   }
 }
 
@@ -109,29 +122,60 @@ function tryRead<T>(file: File): T | null {
   }
 }
 
+/** Files found unreadable by readJson(), kept aside rather than made the backup when next saved. */
+const unreadable = new Set<string>();
+
 /**
  * Read a JSON file written by writeJson(). If the app died mid-save or the
- * file got damaged, fall back to the previous good copy.
+ * file got damaged, fall back to the newest good copy: the new version
+ * waiting in .tmp (moving it into place deletes the old file first, then
+ * renames, so a save cut off between the two leaves only that), then the
+ * previous version in .bak.
  */
 export function readJson<T>(file: File): T | null {
-  return tryRead<T>(file) ?? tryRead<T>(sibling(file, '.bak')) ?? tryRead<T>(sibling(file, '.tmp'));
+  const main = tryRead<T>(file);
+  if (main !== null) return main;
+  try {
+    if (file.exists) unreadable.add(file.uri);
+  } catch {
+    // can't tell; nothing to keep aside
+  }
+  return tryRead<T>(sibling(file, '.tmp')) ?? tryRead<T>(sibling(file, '.bak'));
 }
 
 /**
  * Save JSON without ever leaving a half-written file: write a temporary file,
- * keep the previous version as .bak, then move the new one into place.
+ * keep the previous version as .bak, then move the new one into place. A
+ * file that couldn't be read is kept as .unreadable instead (it may hold
+ * more than the copy read in its place), and the good .bak stays.
  */
 export function writeJson(file: File, value: unknown) {
   const tmp = sibling(file, '.tmp');
   tmp.writeSync(JSON.stringify(value));
   if (file.exists) {
     try {
-      file.copySync(sibling(file, '.bak'), { overwrite: true });
+      if (unreadable.delete(file.uri)) file.copySync(sibling(file, '.unreadable'), { overwrite: true });
+      else file.copySync(sibling(file, '.bak'), { overwrite: true });
     } catch {
       // a missing backup is not fatal
     }
   }
   tmp.moveSync(file, { overwrite: true });
+}
+
+/**
+ * Delete a JSON file written by writeJson() with its saved copies: deleting
+ * only the file would let readJson() bring back its previous version. The
+ * copies go first, so a delete cut short leaves the file as it was.
+ */
+export function removeJson(file: File) {
+  for (const f of [sibling(file, '.bak'), sibling(file, '.tmp'), file]) {
+    try {
+      if (f.exists) f.delete();
+    } catch {
+      // gone with the book's folder anyway
+    }
+  }
 }
 
 /**

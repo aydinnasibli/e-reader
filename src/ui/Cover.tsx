@@ -28,7 +28,9 @@ export function Cover({ book, width, radius = 6 }: { book: BookEntry; width: num
   return (
     <View style={[styles.box, { width, height, borderRadius: radius, backgroundColor: PALETTE[hash(book.id) % PALETTE.length] }]}>
       {uri ? (
-        <Image source={{ uri }} style={StyleSheet.absoluteFill} contentFit="cover" transition={150} />
+        // recyclingKey: a list reuses this view for another book while scrolling;
+        // without it the old book's cover shows until the new one has loaded.
+        <Image source={{ uri }} recyclingKey={book.id} style={StyleSheet.absoluteFill} contentFit="cover" transition={150} />
       ) : (
         <View style={[styles.generated, { padding: pad }]}>
           <View style={styles.spine} />

@@ -1,67 +1,5 @@
-// Word selection in the selection sheet, kept free of React so it is tested
-// on its own.
-
-export interface Token {
-  text: string;
-  start: number;
-  word: boolean;
-}
-
-/**
- * Words are runs between spaces, except in Chinese and Japanese, which don't
- * put spaces between words: there each character is a word of its own, so a
- * long press selects one character (and its dictionary entry) rather than the
- * whole sentence.
- */
-export function tokenize(text: string): Token[] {
-  const out: Token[] = [];
-  // CJK punctuation and full-width forms (。、！) stand alone too.
-  const re = /\s+|[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\u3000-\u303f\uff00-\uffef]|[^\s\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\u3000-\u303f\uff00-\uffef]+/gu;
-  let m: RegExpExecArray | null;
-  while ((m = re.exec(text))) out.push({ text: m[0], start: m.index, word: !/^\s/.test(m[0]) });
-  return out;
-}
-
-/** The word token at (or nearest to) character `at`, or -1 if there are no words. */
-export function wordAt(tokens: Token[], at: number): number {
-  let best = -1;
-  let dist = Infinity;
-  for (let i = 0; i < tokens.length; i++) {
-    const t = tokens[i];
-    if (!t.word) continue;
-    const d = at < t.start ? t.start - at : at >= t.start + t.text.length ? at - (t.start + t.text.length) + 1 : 0;
-    if (d < dist) {
-      best = i;
-      dist = d;
-    }
-    if (d === 0) break;
-  }
-  return best;
-}
-
-export interface Sel {
-  a: number;
-  z: number;
-}
-
-/** Tapping word `i`: outside the selection extends it; inside starts over from that word. */
-export function tapWord(sel: Sel | null, i: number): Sel {
-  if (!sel || (i >= sel.a && i <= sel.z)) return { a: i, z: i };
-  return { a: Math.min(sel.a, i), z: Math.max(sel.z, i) };
-}
-
-/** Word tokens covering the character range [s, e). */
-export function tokensFor(tokens: Token[], s: number, e: number): Sel | null {
-  let a = -1;
-  let z = -1;
-  tokens.forEach((t, i) => {
-    if (t.word && t.start < e && s < t.start + t.text.length) {
-      if (a < 0) a = i;
-      z = i;
-    }
-  });
-  return a < 0 ? null : { a, z };
-}
+// Text selected on the page, and the highlight tool's strokes, in book
+// positions; kept free of React so it is tested on its own.
 
 /** A point in the book: block and character offset in its text. */
 export interface TextPoint {
@@ -97,7 +35,8 @@ export function dragRanges(a: TextPoint, z: TextPoint, textOf: (b: number) => st
 
 /**
  * Text selected on the page: its first and last character (inclusive), in
- * reading order, possibly in different paragraphs. Always whole words.
+ * reading order, possibly in different paragraphs; not necessarily whole
+ * words (the browser's own selection).
  */
 export interface TextSel {
   a: TextPoint;
@@ -120,9 +59,33 @@ export function selectionRanges(sel: TextSel, textOf: TextOf): { b: number; s: n
   return dragRanges(sel.a, sel.z, textOf);
 }
 
-/** The selected text, paragraphs on separate lines. */
-export function selectionText(sel: TextSel, textOf: TextOf): string {
-  return selectionRanges(sel, textOf)
-    .map((r) => textOf(r.b)!.slice(r.s, r.e))
-    .join('\n');
+/** Whether block `b` goes on with the paragraph before it (a long paragraph is stored in parts: Block.c). */
+type Continues = (b: number) => boolean;
+
+/** The selected text widened to whole words, paragraphs on separate lines. */
+export function selectionText(sel: TextSel, textOf: TextOf, continues?: Continues): string {
+  const whole = selectBetween(sel.a, sel.z, textOf);
+  return whole ? exactText(whole, textOf, continues) : '';
+}
+
+/**
+ * Exactly the characters selected, from `a` to `z` (either order),
+ * paragraphs on separate lines; the parts of a long paragraph run on.
+ */
+export function exactText(sel: TextSel, textOf: TextOf, continues?: Continues): string {
+  const [from, to] = sel.a.b < sel.z.b || (sel.a.b === sel.z.b && sel.a.o <= sel.z.o) ? [sel.a, sel.z] : [sel.z, sel.a];
+  let out = '';
+  let any = false;
+  for (let b = from.b; b <= to.b; b++) {
+    const text = textOf(b);
+    if (!text) continue;
+    const s = b === from.b ? Math.min(from.o, text.length) : 0;
+    // `z` is the last character selected.
+    const e = b === to.b ? Math.min(to.o + 1, text.length) : text.length;
+    if (e <= s) continue;
+    if (any && !continues?.(b)) out += '\n';
+    out += text.slice(s, e);
+    any = true;
+  }
+  return out;
 }

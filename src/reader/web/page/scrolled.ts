@@ -5,7 +5,8 @@
 import type { Chunk, DrawnPoint, PageSetup, Target } from '../protocol';
 import { send } from './bridge';
 import { draw as drawMarks } from './marks';
-import { blockOf, blocksIn, charBox, lengthOf, pointAtScreen } from './text';
+import { clearFlash, flashLine } from './flash';
+import { blockOf, blocksIn, charBox, lengthOf } from './text';
 
 interface Section {
   c: number;
@@ -28,11 +29,27 @@ export class Scrolled {
   private autoSpeed = 0;
   private autoAt = 0;
   private autoFrom = 0;
+  /** Auto-scroll: the text is drawn this much higher than the page is scrolled (see autoStep). */
+  private higher = 0;
   private reachedEnd = false;
   /** What was last told: the place reported changes paragraph by paragraph, and at most twice a second within one. */
   private told = { b: -1, at: 0 };
+  /**
+   * The first block on screen, where it was and the scroll position then: kept
+   * there when something above changes size. Taken again only when the page
+   * has scrolled, not when text moved under a still page.
+   */
+  private held: { el: HTMLElement; top: number; y: number } | null = null;
+  /** Chunks changing size (a picture loading): keep the text on screen still. */
+  private resized = new ResizeObserver(() => this.keepHeld());
+  /**
+   * Where the page last scrolled itself to (a jump, keeping the text still as
+   * chunks come and go or pictures load): the reader at that place hasn't
+   * read on (`shown` is told with turned false). Auto-scroll is reading on.
+   */
+  private placed: number | null = null;
 
-  constructor(root: HTMLElement) {
+  constructor(private root: HTMLElement) {
     this.flow = document.createElement('div');
     this.flow.id = 'flow';
     this.end = document.createElement('div');
@@ -55,14 +72,20 @@ export class Scrolled {
   }
 
   configure(setup: PageSetup, key: string, target: Target) {
+    const same = !!this.setup && key === this.key && JSON.stringify(this.setup.frame) === JSON.stringify(setup.frame);
     this.setup = setup;
     this.key = key;
     this.updateEnd();
-    this.show(target);
+    // Only the colours (or the like) changed: the text stays where it is.
+    if (!same) this.show(target);
   }
 
   setContent(chunks: Chunk[], target: Target, key: string) {
     this.key = key;
+    this.waiting = null;
+    clearFlash();
+    this.resized.disconnect();
+    this.held = null;
     this.flow.textContent = '';
     this.sections = [];
     this.asked.clear();
@@ -84,8 +107,9 @@ export class Scrolled {
     for (const s of this.sections.filter((x) => cs.includes(x.c))) {
       const above = s.el.getBoundingClientRect().bottom <= 0;
       const h = s.el.offsetHeight;
+      this.resized.unobserve(s.el);
       s.el.remove();
-      if (above) window.scrollBy(0, -h);
+      if (above) this.shift(-h);
     }
     this.sections = this.sections.filter((x) => !cs.includes(x.c));
     for (const c of cs) this.asked.delete(c);
@@ -94,7 +118,9 @@ export class Scrolled {
   bounds(count: number, complete: boolean) {
     this.count = count;
     this.complete = complete;
-    this.updateEnd();
+    // The line at the end goes when the chunk after comes, not before: the page would get
+    // shorter under a reader at its foot and scroll back.
+    this.updateEnd(true);
   }
 
   go(target: Target) {
@@ -108,8 +134,34 @@ export class Scrolled {
     if (speed > 0 && !was) {
       this.autoAt = performance.now();
       this.autoFrom = window.scrollY;
+      this.flow.style.willChange = 'transform';
       requestAnimationFrame((t) => this.autoStep(t));
+    } else if (speed <= 0 && was) this.stopAuto();
+  }
+
+  /** Auto-scroll over: the part of a point the text was drawn higher by (see autoStep) made a scroll. */
+  private stopAuto() {
+    const frac = this.higher;
+    this.drawHigher(0);
+    this.flow.style.willChange = '';
+    if (frac >= 0.5) {
+      window.scrollBy(0, 1);
+      this.placed = window.scrollY;
     }
+  }
+
+  /** The text drawn `dy` points higher than the page is scrolled (less than a point). */
+  private drawHigher(dy: number) {
+    if (dy === this.higher) return;
+    this.higher = dy;
+    this.flow.style.transform = dy ? `translate3d(0,${(-dy).toFixed(3)}px,0)` : '';
+  }
+
+  /** The page scrolled by `dy` under the reader (chunks added or dropped above): auto-scroll goes on from there. */
+  private shift(dy: number) {
+    window.scrollBy(0, dy);
+    this.autoFrom += dy;
+    this.placed = window.scrollY;
   }
 
   /** The reader touched the page while it was scrolling by itself. */
@@ -118,17 +170,23 @@ export class Scrolled {
   }
 
   private autoStep(now: number) {
-    if (this.autoSpeed <= 0) return;
+    if (this.autoSpeed <= 0 || !this.flow.isConnected) return;
     const y = this.autoFrom + ((now - this.autoAt) / 1000) * this.autoSpeed;
-    window.scrollTo(0, y);
+    // A page scrolls by whole points only: at reading speed (a fraction of a point a frame) the
+    // text would stand still and jump. The rest of a point it's drawn higher by instead.
+    const whole = Math.floor(y);
+    window.scrollTo(0, whole);
+    this.drawHigher(window.scrollY === whole ? y - whole : 0);
     // Stuck at the bottom with nothing more to come: auto-scroll is over.
-    if (window.scrollY < y - 2 && this.atBookEnd()) {
+    if (window.scrollY < whole - 2 && this.atBookEnd()) {
       this.autoSpeed = 0;
+      this.stopAuto();
       send({ t: 'autoEnd' });
       return;
     }
-    // Moved under it (chunks dropped above): carry on from where the page is.
-    if (Math.abs(window.scrollY - y) > 200) {
+    // At the bottom of what's there, waiting for the next chunk (or moved under it): it goes on from
+    // where the page is, not from where it would have got to meanwhile.
+    if (window.scrollY < whole - 1 || Math.abs(window.scrollY - y) > 200) {
       this.autoFrom = window.scrollY;
       this.autoAt = now;
     }
@@ -140,10 +198,12 @@ export class Scrolled {
     return this.complete && !!last && last.c === this.count - 1;
   }
 
-  private updateEnd() {
+  /** The line after the last chunk here: the book's end, or that the rest is being prepared. `keep`: not taken away now. */
+  private updateEnd(keep = false) {
     if (!this.setup) return;
     const lastShown = this.sections[this.sections.length - 1];
     const atEnd = !!lastShown && lastShown.c === this.count - 1;
+    if (!atEnd && keep) return;
     this.end.textContent = atEnd ? (this.complete ? this.setup.theEnd : this.setup.processing) : '';
     this.end.style.display = atEnd ? 'block' : 'none';
   }
@@ -155,6 +215,7 @@ export class Scrolled {
       el.className = 'chunk';
       el.dataset.c = String(ch.c);
       el.innerHTML = ch.html;
+      this.resized.observe(el);
       const s = { c: ch.c, el };
       const at = this.sections.findIndex((x) => x.c > ch.c);
       if (at < 0) {
@@ -165,7 +226,7 @@ export class Scrolled {
         const before = document.documentElement.scrollHeight;
         this.flow.insertBefore(el, this.sections[at].el);
         this.sections.splice(at, 0, s);
-        window.scrollBy(0, document.documentElement.scrollHeight - before);
+        this.shift(document.documentElement.scrollHeight - before);
       }
     }
     this.updateEnd();
@@ -184,37 +245,89 @@ export class Scrolled {
       }
     } else {
       const s = this.sections.find((x) => x.c === target.chunk);
-      if (s) y = target.edge === 'first' ? s.el.getBoundingClientRect().top + window.scrollY : s.el.getBoundingClientRect().bottom + window.scrollY - window.innerHeight;
+      if (s) y = 'page' in target || target.edge === 'first' ? s.el.getBoundingClientRect().top + window.scrollY : s.el.getBoundingClientRect().bottom + window.scrollY - window.innerHeight;
     }
     if (y === null) {
       this.waiting = target;
       return;
     }
+    this.waiting = null;
     window.scrollTo(0, Math.max(0, y - this.setup.frame.top));
+    this.placed = window.scrollY;
     this.autoFrom = window.scrollY;
     this.autoAt = performance.now();
     this.onScroll(true);
+    // Laid out anew (another mode, size, font...): the line read, marked for a moment.
+    if ('at' in target && target.top) flashLine(this.flow, target.at, this.root);
   }
 
-  /** The first text at the top of the screen. */
+  /** Something changed size: the text on screen stays where it was. */
+  private keepHeld() {
+    const h = this.held;
+    if (!h || !h.el.isConnected) return;
+    const moved = h.el.getBoundingClientRect().top - h.top;
+    if (Math.abs(moved) > 0.5) this.shift(moved);
+    h.y = window.scrollY;
+  }
+
+  /**
+   * The first text at the top of the screen: the first character of the line
+   * there, or below it where the top falls between paragraphs. (Where it's
+   * asked for a point, the browser can give the end of the paragraph above.)
+   */
   private firstShown(): DrawnPoint | null {
-    const { left, top } = this.setup.frame;
-    const p = pointAtScreen(left + 2, top + 2);
-    if (p) return p;
-    // Between paragraphs: the first block reaching below the top.
-    for (const el of blocksIn(this.flow)) if (el.getBoundingClientRect().bottom > top) return { b: Number(el.dataset.b), i: 0 };
+    const top = this.setup.frame.top + 0.5;
+    const blocks = blocksIn(this.flow);
+    // The first block reaching below the top: blocks run down the page.
+    let lo = 0;
+    let hi = blocks.length;
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1;
+      if (blocks[mid].getBoundingClientRect().bottom <= top) lo = mid + 1;
+      else hi = mid;
+    }
+    for (const el of blocks.slice(lo)) {
+      const b = Number(el.dataset.b);
+      const len = lengthOf(el);
+      // Its first character drawn below the top (lines run down too). Its box can reach below the
+      // top with none of its letters (the space under a line): then it's the next block's first.
+      const bottom = (i: number) => {
+        for (let j = i; j < len; j++) {
+          const box = charBox(el, j);
+          if (box) return box.bottom;
+        }
+        return -Infinity;
+      };
+      if (!len) return { b, i: 0 };
+      if (bottom(len - 1) <= top) continue;
+      let a = 0;
+      let z = len - 1;
+      while (a < z) {
+        const m = (a + z) >> 1;
+        if (bottom(m) > top) z = m;
+        else a = m + 1;
+      }
+      return { b, i: a };
+    }
     return null;
   }
 
   private onScroll(jumped = false) {
-    if (!this.setup) return;
+    // (A view left behind by a change of mode hears the window's scrolling too.)
+    if (!this.setup || !this.flow.isConnected) return;
+    // Text that moved under a still page (a picture above loaded) is put back first.
+    if (this.held && Math.abs(window.scrollY - this.held.y) <= 0.5) this.keepHeld();
     const first = this.firstShown();
     const s = first ? blockOf(this.flow.querySelector(`[data-b="${first.b}"]`)) : null;
+    if (!this.held || !this.held.el.isConnected || Math.abs(window.scrollY - this.held.y) > 0.5) this.held = s ? { el: s, top: s.getBoundingClientRect().top, y: window.scrollY } : null;
     const chunk = Number(s?.closest('section')?.getAttribute('data-c') ?? this.sections[0]?.c ?? 0);
     const now = performance.now();
+    // Moved by the reader (or auto-scroll), or by the page itself (see placed; WebKit can settle a point off).
+    const read = !jumped && (this.placed === null || Math.abs(window.scrollY - this.placed) > 2);
+    if (read) this.placed = null;
     if (first && (jumped || first.b !== this.told.b || now - this.told.at > 500)) {
       this.told = { b: first.b, at: now };
-      send({ t: 'shown', first, next: null, chunk, turned: !jumped, key: this.key, lastPage: false });
+      send({ t: 'shown', first, next: null, chunk, turned: read, key: this.key, lastPage: false });
     }
     // Ask for chunks before they're needed.
     const h = window.innerHeight;

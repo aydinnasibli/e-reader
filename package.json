@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "main": "expo-router/entry",
   "dependencies": {
-    "@expo-google-fonts/atkinson-hyperlegible": "^0.4.1",
+    "@expo-google-fonts/atkinson-hyperlegible-next": "^0.4.1",
     "@expo-google-fonts/eb-garamond": "^0.4.3",
     "@expo-google-fonts/literata": "^0.4.3",
     "@expo-google-fonts/lora": "^0.4.2",
@@ -28,6 +28,7 @@
     "expo-keep-awake": "~58.0.3",
     "expo-linking": "~58.0.14",
     "expo-localization": "~58.0.5",
+    "expo-navigation-bar": "~58.0.4",
     "expo-router": "~58.0.26",
     "expo-screen-orientation": "~58.0.3",
     "expo-sharing": "~58.0.20",
@@ -64,8 +65,8 @@
   },
   "scripts": {
     "start": "expo start",
-    "android": "expo start --android",
-    "ios": "expo start --ios",
+    "android": "expo start --android --go",
+    "ios": "expo start --ios --go",
     "lint": "expo lint",
     "test": "vitest run && jest",
     "bench": "node bench/run.mjs",
@@ -76,6 +77,7 @@
   },
   "private": true,
   "allowScripts": {
+    "@parcel/watcher": false,
     "esbuild": true,
     "fsevents": false,
     "unrs-resolver": true

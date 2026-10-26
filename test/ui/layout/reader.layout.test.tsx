@@ -9,7 +9,8 @@ import type { Block, Manifest } from '@/engine/types';
 import { addBookmark, addHighlight } from '@/lib/annotations';
 import { setSettings } from '@/lib/settings';
 import ReaderScreen from '@/app/reader/[id]';
-import { DEVICES } from './check';
+import { Dimensions } from 'react-native';
+import { DEVICES, type Laid, checkLayout } from './check';
 import { auditor } from './audit';
 import { setDevice } from './env';
 
@@ -46,6 +47,7 @@ jest.mock('@/lib/library', () => {
     useLiveBook: () => undefined,
     updateBook: () => {},
     reprocessBook: () => {},
+    setBookOpen: () => {},
     sourceFile: () => ({}),
   };
 });
@@ -78,7 +80,8 @@ it.each(SIZES)('reader on %s', async (size) => {
   setSettings({ mode: 'page', seenTapZones: true, pageTurn: 'none', hyphenate: false, fontSize: 19, theme: 'light', autoNight: false });
   const a = auditor(device);
   await render(<ReaderScreen />);
-  await waitFor(() => expect(screen.getByText(/^1 of \d+ · /)).toBeTruthy(), { timeout: 9000 });
+  // Two pages side by side on a wide screen: "1–2 of N".
+  await waitFor(() => expect(screen.getByText(/^1(–2)? of \d+ · /)).toBeTruthy(), { timeout: 9000 });
   await a.check('page');
 
   await tapMiddle();
@@ -164,4 +167,39 @@ it.each(['phone', 'landscape'] as const)('scroll mode on %s', async (size) => {
   await a.check('scroll menu');
   setSettings({ mode: 'page' });
   expect(a.report()).toBe('');
+}, 60000);
+
+it('Android, its window size leaving out the navigation bar: the page reaches the foot of the screen, and the auto page turn and highlighter bars sit above its page number', async () => {
+  const device = DEVICES.android;
+  setDevice(device);
+  // Android's window size leaves out the navigation bar (hidden while reading), though the reader goes under where it was.
+  const win = { width: device.width, height: device.height - 48, scale: 3, fontScale: 1 };
+  Dimensions.set({ window: win, screen: { ...win, height: device.height } });
+  setSettings({ mode: 'page', seenTapZones: true, pageTurn: 'none', hyphenate: false, fontSize: 19, theme: 'light', autoNight: false });
+  await render(<ReaderScreen />);
+  // The reader's own size, as laid out: the whole screen.
+  await act(() => fireEvent(screen.getByTestId('reader-screen'), 'layout', { nativeEvent: { layout: { x: 0, y: 0, width: device.width, height: device.height } } }));
+  await waitFor(() => expect(screen.getByText(/^1 of \d+ · /)).toBeTruthy(), { timeout: 9000 });
+  await act(() => new Promise((r) => setTimeout(r, 450)));
+  const laidOut = async () => {
+    const all: Laid[] = [];
+    await checkLayout(screen.toJSON(), device, { laidOut: all });
+    return all;
+  };
+  const rectOf = (all: Laid[], label: RegExp) => all.find((l) => label.test(l.label))!.rect;
+  const apart = (a: { y: number; h: number }, b: { y: number; h: number }) => a.y + a.h <= b.y || b.y + b.h <= a.y;
+  const footer = rectOf(await laidOut(), /"1 of \d+ · /);
+  // The footer at the foot of the screen, over the bottom inset: no gap below it.
+  expect(footer.y + footer.h).toBeGreaterThan(device.height - device.insets.bottom - 30);
+  await tapMiddle();
+  await fireEvent.press(screen.getByLabelText('Auto page turn'));
+  await settle();
+  let all = await laidOut();
+  for (const label of [/"Slower"/, /"Faster"/, /"Pause"/, /"Stop"/]) expect(apart(rectOf(all, label), rectOf(all, /"1 of \d+ · /))).toBe(true);
+  await fireEvent.press(screen.getByLabelText('Stop'));
+  await tapMiddle();
+  await fireEvent.press(screen.getByLabelText('Highlight'));
+  await settle();
+  all = await laidOut();
+  expect(apart(rectOf(all, /"Done highlighting"/), rectOf(all, /"1 of \d+ · /))).toBe(true);
 }, 60000);

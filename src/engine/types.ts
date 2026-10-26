@@ -12,6 +12,8 @@ export const SUP = 8;
 export const SUB = 16;
 /** Part of an internal link (footnote reference); the target is the run's third element. */
 export const LINK = 32;
+/** Small capitals (from the book's own styles). */
+export const SMALLCAPS = 64;
 
 /** A run of text: plain string, [text, style bits], or [text, style bits, link target]. */
 export type Run = string | [string, number] | [string, number, string];
@@ -35,6 +37,8 @@ export interface Block {
   c?: 1;
   /** Image key. */
   s?: string;
+  /** Alignment the book's own styles give it: centred or right. */
+  a?: 'c' | 'r';
 }
 
 export interface TocEntry {
@@ -61,7 +65,7 @@ export type BookFormat = 'epub' | 'fb2' | 'txt' | 'mobi' | 'azw3';
  * block numbers, so a book converted again by a newer version needs its
  * annotations moved along (by their saved text) or they land elsewhere.
  */
-export const ENGINE_VERSION = 1;
+export const ENGINE_VERSION = 2;
 
 export interface Manifest {
   /** ENGINE_VERSION of the converter that made it. */
@@ -69,11 +73,36 @@ export interface Manifest {
   format: BookFormat;
   title: string;
   author: string;
+  /** Two-letter language code ('en', 'tr'): from the book's metadata, checked against its text, or guessed. */
   lang?: string;
   totalBlocks: number;
   totalChars: number;
   /** One entry per chunk: [first global block index, chars before the chunk]. */
   chunks: [number, number][];
+  /**
+   * One per chunk: how much page space it takes, in estimated lines, so that
+   * pages per weight vary far less between chunks than pages per character
+   * (a contents chunk of short lines, a chunk of pictures). Page numbers use it.
+   */
+  weights?: number[];
+  /**
+   * The chunks that start a chapter (cut where the book starts one, not for
+   * size): each starts on a page of its own, never going on from the chunk
+   * before on its last page (Chunk.joins).
+   */
+  opens?: number[];
+  /** Link targets that aren't notes (e.g. a note's link back to its reference) -> the block they're in. */
+  anchors?: Record<string, number>;
+  /**
+   * Where in its block an anchor is, when it isn't at the block's start: the
+   * character offset (as blockText counts) of the anchored element's first
+   * character. A link then lands on the page the place is on, not the one
+   * its paragraph starts on (a note's way back to its mark). An anchor not
+   * listed, like every anchor of a book converted before it, is at the
+   * block's start: 0. (Most are, and listing them would make the manifest a
+   * half bigger.)
+   */
+  anchorOffsets?: Record<string, number>;
   toc: TocEntry[];
   images: Record<string, ImageRef>;
   cover?: string;

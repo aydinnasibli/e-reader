@@ -1,15 +1,16 @@
 {
   "expo": {
-    "name": "Nec e-book reader",
+    "name": "Nec Reader",
     "slug": "nec-ebook-reader",
     "version": "1.0.0",
+    "platforms": ["ios", "android"],
     "orientation": "default",
     "icon": "./assets/images/icon.png",
     "scheme": "necreader",
     "userInterfaceStyle": "automatic",
     "ios": {
       "icon": "./assets/images/icon.png",
-      "bundleIdentifier": "com.nec.ebookreader",
+      "bundleIdentifier": "com.aydinnasibli.nec",
       "supportsTablet": true,
       "infoPlist": {
         "LSSupportsOpeningDocumentsInPlace": false,
@@ -20,9 +21,9 @@
             "LSHandlerRank": "Alternate",
             "LSItemContentTypes": [
               "org.idpf.epub-container",
-              "com.nec.ebookreader.fb2",
-              "com.nec.ebookreader.mobi",
-              "com.nec.ebookreader.azw3",
+              "com.aydinnasibli.nec.fb2",
+              "com.aydinnasibli.nec.mobi",
+              "com.aydinnasibli.nec.azw3",
               "public.plain-text",
               "public.zip-archive"
             ]
@@ -36,19 +37,19 @@
             "UTTypeTagSpecification": { "public.filename-extension": ["epub"], "public.mime-type": ["application/epub+zip"] }
           },
           {
-            "UTTypeIdentifier": "com.nec.ebookreader.fb2",
+            "UTTypeIdentifier": "com.aydinnasibli.nec.fb2",
             "UTTypeDescription": "FictionBook",
             "UTTypeConformsTo": ["public.xml"],
             "UTTypeTagSpecification": { "public.filename-extension": ["fb2"], "public.mime-type": ["application/x-fictionbook+xml", "application/x-fictionbook"] }
           },
           {
-            "UTTypeIdentifier": "com.nec.ebookreader.mobi",
+            "UTTypeIdentifier": "com.aydinnasibli.nec.mobi",
             "UTTypeDescription": "Mobipocket book",
             "UTTypeConformsTo": ["public.data"],
             "UTTypeTagSpecification": { "public.filename-extension": ["mobi", "prc"], "public.mime-type": ["application/x-mobipocket-ebook"] }
           },
           {
-            "UTTypeIdentifier": "com.nec.ebookreader.azw3",
+            "UTTypeIdentifier": "com.aydinnasibli.nec.azw3",
             "UTTypeDescription": "Kindle book",
             "UTTypeConformsTo": ["public.data"],
             "UTTypeTagSpecification": { "public.filename-extension": ["azw3", "azw"], "public.mime-type": ["application/vnd.amazon.mobi8-ebook", "application/vnd.amazon.ebook"] }
@@ -64,7 +65,7 @@
         "monochromeImage": "./assets/images/android-icon-monochrome.png"
       },
       "predictiveBackGestureEnabled": false,
-      "package": "com.nec.ebookreader",
+      "package": "com.aydinnasibli.nec",
       "permissions": [
         "REQUEST_INSTALL_PACKAGES"
       ],
@@ -108,7 +109,6 @@
           }
         }
       ],
-      "expo-font",
       "expo-image",
       "expo-status-bar",
       "expo-localization"

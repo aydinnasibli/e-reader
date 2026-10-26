@@ -1,78 +1,14 @@
 /// <reference types="jest" />
-// Adding books: the same file twice is noticed and not added again, and
-// files without a book extension are recognised from their bytes.
+// Adding books with the picker: each file is copied in with the asynchronous file API (the picker's
+// own copy is made on Android's UI thread and froze the app for big books), the same file twice is
+// noticed and not added again, files without a book extension are recognised from their bytes, and
+// a file the app may not read is told apart from a phone without room. Over memfs.ts.
 
-const mockFiles = new Map<string, Uint8Array>();
+jest.mock('expo-file-system', () => require('./memfs'));
+jest.unmock('@/lib/storage');
 const mockPicks: { name: string; uri: string; size?: number }[][] = [];
-
-jest.mock('expo-file-system', () => {
-  const path = (a: unknown, b?: string) => (b ? `${typeof a === 'string' ? a : (a as { uri: string }).uri}/${b}` : String(a));
-  class File {
-    uri: string;
-    constructor(a: unknown, b?: string) {
-      this.uri = path(a, b);
-    }
-    get exists() {
-      return mockFiles.has(this.uri);
-    }
-    get size() {
-      return mockFiles.get(this.uri)?.length ?? 0;
-    }
-    get name() {
-      return this.uri.split('/').pop();
-    }
-    moveSync(to: { uri: string }) {
-      mockFiles.set(to.uri, mockFiles.get(this.uri)!);
-      mockFiles.delete(this.uri);
-    }
-    copySync(to: { uri: string }) {
-      mockFiles.set(to.uri, mockFiles.get(this.uri)!);
-    }
-    delete() {
-      mockFiles.delete(this.uri);
-    }
-  }
-  class Directory {
-    uri: string;
-    constructor(a: unknown, b?: string) {
-      this.uri = path(a, b);
-    }
-    exists = false;
-    delete() {}
-  }
-  return { File, Directory, Paths: { document: 'doc' } };
-});
-jest.mock('@/lib/storage', () => {
-  const { File } = require('expo-file-system');
-  return {
-    readJson: () => null,
-    writeJson: () => {},
-    saveJson: () => true,
-    bookDir: (id: string) => `doc/books/${id}`,
-    booksDir: () => 'doc/books',
-    ensureDir: () => {},
-    imageFile: () => ({ exists: false, uri: '' }),
-    manifestFile: (id: string) => new File(`doc/books/${id}/manifest.json`),
-    FileSink: class {},
-    FileSource: class {
-      bytes: Uint8Array;
-      size: number;
-      constructor(f: { uri: string }) {
-        const b = mockFiles.get(f.uri);
-        if (!b) throw new Error('no file');
-        this.bytes = b;
-        this.size = b.length;
-      }
-      read(o: number, n: number) {
-        return this.bytes.slice(o, o + n);
-      }
-      close() {}
-    },
-  };
-});
-jest.mock('expo-document-picker', () => ({
-  getDocumentAsync: () => Promise.resolve({ canceled: false, assets: mockPicks.shift() ?? [] }),
-}));
+const mockPicker = jest.fn((_options: unknown) => Promise.resolve({ canceled: false, assets: mockPicks.shift() ?? [] }));
+jest.mock('expo-document-picker', () => ({ getDocumentAsync: (o: unknown) => mockPicker(o) }));
 // Conversion isn't what this tests: it never finishes.
 jest.mock('@/engine/ingest', () => ({
   ...jest.requireActual('@/engine/ingest'),
@@ -80,22 +16,42 @@ jest.mock('@/engine/ingest', () => ({
 }));
 
 import { strToU8, zipSync } from 'fflate';
+import { Platform } from 'react-native';
 import { getBook, importBooks, updateBook } from '@/lib/library';
+import * as memfs from './memfs';
 
 const bytes = (seed: number, n = 200_000) => Uint8Array.from({ length: n }, (_, i) => (i * 31 + seed) & 255);
-/** The picker hands over a fresh private copy of the chosen file each time. */
-let copies = 0;
+/** Picked files stay where they are: on Android a content:// address of the Downloads provider. */
+let picked = 0;
 function pick(...files: [string, Uint8Array][]) {
   mockPicks.push(
     files.map(([name, data]) => {
-      const uri = `cache/${++copies}/${name}`;
-      mockFiles.set(uri, data);
+      const uri = `content://com.android.providers.downloads.documents/document/${++picked}`;
+      memfs.putForeign(uri, data, { name });
       return { name, uri, size: data.length };
     }),
   );
 }
+/** The id of the book on the shelf whose original file is `data`. */
+const shelfId = (data: Uint8Array) =>
+  [...memfs.disk.entries()].find(([k, n]) => k.startsWith('mem://doc/books/') && n.kind === 'file' && n.data.length === data.length && n.data[7] === data[7])![0].split('/')[4];
+const cacheLeft = () => [...memfs.disk.entries()].filter(([k, n]) => k.startsWith('mem://cache/') && n.kind === 'file').map(([k]) => k);
+const copySync = jest.spyOn(memfs.File.prototype, 'copySync');
 
-it('the same book added again is not added twice, and the picked copy is cleaned up', async () => {
+beforeAll(() => memfs.resetDisk());
+beforeEach(() => copySync.mockClear());
+
+it('the picker makes no copy of its own: each book is copied in without holding up the app', async () => {
+  pick(['big.epub', bytes(3)]);
+  expect(await importBooks()).toMatchObject({ added: 1 });
+  expect(mockPicker).toHaveBeenLastCalledWith(expect.objectContaining({ copyToCacheDirectory: false }));
+  // Copied with the asynchronous copy(), not the blocking copySync().
+  expect(copySync).not.toHaveBeenCalled();
+  expect(memfs.disk.has(`mem://doc/books/${shelfId(bytes(3))}/source.epub`)).toBe(true);
+  expect(cacheLeft()).toEqual([]);
+});
+
+it('the same book added again is not added twice, and the copy made of it is cleaned up', async () => {
   const moby = bytes(1);
   pick(['moby.epub', moby]);
   expect(await importBooks()).toMatchObject({ added: 1, duplicates: [] });
@@ -105,7 +61,7 @@ it('the same book added again is not added twice, and the picked copy is cleaned
   const res = await importBooks();
   expect(res.added).toBe(1);
   expect(res.duplicates).toEqual([['Moby Dick (1).epub', 'moby']]);
-  expect([...mockFiles.keys()].filter((k) => k.startsWith('cache/'))).toEqual([]);
+  expect(cacheLeft()).toEqual([]);
 });
 
 it('two copies picked at once: only one is added', async () => {
@@ -120,9 +76,8 @@ it('books added before fingerprints existed are recognised too', async () => {
   const old = bytes(9, 5000);
   pick(['old.txt', old]);
   await importBooks();
+  const id = shelfId(old);
   // Pretend it was added by an older version: no fingerprint saved.
-  const added = [...mockFiles.keys()].find((k) => k.startsWith('doc/books/') && mockFiles.get(k) === old)!;
-  const id = added.split('/')[2];
   delete (getBook(id) as { fp?: string }).fp;
 
   pick(['old again.txt', old]);
@@ -132,15 +87,13 @@ it('books added before fingerprints existed are recognised too', async () => {
   expect(getBook(id)!.fp).toBeTruthy(); // filled in for next time
 });
 
-/** The id of the book on the shelf whose original file is `data`. */
-const shelfId = (data: Uint8Array) => [...mockFiles.keys()].find((k) => k.startsWith('doc/books/') && mockFiles.get(k) === data)!.split('/')[2];
-
 it('a file without a book extension is recognised from its bytes, like a shared one; other files are skipped', async () => {
   const epub = zipSync({ mimetype: strToU8('application/epub+zip'), 'META-INF/container.xml': strToU8('<container/>') });
   pick(['document', epub], ['page.html', strToU8('<!DOCTYPE html><html><body>Hi</body></html>')]);
   const res = await importBooks();
   expect(res).toMatchObject({ added: 1, skipped: ['page.html'] });
   expect(getBook(shelfId(epub))).toMatchObject({ fileName: 'document.epub', sourceName: 'source.epub', title: 'document' });
+  expect(cacheLeft()).toEqual([]);
 });
 
 it('a book that failed to prepare is not added again: the one on the shelf offers to try again', async () => {
@@ -151,4 +104,36 @@ it('a book that failed to prepare is not added again: the one on the shelf offer
 
   pick(['locked.epub', locked]);
   expect(await importBooks()).toMatchObject({ added: 0, duplicates: [['locked.epub', 'locked']] });
+});
+
+it('a file the app isn’t let read (Expo Go on Android: "Missing READ permission") is not blamed on free space', async () => {
+  const uri = 'content://com.android.providers.downloads.documents/document/locked-away';
+  memfs.putForeign(uri, bytes(13), { denied: true });
+  mockPicks.push([{ name: 'alice.epub', uri, size: 200_000 }]);
+  expect(await importBooks()).toMatchObject({ added: 0, unreadable: ['alice.epub'], failed: [] });
+});
+
+it('no room for a book: it is refused before copying, as not enough space', async () => {
+  pick(['huge.epub', bytes(17)]);
+  memfs.setFreeSpace(100_000);
+  try {
+    expect(await importBooks()).toMatchObject({ added: 0, failed: ['huge.epub'], unreadable: [] });
+  } finally {
+    memfs.setFreeSpace(undefined);
+  }
+  expect(cacheLeft()).toEqual([]);
+});
+
+it('on iPhone the picker hands over a temporary copy of its own: not kept once the book is added', async () => {
+  const platform = Platform.OS;
+  Object.defineProperty(Platform, 'OS', { value: 'ios', configurable: true });
+  try {
+    const uri = 'file:///private/var/mobile/Containers/Data/Application/0A1B/tmp/app-Inbox/Persuasion.epub';
+    memfs.putFile(uri, bytes(19, 4000));
+    mockPicks.push([{ name: 'Persuasion.epub', uri, size: 4000 }]);
+    expect(await importBooks()).toMatchObject({ added: 1 });
+    expect(memfs.disk.has(uri)).toBe(false);
+  } finally {
+    Object.defineProperty(Platform, 'OS', { value: platform, configurable: true });
+  }
 });

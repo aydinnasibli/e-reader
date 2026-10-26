@@ -8,6 +8,9 @@ module.exports = {
   testMatch: ['<rootDir>/test/ui/**/*.test.tsx'],
   moduleNameMapper: { '^@/(.*)$': '<rootDir>/src/$1' },
   setupFiles: ['<rootDir>/test/ui/setup.ts'],
+  // The first test in a file also pays for loading the screen's modules, which
+  // takes several seconds on a busy machine (CI): the default 5 s is too tight.
+  testTimeout: 15000,
   // yoga-layout (the layout tests in test/ui/layout) ships ES modules.
   transformIgnorePatterns: preset.transformIgnorePatterns.map((p) => p.replace('|standard-navigation))', '|standard-navigation|yoga-layout))')),
 };

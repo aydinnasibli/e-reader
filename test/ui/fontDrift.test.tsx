@@ -3,9 +3,9 @@
 // change per step), keeps the reader on the page it was on: the page is laid
 // out again at the place the reader arrived at, not at the start of the page
 // shown after the last change (up to a page earlier, so every step would
-// creep back).
+// creep back). And going to a page by its number lands on that page.
 
-import { act, render, waitFor } from '@testing-library/react-native';
+import { act, fireEvent, render, waitFor } from '@testing-library/react-native';
 import type { Block, Manifest } from '@/engine/types';
 import { setSettings } from '@/lib/settings';
 import ReaderScreen from '@/app/reader/[id]';
@@ -37,6 +37,7 @@ jest.mock('@/lib/library', () => {
     useLiveBook: () => undefined,
     updateBook: jest.fn(),
     reprocessBook: () => {},
+    setBookOpen: () => {},
     sourceFile: () => ({}),
   };
 });
@@ -55,7 +56,8 @@ it('many size changes: each lays the page out at the place opened, not where the
   for (const fontSize of [20, 21, 22, 23, 22, 21, 20]) {
     await act(async () => setSettings({ fontSize }));
     await waitFor(() => expect(page().last('setup')!.setup.css).toContain(`font-size:${fontSize}px`));
-    expect(page().last('setup')!.target).toEqual({ at: P41 });
+    // On a page of its own (top): the line read stays at the top.
+    expect(page().last('setup')!.target).toEqual({ at: P41, top: true });
   }
 }, 30000);
 
@@ -67,5 +69,21 @@ it('after a page turn, the place kept is the page turned to', async () => {
   const turnedTo = page().shown().first;
   await act(async () => setSettings({ fontSize: 24 }));
   await waitFor(() => expect(page().last('setup')!.setup.css).toContain('font-size:24px'));
-  expect(page().last('setup')!.target).toEqual({ at: turnedTo });
+  expect(page().last('setup')!.target).toEqual({ at: turnedTo, top: true });
+}, 30000);
+
+it('go to page: lands on the page with that number', async () => {
+  setSettings({ mode: 'page', fontSize: 19 });
+  const screen = await render(<ReaderScreen />);
+  await waitFor(() => expect(page().shown()).toBeTruthy(), { timeout: 5000 });
+  // The menu, then its page button.
+  await act(() => page().emit({ t: 'tap' }));
+  await fireEvent.press(screen.getByLabelText('Go to page'));
+  await fireEvent.changeText(screen.getByLabelText('Page number'), '17');
+  await fireEvent.press(screen.getByLabelText('Go'));
+  await waitFor(() => expect(page().last('content')!.target).toEqual({ chunk: 0, page: 16 }));
+  expect(await screen.findByText(/^17 of \d+ · /)).toBeTruthy();
+  // Turning on from there: the place kept is the page landed on.
+  await act(() => page().turn(1));
+  expect(await screen.findByText(/^18 of \d+ · /)).toBeTruthy();
 }, 30000);

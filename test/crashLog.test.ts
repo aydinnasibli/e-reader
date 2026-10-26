@@ -64,7 +64,7 @@ it('a fatal error is saved, pending work is saved first, and React Native still 
   const again = await load();
   expect(again.takeUnseenFatal()?.message).toContain('page.blocks');
   expect(again.takeUnseenFatal()).toBeUndefined();
-  expect(again.crashReport()).toMatch(/^Nec e-book reader 1\.0\.42 · android 36\n\n--- .* · closed the app · \/reader\/abc\nTypeError/);
+  expect(again.crashReport()).toMatch(/^Nec Reader 1\.0\.42 · android 36\n\n--- .* · closed the app · \/reader\/abc\nTypeError/);
 });
 
 it('promises nobody handled are recorded in release builds only', async () => {

@@ -3,7 +3,7 @@
 // every control; plain Pressable is for areas like the page itself.
 
 import * as Haptics from 'expo-haptics';
-import { useRef } from 'react';
+import { useState } from 'react';
 import { Animated, type GestureResponderEvent, Pressable, type PressableProps, type StyleProp, StyleSheet, type ViewStyle } from 'react-native';
 
 const AnimatedPressable = Animated.createAnimatedComponent(Pressable);
@@ -19,7 +19,8 @@ export interface TapProps extends Omit<PressableProps, 'style'> {
 const PRESSED = { scale: { opacity: 0.7, scale: 0.94 }, card: { opacity: 0.85, scale: 0.97 }, dim: { opacity: 0.5, scale: 1 } };
 
 export function Tap({ style, feedback = 'scale', haptic, onPressIn, onPressOut, onPress, ...rest }: TapProps) {
-  const p = useRef(new Animated.Value(0)).current;
+  // Held in state, not a ref: it's read while drawing (the animated style).
+  const [p] = useState(() => new Animated.Value(0));
   const to = (v: number) => Animated.timing(p, { toValue: v, duration: v ? 70 : 160, useNativeDriver: true }).start();
   const { opacity, scale } = PRESSED[feedback];
   // A button that is faded already (disabled) fades further from there.

@@ -11,7 +11,6 @@ import { THEMES } from '@/lib/settings';
 import type { LookupKind } from '@/reader/LookupCard';
 import { LookupSheet } from '@/reader/LookupSheet';
 import { SelectionMenu } from '@/reader/SelectionMenu';
-import { selectionText } from '@/reader/selection';
 import { nearestWord, useSelection } from '@/reader/useSelection';
 import * as dialogs from '@/ui/dialogs';
 
@@ -102,23 +101,34 @@ describe('the highlight tool: a marker pen', () => {
 });
 
 describe('selected text (long press)', () => {
-  it('copy and share take the selected text', async () => {
+  /** What the page selected: characters [s, e) of the paragraph. */
+  const range = (s: number, e: number) => ({ a: { b: 0, o: s }, z: { b: 0, o: e - 1 } });
+  const word = (w: string) => range(TEXT.indexOf(w), TEXT.indexOf(w) + w.length);
+
+  it('copy and share take exactly the characters selected', async () => {
     const share = jest.spyOn(Share, 'share').mockResolvedValue({ action: 'sharedAction', activityType: undefined });
     const copy = jest.spyOn(Clipboard, 'setStringAsync');
     const { get, run } = await selecting('s6');
-    await run((s) => s.selectAt(at('fox')));
+    await run((s) => s.setSel(word('fox')));
     await run((s) => s.copy());
     expect(copy).toHaveBeenCalledWith('fox');
-    await run((s) => s.selectAt(at('dog')));
+    // Part of a word, or words: what was selected, no more.
+    await run((s) => s.setSel(range(TEXT.indexOf('uick'), TEXT.indexOf('bro') + 3)));
+    await run((s) => s.copy());
+    expect(copy).toHaveBeenLastCalledWith('uick bro');
+    await run((s) => s.setSel(word('dog')));
     await run((s) => s.share());
     expect(share).toHaveBeenCalledWith({ message: '“dog”\n— Book' });
     expect(get().sel).toBeNull();
   });
 
-  it('look up and translate show the selected text in the app', async () => {
+  it('look up and translate show the whole words in the app', async () => {
     const { get, run } = await selecting('s7');
-    await run((s) => s.selectAt(at('fox')));
+    await run((s) => s.setSel(range(TEXT.indexOf('ox'), TEXT.indexOf('ox') + 2)));
     expect(get().oneWord).toBe(true);
+    await run((s) => s.show('define'));
+    expect(get().lookup).toEqual({ kind: 'define', text: 'fox' });
+    await run((s) => s.setSel(word('fox')));
     await run((s) => s.show('translate'));
     expect(get().lookup).toEqual({ kind: 'translate', text: 'fox' });
   });
@@ -148,7 +158,8 @@ describe('look up and translate stay in the app', () => {
     await open('define', 'fox');
     expect(await screen.findByText('A wild dog-like animal.')).toBeTruthy();
     expect(screen.getByText('Dictionary')).toBeTruthy();
-    expect(fetchMock.mock.calls[0][0]).toContain('/page/definition/fox');
+    // (The English meaning may be asked for alongside: whichever goes first.)
+    expect(fetchMock.mock.calls.some(([url]) => String(url).includes('/page/definition/fox'))).toBe(true);
     await fireEvent.press(screen.getByLabelText('Close dictionary'));
     expect(screen.queryByText('Dictionary')).toBeNull();
   });
@@ -242,11 +253,11 @@ describe('the menu over selected text', () => {
   });
 });
 
-it('a touch between two words selects the closer one', async () => {
+it('a highlight-tool tap between two words takes the closer one', async () => {
   expect(nearestWord(TEXT, 3)).toBe(2); // the space after "The"
   expect(nearestWord('a     word', 5)).toBe(6);
   expect(nearestWord('   a', 0)).toBe(3);
-  const { get, run } = await selecting('s8');
-  await run((s) => s.selectAt({ b: 0, o: TEXT.indexOf(' fox') }));
-  expect(selectionText(get().sel!, textOf)).toBe('brown');
+  const { run } = await selecting('s8');
+  await run((s) => s.markTap({ b: 0, o: TEXT.indexOf(' fox') }));
+  expect(highlights('s8')).toEqual([['brown', 'yellow']]);
 });

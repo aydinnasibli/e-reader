@@ -49,8 +49,10 @@ export interface ReaderSettings {
   screenAwake: ScreenAwake;
   /** The time and battery level at the top of the page while reading. */
   showClock: boolean;
-  /** Language to translate into; '' = the phone's language. */
+  /** Language to translate into, from versions that kept one for all books; '' = the phone's language. */
   translateTo: string;
+  /** Language to translate into, by the language of the book ('' when not known): English books → Turkish, Turkish books → English. */
+  translateTargets: Record<string, string>;
 }
 
 export interface Theme {
@@ -65,10 +67,10 @@ export interface Theme {
 
 export const THEMES: Record<Exclude<ThemeName, 'custom'>, Theme> = {
   light: { bg: '#FFFFFF', text: '#1B1B1B', muted: '#6E6E73', chrome: '#F2F2F7', border: '#D1D1D6', accent: '#2F6FEB', dark: false },
-  paper: { bg: '#FAF7F0', text: '#2B2A27', muted: '#7A7468', chrome: '#EEE8DA', border: '#D5CCB8', accent: '#3A6FD8', dark: false },
-  sepia: { bg: '#F5EDDC', text: '#4A3B2A', muted: '#836F55', chrome: '#EADCBF', border: '#CFBD98', accent: '#A0522D', dark: false },
-  mint: { bg: '#E9F3EA', text: '#1F3324', muted: '#647D6A', chrome: '#DAE8DD', border: '#B7CEBD', accent: '#2E7D4F', dark: false },
-  gray: { bg: '#3A3A3D', text: '#E6E6E6', muted: '#B0B0B5', chrome: '#48484C', border: '#606066', accent: '#7FB2FF', dark: true },
+  paper: { bg: '#FAF7F0', text: '#2B2A27', muted: '#6E685E', chrome: '#EEE8DA', border: '#D5CCB8', accent: '#3A6FD8', dark: false },
+  sepia: { bg: '#F5EDDC', text: '#4A3B2A', muted: '#715F49', chrome: '#EADCBF', border: '#CFBD98', accent: '#A0522D', dark: false },
+  mint: { bg: '#E9F3EA', text: '#1F3324', muted: '#566B5B', chrome: '#DAE8DD', border: '#B7CEBD', accent: '#2E7D4F', dark: false },
+  gray: { bg: '#3A3A3D', text: '#E6E6E6', muted: '#B6B6BA', chrome: '#48484C', border: '#606066', accent: '#7FB2FF', dark: true },
   night: { bg: '#0F1A2A', text: '#C9D3E0', muted: '#8696B0', chrome: '#1A2A40', border: '#2C4160', accent: '#6EA8FE', dark: true },
   dark: { bg: '#1E1E20', text: '#D8D8D8', muted: '#9C9CA1', chrome: '#2C2C2F', border: '#48484C', accent: '#6EA8FE', dark: true },
   black: { bg: '#000000', text: '#B9B9B9', muted: '#8A8A8F', chrome: '#1C1C1E', border: '#38383A', accent: '#6EA8FE', dark: true },
@@ -107,6 +109,7 @@ const DEFAULTS: ReaderSettings = {
   seenTapZones: false,
   autoWpm: 0,
   translateTo: '',
+  translateTargets: {},
   screenAwake: '10',
   showClock: true,
 };
@@ -147,6 +150,16 @@ const RANGES: Partial<Record<keyof ReaderSettings, { min: number; max: number }>
   autoWpm: { min: 0, max: 2000 },
 };
 const COLOR = /^#(?:[0-9a-f]{3}|[0-9a-f]{6})$/i;
+/** A language code as a translation target or source ("tr", "zh-CN"). */
+const LANG_CODE = /^[a-z]{2,3}(?:-[A-Za-z]{2,4})?$/;
+
+/** Translation targets by book language: only codes that look like language codes. */
+function targets(v: unknown): Record<string, string> | undefined {
+  if (!v || typeof v !== 'object' || Array.isArray(v)) return undefined;
+  const out: Record<string, string> = {};
+  for (const [from, to] of Object.entries(v)) if ((from === '' || LANG_CODE.test(from)) && typeof to === 'string' && LANG_CODE.test(to)) out[from] = to;
+  return out;
+}
 
 /**
  * Settings from disk, checked field by field: a damaged file, a value from
@@ -159,7 +172,10 @@ export function sanitizeSettings(raw: Partial<Record<keyof ReaderSettings, unkno
     const v = raw[key];
     const d = defaults[key];
     if (v === undefined || typeof v !== typeof d) continue;
-    if (typeof v === 'number') {
+    if (key === 'translateTargets') {
+      const t = targets(v);
+      if (t) out[key] = t;
+    } else if (typeof v === 'number') {
       const r = RANGES[key];
       if (!Number.isFinite(v)) continue;
       out[key] = r ? Math.min(r.max, Math.max(r.min, v)) : v;

@@ -2,8 +2,9 @@
 
 import { strToU8, zipSync } from 'fflate';
 import { describe, expect, it } from 'vitest';
+import { ingestBook } from '../src/engine/ingest';
 import { blockText } from '../src/engine/types';
-import { enc, ingestBytes } from './helpers';
+import { MemorySink, MemorySource, enc, ingestBytes } from './helpers';
 import { buildMobi } from './mobiFixture';
 
 /** A minimal EPUB with the given chapters (file name -> XHTML) and nav entries. */
@@ -83,6 +84,20 @@ describe('FB2 notes', () => {
     expect(r.manifest.toc.map((t) => t.t)).toEqual(['Chapter', 'Notes']);
     expect(r.manifest.chunks.length).toBeLessThanOrEqual(2);
     expect(r.manifest.notes?.['#n1']).toBeDefined();
+  });
+});
+
+describe('FB2 pictures', () => {
+  // Its base64 is cleaned a slice at a time as it arrives, not all at once at
+  // its end; how long the longest slice takes is measured by the stress
+  // benchmark (bench/), not here: a timing in a unit test fails on a busy machine.
+  it('a big picture comes through whole, cleaned of line breaks', async () => {
+    const line = 'QUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVphYmNkZWZnaGlqa2xtbm9wcXJzdHV2\n';
+    const b64 = line.repeat(300_000); // ~20 MB
+    const xml = enc(`<?xml version="1.0" encoding="utf-8"?><FictionBook><body><section><p>Text.</p></section></body><binary id="big" content-type="image/jpeg">${b64}</binary></FictionBook>`);
+    const sink = new MemorySink();
+    await ingestBook({ src: new MemorySource(xml), sink, progress() {}, fallbackTitle: 'b', pause: async () => {} }, 'b.fb2');
+    expect(sink.images.get('b_big.jpg')).toBe(b64.replace(/\n/g, ''));
   });
 });
 

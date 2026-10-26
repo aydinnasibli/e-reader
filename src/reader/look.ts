@@ -2,7 +2,7 @@
 // exactly these values, so a measured page is the page you see.
 
 import type { TextStyle } from 'react-native';
-import { BOLD, type Block, ITALIC, MONO, type Run, SUB, SUP, makeRun, runLink, runStyle, runText } from '@/engine/types';
+import { BOLD, type Block, ITALIC, MONO, type Run, SMALLCAPS, SUB, SUP, makeRun, runLink, runStyle, runText } from '@/engine/types';
 import { type Weight, fontFace } from '@/lib/fonts';
 import type { ReaderSettings } from '@/lib/settings';
 import { Platform } from 'react-native';
@@ -38,8 +38,17 @@ export function layoutKeyOf(s: ReaderSettings) {
   return [s.fontSize, s.lineSpacing, s.letterSpacing, s.paraSpacing, s.font, s.weight, s.align, s.indent, s.hyphenate].join('|');
 }
 
-/** `lang` is the book's language (from its metadata), used for hyphenation. */
+/**
+ * `lang` is the book's language (from its metadata), used for hyphenation.
+ * A block the book centres or sets right is drawn so, without an indent.
+ */
 export function lookOf(b: Block, s: ReaderSettings, lang?: string): Look {
+  const look = kindLook(b, s, lang);
+  if (!b.a) return look;
+  return { ...look, textAlign: b.a === 'c' ? 'center' : 'right', prefix: '' };
+}
+
+function kindLook(b: Block, s: ReaderSettings, lang?: string): Look {
   const fs = s.fontSize;
   const lh = lineHeightOf(s);
   const gap = Math.round(lh * s.paraSpacing);
@@ -182,6 +191,7 @@ export function runTextStyle(bits: number, look: Look): TextStyle | undefined {
   return {
     ...face,
     fontSize: bits & (SUP | SUB) ? Math.round(look.fontSize * 0.7) : undefined,
+    fontVariant: bits & SMALLCAPS ? ['small-caps'] : undefined,
   };
 }
 

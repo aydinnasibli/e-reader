@@ -45,7 +45,7 @@ async function main() {
   const html =
     '<!doctype html><html><head><meta charset="utf-8">' +
     '<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">' +
-    `<style>${css}</style><style id="book"></style><style id="marks"></style></head>` +
+    `<style>${css}</style><style id="fonts"></style><style id="book"></style><style id="marks"></style></head>` +
     `<body><div id="viewport"></div><div id="scroll"></div><script>${js}</script></body></html>`;
   writeFileSync(
     join(ROOT, 'src/reader/web/page.generated.ts'),

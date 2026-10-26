@@ -4,7 +4,6 @@
 
 import * as Font from 'expo-font';
 import { Platform, type TextStyle } from 'react-native';
-import { useEffect, useState } from 'react';
 
 export type Weight = 'regular' | 'medium';
 
@@ -106,15 +105,20 @@ export const FONTS: FontDef[] = [
     },
   },
   {
+    // The "Next" edition: the first one has no capital İ, so Turkish words
+    // were drawn with a letter from another font. Same id, so a saved choice
+    // of the old one carries over.
     id: 'atkinson',
-    label: 'Atkinson Hyperlegible',
+    label: 'Atkinson Hyperlegible Next',
     note: 'Latin only',
     serif: false,
     files: {
-      regular: require('@expo-google-fonts/atkinson-hyperlegible/400Regular/AtkinsonHyperlegible_400Regular.ttf'),
-      italic: require('@expo-google-fonts/atkinson-hyperlegible/400Regular_Italic/AtkinsonHyperlegible_400Regular_Italic.ttf'),
-      bold: require('@expo-google-fonts/atkinson-hyperlegible/700Bold/AtkinsonHyperlegible_700Bold.ttf'),
-      boldItalic: require('@expo-google-fonts/atkinson-hyperlegible/700Bold_Italic/AtkinsonHyperlegible_700Bold_Italic.ttf'),
+      regular: require('@expo-google-fonts/atkinson-hyperlegible-next/400Regular/AtkinsonHyperlegibleNext_400Regular.ttf'),
+      italic: require('@expo-google-fonts/atkinson-hyperlegible-next/400Regular_Italic/AtkinsonHyperlegibleNext_400Regular_Italic.ttf'),
+      bold: require('@expo-google-fonts/atkinson-hyperlegible-next/700Bold/AtkinsonHyperlegibleNext_700Bold.ttf'),
+      boldItalic: require('@expo-google-fonts/atkinson-hyperlegible-next/700Bold_Italic/AtkinsonHyperlegibleNext_700Bold_Italic.ttf'),
+      medium: require('@expo-google-fonts/atkinson-hyperlegible-next/500Medium/AtkinsonHyperlegibleNext_500Medium.ttf'),
+      mediumItalic: require('@expo-google-fonts/atkinson-hyperlegible-next/500Medium_Italic/AtkinsonHyperlegibleNext_500Medium_Italic.ttf'),
     },
   },
 ];
@@ -154,25 +158,6 @@ export function ensureFont(id: string): Promise<void> {
 
 export function isFontLoaded(id: string) {
   return loaded.has(id);
-}
-
-/** True once the font can be drawn (and therefore measured). */
-export function useFontReady(id: string): boolean {
-  const [ready, setReady] = useState(() => loaded.has(id));
-  useEffect(() => {
-    let alive = true;
-    if (loaded.has(id)) setReady(true);
-    else {
-      setReady(false);
-      ensureFont(id)
-        .catch(() => {})
-        .finally(() => alive && setReady(true));
-    }
-    return () => {
-      alive = false;
-    };
-  }, [id]);
-  return ready;
 }
 
 /**

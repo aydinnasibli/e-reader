@@ -16,17 +16,21 @@ import { HEADER, webFrame } from './web/frame';
 
 interface Props {
   book: BookData;
+  /** The book's language (hyphenation). */
+  lang?: string;
+  /** The window and insets the page is laid out for (the reader's own), so the preview sits where the page's text does. */
+  area?: { width: number; height: number; top: number; bottom: number; left: number; right: number };
   settings: ReaderSettings;
   theme: Theme;
   /** First position on screen. */
   pos: Position;
 }
 
-export function LivePreview({ book, settings, theme, pos }: Props) {
+export function LivePreview({ book, lang, area, settings, theme, pos }: Props) {
   const win = useWindowDimensions();
-  const insets = useSafeAreaInsets();
-  const { column: width, height: pageHeight, left } = webFrame(win, insets, settings.margin, 'page');
-  const lang = book.manifest?.lang;
+  const live = useSafeAreaInsets();
+  const insets = area ?? live;
+  const { column: width, height: pageHeight, left, right } = webFrame(area ?? win, insets, settings.margin, 'page', settings);
 
   // Enough text to fill the screen at any size, and no more.
   const lines = pageHeight / lineHeightOf(settings) + 2;
@@ -68,7 +72,7 @@ export function LivePreview({ book, settings, theme, pos }: Props) {
       ? { top: insets.top + HEADER, height: pageHeight }
       : { top: 0, bottom: 0, paddingTop: insets.top + 12 };
   return (
-    <View pointerEvents="none" style={[styles.root, frame, { paddingLeft: left, paddingRight: settings.margin + insets.right, backgroundColor: theme.bg }]}>
+    <View pointerEvents="none" style={[styles.root, frame, { paddingLeft: left, paddingRight: right, backgroundColor: theme.bg }]}>
       <View style={{ width }}>{items}</View>
     </View>
   );

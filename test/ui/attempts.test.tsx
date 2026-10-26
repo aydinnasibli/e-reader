@@ -12,7 +12,10 @@ jest.mock('expo-file-system', () => {
     constructor(...parts: unknown[]) {
       this.uri = parts.map((p) => (typeof p === 'string' ? p : (p as { uri: string }).uri)).join('/');
     }
-    exists = false;
+    /** Only the book's own file is on disk (nothing converted yet). */
+    get exists() {
+      return this.uri.endsWith('/source.epub');
+    }
     name = 'source.epub';
   }
   class Directory extends File {
@@ -27,6 +30,7 @@ jest.mock('@/lib/storage', () => {
     writeJson: () => {},
     saveJson: (f: { uri: string }, v: unknown) => mockDisk.set(f.uri, JSON.stringify(v)),
     bookDir: (id: string) => new Directory(`doc/books/${id}`),
+    nextDir: (id: string) => new Directory(`doc/books/${id}/next`),
     booksDir: () => ({ list: () => [] }),
     ensureDir: () => {},
     imageFile: () => ({ exists: false, uri: '' }),

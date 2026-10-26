@@ -2,17 +2,20 @@
 // as base64 at the end. Parsed as a stream; images are written straight to
 // files as they are reached.
 
-import { createDecoder, detectBom, type StreamDecoder, xmlDeclaredEncoding } from './decode';
-import { type IngestContext, READ_SLICE } from './io';
+import { MarkupDecoder } from './decode';
+import { BookError, CUT_SHORT, type IngestContext, READ_SLICE } from './io';
+import { bookLanguage } from './language';
 import { type MarkupHandler, MarkupTokenizer } from './markup';
-import { BOLD, type BlockKind, ENGINE_VERSION, ITALIC, MONO, SUB, SUP, type ImageRef, type Manifest, type TocEntry } from './types';
-import { BookWriter } from './writer';
+import { BOLD, type BlockKind, ENGINE_VERSION, ITALIC, MONO, type Position, SUB, SUP, type ImageRef, type Manifest, type TocEntry } from './types';
+import { BookWriter, cleanText } from './writer';
 import type { ZipArchive, ZipEntry } from './zip';
 
 const INLINE: Record<string, number> = {
   strong: BOLD, emphasis: ITALIC, code: MONO, sup: SUP, sub: SUB,
 };
 const QUOTE = new Set(['epigraph', 'cite', 'annotation', 'text-author']);
+const NOT_BASE64 = /[^A-Za-z0-9+/=]/;
+const NOT_BASE64_ALL = /[^A-Za-z0-9+/=]+/g;
 
 function hrefAttr(attrs: Record<string, string>): string {
   for (const k in attrs) if (k === 'href' || k.endsWith(':href')) return attrs[k];
@@ -32,6 +35,9 @@ class Fb2Handler implements MarkupHandler {
   private capture = '';
   private author: string[] = [];
   private bodyDepth = 0;
+  private sawBody = false;
+  /** The root element was closed: the file doesn't stop partway. */
+  private closedRoot = false;
   /** Inside <body name="notes"> (footnotes): no chapter per note, no TOC entry per note. */
   private notesBody = false;
   private section = 0;
@@ -44,11 +50,15 @@ class Fb2Handler implements MarkupHandler {
   private styles: { style: number; link: string | undefined }[] = [];
   private style = 0;
   private link: string | undefined;
-  /** Footnotes: link targets seen so far, and where linked ids start/end. */
-  private linkKeys = new Set<string>();
+  /** Footnotes: link targets seen so far, and where linked ids (and everything in the notes body) start/end. */
+  linkKeys = new Set<string>();
   notes: Record<string, [number, number]> = {};
+  /** Where each id is (first time seen), for links to places before them; and its exact place when it's inside the text. */
+  idBlock = new Map<string, number>();
+  idPlace = new Map<string, Position>();
   /** Path depth -> id being tracked there. */
   private tracked = new Map<number, string>();
+  /** A picture being read: its base64 text, cleaned of line breaks a piece at a time as it arrives. */
   private binary: { id: string; type: string; parts: string[] } | null = null;
 
   constructor(
@@ -78,6 +88,7 @@ class Fb2Handler implements MarkupHandler {
     }
     if (name === 'body') {
       this.bodyDepth++;
+      this.sawBody = true;
       this.notesBody = attrs.name === 'notes' || attrs.name === 'comments';
       this.w.chapterBreak();
       return;
@@ -142,13 +153,28 @@ class Fb2Handler implements MarkupHandler {
         } else if (INLINE[name] !== undefined) this.pushStyle(INLINE[name]);
     }
     // Ids are opened after the element's own block handling, so they point at its first block.
-    if (id && this.linkKeys.has('#' + id) && !this.notes['#' + id]) {
-      this.notes['#' + id] = [w.blockIndex, w.blockIndex];
-      this.tracked.set(this.path.length, '#' + id);
+    if (id) {
+      const key = '#' + id;
+      if (!this.idBlock.has(key)) {
+        this.idBlock.set(key, w.blockIndex);
+        const place = w.mark();
+        if (place) this.idPlace.set(key, place);
+      }
+      // A note: linked to already, or in the notes body (linked to from before it or after).
+      if ((this.linkKeys.has(key) || this.notesBody) && !this.notes[key]) {
+        this.notes[key] = [w.blockIndex, w.blockIndex];
+        this.tracked.set(this.path.length, key);
+      }
     }
   }
 
+  /** The file stops partway through the text, or before it: a download cut short (pictures after the text may go missing alone). */
+  get cutShort(): boolean {
+    return !this.closedRoot && (this.bodyDepth > 0 || !this.sawBody);
+  }
+
   close(name: string) {
+    if (name === 'fictionbook') this.closedRoot = true;
     // Pop to the matching element; FB2 is XML so this is normally exact.
     const i = this.path.lastIndexOf(name);
     if (i < 0) return;
@@ -184,7 +210,7 @@ class Fb2Handler implements MarkupHandler {
         w.endBlock();
         this.titleDepth--;
         if (this.titleDepth === 0) {
-          const t = this.titleText.replace(/\s+/g, ' ').trim();
+          const t = cleanText(this.titleText.replace(/\s+/g, ' ').trim());
           // In the notes body only its own title goes in the TOC, not every note's number.
           const listed = this.notesBody ? this.section === 0 : this.section > 0;
           if (t && listed) this.toc.push({ t: t.length > 120 ? t.slice(0, 117) + '…' : t, l: Math.max(0, this.section - 1), b: this.titleBlock });
@@ -231,7 +257,7 @@ class Fb2Handler implements MarkupHandler {
 
   text(t: string) {
     if (this.binary) {
-      this.binary.parts.push(t);
+      this.binary.parts.push(NOT_BASE64.test(t) ? t.replace(NOT_BASE64_ALL, '') : t);
       return;
     }
     if (this.inDescription) {
@@ -251,7 +277,7 @@ class Fb2Handler implements MarkupHandler {
   }
 
   private endCapture() {
-    const v = this.capturedText.replace(/\s+/g, ' ').trim();
+    const v = cleanText(this.capturedText.replace(/\s+/g, ' ').trim());
     if (v) {
       if (this.capture === 'title' && !this.title) this.title = v;
       else if (this.capture === 'lang' && !this.lang) this.lang = v;
@@ -290,7 +316,7 @@ class Fb2Handler implements MarkupHandler {
     const b = this.binary;
     this.binary = null;
     if (!b || !b.id) return;
-    const data = b.parts.join('').replace(/[^A-Za-z0-9+/=]/g, '');
+    const data = b.parts.join('');
     if (!data) return;
     const ext = b.type.includes('png') ? 'png' : b.type.includes('gif') ? 'gif' : 'jpg';
     const file = 'b_' + b.id.replace(/[^A-Za-z0-9._-]/g, '_') + '.' + ext;
@@ -310,15 +336,9 @@ export async function ingestFb2(ctx: IngestContext, zip?: ZipArchive, entry?: Zi
     ctx.meta?.({ title: h.title || undefined, author: h.authors.join(', ') || undefined }),
   );
   const tok = new MarkupTokenizer(h);
-  let decoder: StreamDecoder | null = null;
-  const feed = (bytes: Uint8Array) => {
-    if (!decoder) {
-      const bom = detectBom(bytes);
-      decoder = createDecoder(bom?.enc ?? xmlDeclaredEncoding(bytes) ?? 'utf-8');
-      if (bom) bytes = bytes.subarray(bom.skip);
-    }
-    tok.feed(decoder.decode(bytes));
-  };
+  // The encoding: a BOM, the XML declaration (checked against the bytes) or a guess.
+  const decoder = new MarkupDecoder();
+  const feed = (bytes: Uint8Array) => tok.feed(decoder.decode(bytes));
 
   if (zip && entry) {
     await zip.stream(entry, feed, async (f) => {
@@ -335,26 +355,47 @@ export async function ingestFb2(ctx: IngestContext, zip?: ZipArchive, entry?: Zi
       await ctx.pause();
     }
   }
-  if (decoder) tok.feed((decoder as StreamDecoder).end());
+  tok.feed(decoder.end());
   tok.end();
+  if (h.cutShort) throw new BookError(CUT_SHORT);
   w.finish();
+  await ctx.pause();
 
   const images = h.images;
   let cover: string | undefined;
   if (h.coverId && images[h.coverId]) cover = h.coverId;
+  // Notes that are linked to; other links (back to where a note was referenced) go to their place.
+  const notes: Record<string, [number, number]> = {};
+  const anchors: Record<string, number> = {};
+  const anchorOffsets: Record<string, number> = {};
+  for (const key of h.linkKeys) {
+    if (h.notes[key]) notes[key] = h.notes[key];
+    else {
+      const place = h.idPlace.get(key);
+      const b = place?.b ?? h.idBlock.get(key);
+      if (b !== undefined && b < w.totalBlocks) {
+        anchors[key] = b;
+        if (place?.o) anchorOffsets[key] = place.o;
+      }
+    }
+  }
 
   return {
     v: ENGINE_VERSION,
     format: 'fb2',
     title: h.title || ctx.fallbackTitle,
     author: h.authors.join(', '),
-    lang: h.lang || undefined,
+    lang: bookLanguage(h.lang, w.textSample()),
     totalBlocks: w.totalBlocks,
     totalChars: w.totalChars,
     chunks: w.chunks,
+    weights: w.weights,
+    opens: w.opens,
     toc: h.toc.length ? h.toc : w.headings,
     images,
     cover,
-    notes: h.notes,
+    notes,
+    anchors,
+    anchorOffsets,
   };
 }

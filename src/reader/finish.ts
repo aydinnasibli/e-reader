@@ -4,10 +4,13 @@
 // pages onto its last page, or from the story into the back matter that ends
 // it (not by jumping there, e.g. to read a note).
 
+import { fold } from '@/engine/fold';
 import type { TocEntry } from '@/engine/types';
 
 // Titles of back matter, in the languages the app is used with. Matched
-// against a whole contents entry (case-insensitive, trailing punctuation ignored).
+// against a whole contents entry, folded (capitals, accents and the Turkish
+// dotted and dotless i make no difference: "İÇİNDEKİLER", "YAZAR HAKKINDA"),
+// trailing punctuation ignored.
 const BACK_MATTER = new RegExp(
   '^(?:' +
     [
@@ -60,13 +63,15 @@ const BACK_MATTER = new RegExp(
       'kaynakça',
       'dizin',
       'içindekiler',
-    ].join('|') +
+    ]
+      .map(fold)
+      .join('|') +
     ')$',
-  'iu',
+  'u',
 );
 
 export function isBackMatter(title: string): boolean {
-  return BACK_MATTER.test(title.trim().replace(/[\s.:;!*]+$/u, ''));
+  return BACK_MATTER.test(fold(title.normalize('NFC').trim().replace(/[\s.:;!*]+$/u, '')));
 }
 
 /**

@@ -7,7 +7,7 @@ import { ingestMobi, isMobi } from './mobi';
 import { BookError, type ByteSource, type IngestContext, UNTITLED } from './io';
 import { ingestTxt } from './txt';
 import type { Manifest } from './types';
-import { ZipArchive, type ZipEntry } from './zip';
+import { ZipArchive, type ZipEntry, leadingEntries } from './zip';
 
 /** File name endings of the books this app reads (".fb2.zip" before ".zip"). */
 const BOOK_EXTENSION = /\.(fb2\.zip|epub|fb2|txt|mobi|azw3|azw|prc|zip)$/i;
@@ -38,7 +38,9 @@ export function sniffFormat(src: ByteSource): SniffedFormat | null {
     try {
       return zipBook(ZipArchive.open(src))?.format ?? null;
     } catch {
-      return null;
+      // Cut short, its directory gone: the book its first entries say it is
+      // (so it's told it's damaged, not that it isn't a book).
+      return cutZipBook(src);
     }
   }
   if (looksLikeFb2(head)) return 'fb2';
@@ -80,6 +82,19 @@ function zipBook(zip: ZipArchive): ZipBook | null {
   return entry ? { format: 'fb2.zip', entry } : null;
 }
 
+/** What a ZIP cut short holds, from the entries it starts with (an EPUB starts with its mimetype). */
+function cutZipBook(src: ByteSource): 'epub' | 'fb2.zip' | null {
+  for (const e of leadingEntries(src)) {
+    const name = e.name.toLowerCase();
+    if (name === 'mimetype') {
+      if (e.method !== 0 || e.compressedSize > 100) continue;
+      if (String.fromCharCode(...src.read(e.dataOffset, e.compressedSize)).trim() === 'application/epub+zip') return 'epub';
+    } else if (name === 'meta-inf/container.xml' || name.endsWith('.opf')) return 'epub';
+    else if (name.endsWith('.fb2')) return 'fb2.zip';
+  }
+  return null;
+}
+
 /** Mobipocket header version of the first record; 8 and up is KF8 (AZW3). */
 function mobiVersion(src: ByteSource): number {
   const first = src.read(78, 4);
@@ -116,18 +131,39 @@ function looksLikePlainText(sample: Uint8Array): boolean {
   return bad <= text.length * 0.01 && !MARKUP.test(text.trimStart());
 }
 
-export async function ingestBook(ctx: IngestContext, fileName: string): Promise<Manifest> {
-  if (isMobi(ctx.src)) return ingestMobi(ctx);
+/** What a file that isn't any book this app reads is told. */
+export const NOT_A_BOOK = 'This file isn’t a book the app can open (EPUB, FB2, MOBI, AZW3 or TXT).';
+const EMPTY_BOOK = 'This book is empty: there’s no text or picture in it the app can show.';
 
-  if (isZip(ctx.src.read(0, Math.min(ctx.src.size, 4)))) {
+export async function ingestBook(ctx: IngestContext, fileName: string): Promise<Manifest> {
+  const manifest = await convert(ctx, fileName);
+  // A book of nothing (an empty spine, chapters that can't be found) is an error, not a blank book.
+  if (!manifest.totalBlocks) throw new BookError(EMPTY_BOOK);
+  return manifest;
+}
+
+async function convert(ctx: IngestContext, fileName: string): Promise<Manifest> {
+  if (isMobi(ctx.src)) return ingestMobi(ctx);
+  const head = ctx.src.read(0, Math.min(ctx.src.size, 4096));
+  if (isZip(head)) {
     const zip = ZipArchive.open(ctx.src);
     const book = zipBook(zip);
     if (book?.format === 'epub') return ingestEpub(ctx, zip);
     if (book) return ingestFb2(ctx, zip, book.entry);
     throw new BookError('This archive has no EPUB or FB2 book inside.');
   }
-  if (bookExtension(fileName) === 'fb2' || looksLikeFb2(ctx.src.read(0, Math.min(ctx.src.size, 1024)))) return ingestFb2(ctx);
-  return ingestTxt(ctx);
+  if (bookExtension(fileName) === 'fb2' || looksLikeFb2(head.subarray(0, 1024))) return ingestFb2(ctx);
+  // Plain text only when it says it is, or reads as text: other files would become pages of garbage.
+  if (bookExtension(fileName) === 'txt' || looksLikePlainText(head)) return ingestTxt(ctx);
+  throw new BookError(otherFile(head) ?? NOT_A_BOOK);
+}
+
+/** A clearer word for files people often mistake for books the app reads. */
+function otherFile(head: Uint8Array): string | null {
+  const tag = String.fromCharCode(...head.subarray(0, 8));
+  if (tag.startsWith('%PDF')) return 'This is a PDF, which the app can’t open. It reads EPUB, FB2, MOBI, AZW3 and TXT books.';
+  if (tag.startsWith('CONT') || tag.slice(1, 7) === 'DRMION') return 'This is a Kindle KFX book, which only Amazon’s apps can open.';
+  return null;
 }
 
 function looksLikeFb2(head: Uint8Array): boolean {

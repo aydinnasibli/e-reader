@@ -271,7 +271,84 @@ Why: the app drew its own selection handles over native text and had to guess wh
 ### Known limits
 
 - Expo Go on Android can't read a file picked with Add ("Missing 'READ' permission"). This is Expo Go only. The import code is unchanged in this pass, except that the error now goes to the crash log. For the emulator test, the book was copied straight into the app's folder.
-- Go to page N can land a page or so away from N near the front matter. Page numbers are estimated from characters, and the box turns N into a fraction of the book.
 - Turning past the last converted page while a book is still converting just springs back. The footer shows "preparing n%".
 
 Checks: `tsc --noEmit` ✅ · `expo lint` ✅ · vitest 163/163 ✅ · jest 137/137 ✅ · `npm run test:page` Chromium + WebKit ✅ · `expo export` android + ios ✅ · `expo-doctor` 20/20 ✅.
+
+### Fixed after the owner tried it on the iPhone (2026-10-25)
+
+| Problem | Fix | Proof |
+|---|---|---|
+| **Go to page: the box was cut off on iPhone and Go couldn't be pressed.** The card was capped at half of the space left above the keyboard, so Cancel/Go ended below its visible part, and the number pad has no return key. The rename prompt had the same problem on small phones and in landscape. | Top cards are as tall as their content. On iPhone the keyboard-avoiding view keeps them above the keyboard; on Android they are capped by the keyboard's measured height. In landscape the buttons sit beside the text box. | Layout tests: scroll views now take their content's height, as in React Native (they were modelled 0 high, so nothing inside one was really checked). A new rule: while typing, a form's buttons must be in view without scrolling. It failed on the old cards. Emulator: the whole card shows above the number pad. |
+| **Go to page landed a page or so away** (asking for 9 gave 10). The box turned the number into a fraction of the book. | Page N goes to the chunk and the page in it that the footer numbers N (`pageAt`). | `test/pageNumbers.test.ts`; `test/ui/fontDrift.test.tsx` (fails without it). Emulator: 40 → "40 of 2113". |
+| **Highlights didn't show on iPhone while the highlighter was out.** The page turns text selection off then, and WebKit doesn't draw highlights over text that can't be selected. Chrome does, so Android looked fine. | While the tool is out, marks are drawn as spans (`page/marks.ts`). | `bench/webpage` reads the painted pixel in both engines; it was white in WebKit with the old code. |
+| **A text size or font change put earlier text at the top**, and the line being read could end up anywhere on the page. | The line read stays near the top. If its page would have it lower than the top quarter, a page is made to start at its word: its paragraph is split in two elements (`startPageAt`), and the page before ends early. Jumps still show the page that holds the place. | `bench/webpage`, both engines: the place is near the top, pages run on across the split, and highlights and selections across it are correct. Emulator. |
+| **Reading into a later chunk jumped back to where the book was opened** (about every 20 pages). The first setup's place waited for text that came with the content, and was shown again when the next chunk arrived. | A place that has been shown, or new content, cancels a waiting one (both views). | `bench/webpage` "reading into a chunk sent later" (failed before). Emulator: pages 62 → 72 → 112 → 153. |
+| **Scroll mode, a chunk added above or dropped moved the text by a whole chunk.** The browser's own scroll anchoring and the page's correction both applied. | The browser's anchoring is off. The page keeps the text still itself: for chunks added or dropped, and for anything changing size above (a ResizeObserver). | `bench/webpage`, both engines. |
+| *(Introduced and caught in this pass.)* Opening a book reopened a page early: the place was turned into drawn offsets before its chunk had loaded. | The target is made once the chunks are in. | `test/ui/flow.test.tsx` caught it. |
+
+Still not verified on the iPhone itself: everything above was checked in WebKit on the Mac and on the Android emulator. In a two-page spread, the line read can start the right-hand page.
+
+Checks: `tsc --noEmit` ✅ · `expo lint` ✅ · vitest 164/164 ✅ · jest 138/138 ✅ · `npm run test:page` Chromium + WebKit ✅ · `expo export` android + ios ✅ · `expo-doctor` 20/20 ✅.
+
+## 8. Fourth pass: full audit and fixes (2026-10-25/26)
+
+On `main`, left uncommitted for the owner. The owner asked for a complete check of the app ("make sure this mobile app is perfect"), reported that **Go to page doesn't land on the page asked for**, and wanted every decision put to them. They read EPUB, TXT and FB2 in English and Turkish, on the Android phone and the iPhone equally.
+
+How it was done: six auditors (conversion engine, reading page, reader screen, data layer, app shell and packages, a real run on the Android emulator), then five implementers working on separate files, then four independent reviewers of the result, whose findings were fixed in turn, and a second emulator run on the finished code. Every fix has a test that fails on the old code and passes on the new one.
+
+### The worst things found
+
+| Problem | Cause | Fix |
+|---|---|---|
+| **The Android phone hadn't received an update since build-27 (24 Oct).** | CI's Node 22 stalled a jest test that faked `setImmediate`; the test then timed out and left fake timers on, so the rest of the file hung until the 60-minute limit. Every push since the WebView switch was cancelled. | The test no longer fakes `setImmediate` and always restores real timers. CI runs on Node 24, the check step stops after 15 minutes, and the iPhone bundle is built too. Verified under Node 22.23.4 (the old file hangs, the new one passes). |
+| **Go to page landed far off, and numbers jumped while reading** (both versions). | Characters per page were re-averaged over the chunks laid out at each moment. | Stable numbers per book and layout: the converter gives each chunk a layout weight, the page measures the weight a page holds once, on typical chunks of the book (laid out out of sight), and that value is kept with the book. Emulator, War and Peace: 20 targets all exact, the same passage every time, numbers never backwards. |
+| **"Open with" deleted the book's own file** right after importing it (pictures never showed, "Try again" failed). | expo-file-system's move points the File object at the destination; the clean-up then deleted it. | Fixed, the test file system now moves like the real one, and books that lost their file are repaired by adding the file again. |
+| **Turkish text garbled** (windows-1254 TXT and FB2), **TXT books one paragraph per line**, Turkish search, hyphenation and Look Up broken. | No Turkish code page; brittle encoding guess; line-based TXT layout; `toLowerCase` on İ/ı; English hyphenation for books without a language; Wikimedia blocking OkHttp's user agent. | Turkish code page and a statistical guesser; wrapped-text detection; one shared fold for search (case, accents, Turkish i); language detection; TDK definitions with English meanings. |
+| **Highlights and search hits vanished**, **Copy gave empty text** after moving around a big book, **a page turn during a chunk load jumped ~15 pages** (and saved that place), **the reader stayed blank** after Android killed the WebView. | Stale callbacks, an HTML cache that outlived the block cache, a race between the slide animation and chunk renumbering, `reload()` on a dead WebView. | All fixed; the test fake page now behaves like the real one. |
+
+### Owner decisions (this pass)
+
+| Question | Decision |
+|---|---|
+| Page numbers | Stable per book and layout (text size, font, spacing, margins, screen); instant after a change. |
+| Books already in the library | All converted again automatically; highlights, notes, bookmarks and places moved onto the same words by their text; a copy of the old annotations kept (`annotations.v1.json`). |
+| The book's own styles | Honour italic, bold, small caps, centred/right text and hidden text; fonts, sizes, colours and margins stay the app's. |
+| iPhone | A real build with a free Apple ID and Xcode (steps in README; Xcode not installed yet). |
+| Search | Ignores case, accents and Turkish I/ı/İ/i, in books, the library and Highlights & notes. |
+| Look Up (Turkish) | TDK's Turkish definition with the English meaning below. |
+| Translate | Target remembered per book language. |
+| Atkinson Hyperlegible | Replaced by Atkinson Hyperlegible Next (has the Turkish İ). |
+| Half-empty pages at chunk boundaries | Filled (chunks joined in pairs; see Known limits). |
+| Lone lines, headings alone at a page foot | Not allowed, in both engines. |
+| Wide screens | Lines capped at about 70 characters; Book details, Highlights & notes and sheets in a centred column. |
+| Book language | Detected, and settable in Book details. |
+| Going to a page not converted yet | A message ("still being prepared"). |
+| Saved place after a jump | Moves only if the reader reads on. |
+| Copy | Exactly the selected characters (Look Up uses the whole word). |
+| System bars | Hidden while reading (Android navigation bar; iPhone home indicator auto-hides). |
+| Encoding detection, HTML entities | Built into the app (no chardet / entities packages). |
+| Build safety net | Node 24, 15-minute check limit, iPhone bundle check, "Check for updates" on the error screen. |
+| React Compiler | Stays off. |
+| Android Back with the Back chip shown | Leaves the book (unchanged). |
+| Finished books | Stay finished (unchanged). |
+| After a layout change | Pages always cut the same way; the line read is briefly marked (also when a book opens). |
+| Dark-mode buttons | Dark text on the light blue. |
+| App name and id | **Nec Reader**, id `com.aydinnasibli.nec` on both phones. The Android app installed today (`com.nec.ebookreader`) won't update into it: the next build installs as a separate, empty app (its Update button still downloads it), then the old one is uninstalled. No backup is moved (owner's choice). |
+
+### Verified
+
+- `tsc --noEmit` ✅ · `expo lint` ✅ · vitest 375/375 ✅ · jest 263/263 ✅ · `expo-doctor` 20/20 ✅ — on Node 24, and the same checks with `CI=true` on Node 22 (CI's version) finish in about 2 minutes.
+- `npm run test:page`: 164 checks in Chromium, 153 in WebKit ✅ (11 touch checks need Chromium's CDP).
+- `expo export` for Android and iOS ✅.
+- **Android emulator** (Android 16, Expo Go 58.0.5), on the finished code: 13 books converted by the old engine were converted again in 2 min 40 s with every highlight, note and bookmark on the same words and the places kept (also with a book open during the upgrade); Go to page exact for 20 targets in War and Peace; Turkish TXT/FB2 in windows-1254 correct, Turkish search and Look Up (TDK + English); "Open with" keeps the file, "Try again" works; highlights kept while reading on and across Pages/Scroll; auto-scroll smooth; renderer kill → page back in under a second; force-stop → same place. No crashes.
+
+### Known limits and not verified
+
+- **The iPhone itself**: everything was checked in WebKit on the Mac and on the Android emulator. The owner can run it in Expo Go now (`npx expo start`); the real build needs Xcode.
+- **Half-empty pages**: chunks are joined only in pairs, so in a chapter longer than about two chunks (60,000 characters) every other chunk boundary still starts a new page. Joining longer runs would make a page depend on chunks that aren't loaded, and page numbers would then depend on where the book was opened.
+- **Redraws while text is selected**: the emulator measured 60 frames/s with a word selected. The page is idle then (0 frames in Chromium) and the screen no longer redraws on repeated selections; what's left is most likely Android WebView's own selection handles. To check on the phone.
+- **Android navigation bar after switching between gesture and 3-button navigation while the app runs**: its buttons can stay the wrong colour until the app is restarted (expo-navigation-bar caches the style it applied; no clean way to re-apply).
+- Page numbers are estimates: rarely a number is skipped or repeated at the end of a chunk, and a chunk whose pages hold far more or less than its weight says (a long contents list at an extreme text size) gets its own numbers wrong, not the rest of the book's.
+- MOBI/AZW3: HUFF/CDIC compression, contents and links still unsupported (owner: low priority); AZW3 stylesheets aren't read (inline styles are).
+- Not run on a real phone: the installed release APK, 120 Hz page-turn smoothness, memory over many books, the real Android "Open with" intent and the Add picker (Expo Go can't receive intents).

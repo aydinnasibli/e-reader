@@ -13,6 +13,10 @@ export interface ChunkInfo {
   firstChar: number;
   blocks: number;
   chars: number;
+  /** Page space the chunk takes (see Manifest.weights). */
+  weight?: number;
+  /** The chunk starts a chapter (see Manifest.opens). */
+  opens?: boolean;
 }
 
 export interface BookSink {
@@ -46,6 +50,9 @@ export class BookError extends Error {}
 
 /** The title of a book whose file gives no name (e.g. shared from a chat app). */
 export const UNTITLED = 'Untitled';
+
+/** A book whose file stops partway (a download that didn't finish), in the same words for every format. */
+export const CUT_SHORT = 'This book is damaged: the file is cut short (its download may not have finished).';
 
 /** Why a copy-protected book can't be opened, in the same words for every format. */
 export const DRM_MESSAGE = 'This book is copy-protected (DRM), so it can only be read in the app of the store it came from.';

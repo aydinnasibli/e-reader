@@ -194,6 +194,22 @@ export function mergeAnnotations(bookId: string, incoming: Annotations): number 
   return highlights.length + bookmarks.length;
 }
 
+/**
+ * Put annotations in place of a book's own: its marks moved onto a new
+ * conversion of it (library.ts). Unlike an edit, saved at once or not at
+ * all: a failed write throws and changes nothing, so a book is never left
+ * with marks placed for one conversion and the text of another.
+ */
+export function replaceAnnotations(bookId: string, a: Annotations) {
+  const sorted = { highlights: [...a.highlights].sort(byPosition), bookmarks: [...a.bookmarks].sort(byPosition) };
+  writeJson(file(bookId), sorted);
+  unsaved.delete(bookId);
+  cache.set(bookId, sorted);
+  byBlock.delete(bookId);
+  version++;
+  listeners.forEach((l) => l());
+}
+
 export function forgetAnnotations(bookId: string) {
   unsaved.delete(bookId);
   cache.delete(bookId);
