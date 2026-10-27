@@ -457,6 +457,7 @@ export class Paged {
   }
 
   private place(screen: number, animate = false) {
+    this.stopFollowing();
     this.screen = Math.max(0, Math.min(screen, Math.max(0, this.totalScreens() - 1)));
     this.strip.style.transition = animate ? `transform ${SLIDE_MS}ms ease-out` : 'none';
     this.strip.style.transform = `translate3d(${-this.screen * this.screenWidth}px,0,0)`;
@@ -482,11 +483,46 @@ export class Paged {
     const can = this.open(this.screen + (dx < 0 ? 1 : -1));
     const way = can ? dx : dx * 0.25;
     if (from !== null) this.dragFrom = from + this.screen * this.screenWidth - way;
+    this.followTo(-this.screen * this.screenWidth + this.dragFrom, way);
+  }
+
+  /**
+   * The strip following a finger: a paused animation across the screens
+   * either side of `base`, its time where the finger is (a millisecond a
+   * point). Moved by its style instead, Chromium (Android's WebView) lays out
+   * the strip's layer again on every move, all its chunks' text: tens of
+   * milliseconds a move on a phone, a swipe that stutters behind the finger.
+   */
+  private follow: { anim: Animation; base: number; x: number } | null = null;
+
+  private followTo(base: number, way: number) {
+    const reach = 2 * Math.max(window.innerWidth, this.screenWidth);
+    if (this.follow?.base !== base) {
+      this.stopFollowing();
+      this.strip.style.transition = 'none';
+      const anim = this.strip.animate([{ transform: `translate3d(${base - reach}px,0,0)` }, { transform: `translate3d(${base + reach}px,0,0)` }], { duration: 2 * reach, fill: 'both' });
+      anim.pause();
+      this.follow = { anim, base, x: base };
+    }
+    const w = Math.max(-reach, Math.min(reach, way));
+    this.follow.anim.currentTime = reach + w;
+    this.follow.x = base + w;
+  }
+
+  /** The finger's drag over: the strip stays where it's drawn, in its own style, and a slide set next starts there. */
+  private stopFollowing() {
+    const f = this.follow;
+    if (!f) return;
+    this.follow = null;
     this.strip.style.transition = 'none';
-    this.strip.style.transform = `translate3d(${-this.screen * this.screenWidth + this.dragFrom + way}px,0,0)`;
+    this.strip.style.transform = `translate3d(${f.x}px,0,0)`;
+    f.anim.cancel();
+    // Taken in now: a transition set next goes from here (not from where the strip was before the drag).
+    getComputedStyle(this.strip).getPropertyValue('transform');
   }
 
   springBack() {
+    this.stopFollowing();
     this.dragFrom = 0;
     this.strip.style.transition = `transform 180ms ease-out`;
     this.strip.style.transform = `translate3d(${-this.screen * this.screenWidth}px,0,0)`;

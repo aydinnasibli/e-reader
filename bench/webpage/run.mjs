@@ -1261,7 +1261,8 @@ async function quickTurnsTest(screen) {
   await send({ t: 'bounds', count: 3, complete: true });
   await send({ t: 'content', chunks: [0, 1, 2].map((c) => chunk(c, settings)), target: { at: { b: 100, i: 0 } }, key: 'q' });
   const start = lastOf(await take(200), 'shown');
-  const stripX = () => page.evaluate(() => Number(/translate3d\((-?[\d.]+)px/.exec(document.getElementById('strip').style.transform)[1]));
+  // Where the strip is drawn (a finger moves it by an animation, not its style).
+  const stripX = () => page.evaluate(() => new DOMMatrixReadOnly(getComputedStyle(document.getElementById('strip')).transform).m41);
   const y = f.height / 2;
   const before = await stripX();
   await send({ t: 'turn', dir: 1 });
