@@ -1,9 +1,11 @@
 // User-made collections (shelves) and the library's view preferences.
 
 import { File, Paths } from 'expo-file-system';
-import { useSyncExternalStore } from 'react';
+import { isRecord, ownKey } from './guards';
+import { newId } from './ids';
 import { type BookEntry, getBook, updateBook } from './library';
 import { readJson, saveJson } from './storage';
+import { createStore } from './store';
 
 export interface Collection {
   id: string;
@@ -21,27 +23,38 @@ interface State {
 
 const file = () => new File(Paths.document, 'shelves.json');
 let state: State | null = null;
-const listeners = new Set<() => void>();
+const store = createStore();
+
+/**
+ * shelves.json checked field by field: a sort or view this version doesn't
+ * have (a damaged file, a hand edit) would leave the library screen with
+ * nothing to draw.
+ */
+function saved(): State {
+  const raw = readJson<Record<string, unknown>>(file(), isRecord) ?? {};
+  const { collections, sort, view } = raw;
+  return {
+    collections: (Array.isArray(collections) ? collections : [])
+      .filter((c): c is Collection => isRecord(c) && typeof c.id === 'string' && typeof c.name === 'string')
+      .map((c) => ({ id: c.id, name: c.name })),
+    sort: ownKey(SORT_LABELS, sort) ? sort : 'recent',
+    view: view === 'list' ? 'list' : 'grid',
+  };
+}
 
 function get(): State {
-  if (!state) state = { collections: [], sort: 'recent', view: 'grid', ...(readJson<Partial<State>>(file()) ?? {}) };
+  state ??= saved();
   return state;
 }
 
 function set(patch: Partial<State>) {
   state = { ...get(), ...patch };
   saveJson(file(), state);
-  listeners.forEach((l) => l());
+  store.notify();
 }
 
 export function useShelves(): State {
-  return useSyncExternalStore(
-    (l) => {
-      listeners.add(l);
-      return () => listeners.delete(l);
-    },
-    get,
-  );
+  return store.useValue(get);
 }
 
 export function setSort(sort: SortKey) {
@@ -62,7 +75,7 @@ export function collectionNamed(name: string): Collection {
 }
 
 export function createCollection(name: string): Collection {
-  const c = { id: Date.now().toString(36) + Math.random().toString(36).slice(2, 6), name };
+  const c = { id: newId(), name };
   set({ collections: [...get().collections, c] });
   return c;
 }
@@ -136,6 +149,8 @@ export function sortBooks(books: BookEntry[], key: SortKey): BookEntry[] {
       });
       return keyed.map((x) => x.b);
     }
+    default:
+      return out;
   }
 }
 

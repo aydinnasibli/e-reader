@@ -105,6 +105,25 @@ describe('covers', () => {
   });
 });
 
+describe('authors', () => {
+  const author = async (metadata: string) => (await ingestBytes(makeEpub({ chapters: { 'a.xhtml': xhtml('<p>x</p>') }, metadata: `<dc:title>T</dc:title>${metadata}` }), 'x.epub')).manifest.author;
+
+  it('a translator or illustrator listed as a creator isn’t an author (EPUB 2 opf:role)', async () => {
+    expect(await author('<dc:creator opf:role="aut">Fyodor Dostoyevski</dc:creator><dc:creator opf:role="trl">Mehmet Özgül</dc:creator><dc:creator opf:role="ill">Ayşe Kaya</dc:creator>')).toBe('Fyodor Dostoyevski');
+  });
+
+  it('nor when the roles are given apart, by id (EPUB 3 <meta refines>); a creator given no role stays', async () => {
+    const metadata =
+      '<dc:creator id="c1">Orhan Pamuk</dc:creator><dc:creator id="c2">Maureen Freely</dc:creator><dc:creator>Second Author</dc:creator>' +
+      '<meta refines="#c1" property="role" scheme="marc:relators">aut</meta><meta refines="#c2" property="role" scheme="marc:relators">trl</meta>';
+    expect(await author(metadata)).toBe('Orhan Pamuk, Second Author');
+  });
+
+  it('when no creator is named an author, all of them are listed, as before', async () => {
+    expect(await author('<dc:creator>A. Writer</dc:creator><dc:creator opf:role="edt">B. Editor</dc:creator>')).toBe('A. Writer, B. Editor');
+  });
+});
+
 describe('links', () => {
   it('a note’s link back to its reference goes to the reference (an anchor, not a note)', async () => {
     const r = await ingestBytes(

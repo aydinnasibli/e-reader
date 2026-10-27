@@ -9,11 +9,15 @@
 import { File, Paths } from 'expo-file-system';
 import { ENGINE_VERSION, type Position } from '@/engine/types';
 import { type Annotations, mergeAnnotations } from './annotations';
+import { isRecord } from './guards';
 // Types only: the library calls in here (claimPending), and passes its queueMarks to what needs it.
 import type { BookEntry } from './library';
 import { type Anchor, type MarkSet, marksOf, savedAnchors } from './remap';
 import { type BookStats, mergeBookStats } from './stats';
 import { readJson, saveJson } from './storage';
+
+/** An anchor as a backup keeps it: a highlight's leaves out its text (it's the highlight's own). */
+export type SavedAnchor = Omit<Anchor, 'text'> & { text?: string };
 
 /** What a backup keeps of one book. */
 export interface SavedBook {
@@ -36,7 +40,7 @@ export interface SavedBook {
    * it (remap.ts; `h<id>`, `m<id>`, `place`), to find it in another one.
    * Highlights' anchors leave out their text: it's the highlight's own.
    */
-  anchors?: Record<string, Anchor>;
+  anchors?: Record<string, SavedAnchor>;
   /** The book's language as set by hand. */
   lang?: string;
   stats?: BookStats;
@@ -47,8 +51,10 @@ let pending: SavedBook[] | null = null;
 
 function all(): SavedBook[] {
   if (!pending) {
-    const saved = readJson<SavedBook[]>(file());
-    pending = Array.isArray(saved) ? saved : [];
+    const saved = readJson<unknown[]>(file(), Array.isArray);
+    pending = (saved ?? []).filter(
+      (b): b is SavedBook => isRecord(b) && typeof b.fp === 'string' && isRecord(b.annotations) && Array.isArray(b.annotations.highlights) && Array.isArray(b.annotations.bookmarks),
+    );
   }
   return pending;
 }

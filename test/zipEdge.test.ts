@@ -1,19 +1,22 @@
 // ZIP files as tools really write them: an archive comment holding what looks
 // like the end record, entries packed in ways the app can't unpack, Windows
-// folder separators; and compressed chapters read in slices small enough to
-// keep the app responsive.
+// folder separators, an entry claiming to run past the end of the file; and
+// compressed chapters read in slices small enough to keep the app responsive.
 
 import { deflateSync, strToU8, zipSync } from 'fflate';
 import { describe, expect, it } from 'vitest';
+import { ingestBook } from '../src/engine/ingest';
 import { BookError } from '../src/engine/io';
 import { ZipArchive } from '../src/engine/zip';
-import { MemorySource, ingestBytes } from './helpers';
+import { MemorySink, MemorySource, ingestBytes } from './helpers';
 
 interface Entry {
   name: string;
   data: string | Uint8Array;
   method?: number;
   flags?: number;
+  /** The size of its packed data the central directory gives (a damaged file's lie), if not the real one. */
+  claims?: number;
 }
 
 /** A ZIP written by hand, so method and flags can be anything. */
@@ -41,7 +44,7 @@ function buildZip(files: Entry[], comment = new Uint8Array(0)) {
     cv.setUint32(0, 0x02014b50, true);
     cv.setUint16(8, f.flags ?? 0, true);
     cv.setUint16(10, method, true);
-    cv.setUint32(20, data.length, true);
+    cv.setUint32(20, f.claims ?? data.length, true);
     cv.setUint32(24, raw.length, true);
     cv.setUint16(28, name.length, true);
     cv.setUint32(42, offset, true);
@@ -117,6 +120,27 @@ describe('ZIP files', () => {
     );
     expect(slices).toBe(Math.ceil(e.compressedSize / (16 * 1024)));
     expect(biggest).toBeLessThan(160 * 1024);
+  });
+
+  it('an entry claiming to run 2 GB past the end of the file is read to where the file ends, as if cut there', async () => {
+    for (const method of [0, 8]) {
+      const file = new MemorySource(buildZip(epubEntries({ method, claims: 0x7ffffff0 })));
+      let reads = 0;
+      const src = {
+        size: file.size,
+        read(offset: number, length: number) {
+          reads++;
+          return file.read(offset, length);
+        },
+      };
+      const sink = new MemorySink();
+      const manifest = await ingestBook({ src, sink, progress() {}, pause: async () => {}, fallbackTitle: 'z' }, 'z.epub');
+      // The book still converts, from what is there.
+      expect(manifest.totalBlocks).toBeGreaterThan(0);
+      expect(sink.blocks()[0].r?.join('')).toBe('Hello zip world.');
+      // Read on to the 2 GB it claims, it took 33,000 reads of nothing (130,000 compressed), with a pause after each.
+      expect(reads, `method ${method}`).toBeLessThan(50);
+    }
   });
 
   it('reads just the start of an entry', () => {

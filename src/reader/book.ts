@@ -6,9 +6,11 @@ import { Image } from 'react-native';
 import { guessLanguage } from '@/engine/language';
 import type { Block, ChunkFile, Manifest, Position, TocEntry } from '@/engine/types';
 import { blockLength, blockText } from '@/engine/types';
-import { ZipArchive, readZipData } from '@/engine/zip';
+import { concatBytes } from '@/engine/io';
+import { MAX_READ_BYTES, ZipArchive, type ZipEntry, readZipData } from '@/engine/zip';
 import { type BookEntry, type LiveBook, sourceFile } from '@/lib/library';
 import { FileSource, chunkFile, imageFile, safeImageName } from '@/lib/storage';
+import type { Breather } from './breather';
 import { svgSize } from './svgSize';
 import { joinsBefore } from './web/html';
 
@@ -307,13 +309,14 @@ export class BookData {
    * Resolve an image key to a file URI and pixel size, extracting it on first
    * use. While the book is still being converted a picture may not be there
    * yet (FB2 keeps them at the end of the file): that isn't remembered, so
-   * it's looked for again next time.
+   * it's looked for again next time. `pause`: one taken out of the book's
+   * ZIP for a chunk made in the background comes out in slices, with pauses.
    */
-  imageInfo(key: string): Promise<ImageInfo | null> {
+  imageInfo(key: string, pause?: Breather): Promise<ImageInfo | null> {
     let p = this.images.get(key);
     if (!p) {
       const final = this.complete;
-      p = this.resolveImage(key)
+      p = this.resolveImage(key, pause)
         .then((uri) => (uri ? sizeOf(uri) : null))
         .catch(() => null)
         .then((info) => {
@@ -326,7 +329,7 @@ export class BookData {
     return p;
   }
 
-  private async resolveImage(key: string): Promise<string | null> {
+  private async resolveImage(key: string, pause?: Breather): Promise<string | null> {
     const ref = this.manifest?.images[key];
     if (ref && 'file' in ref) return imageFile(this.entry.id, ref.file).uri;
     const safe = safeImageName(key);
@@ -337,10 +340,11 @@ export class BookData {
     }
     if (ref && 'zip' in ref) {
       const out = imageFile(this.entry.id, `z_${safe}.${ref.ext}`);
-      if (!out.exists) {
-        const [offset, csize, size, method] = ref.zip;
-        out.writeSync(readZipData(this.source(), offset, csize, size, method));
-      }
+      if (out.exists) return out.uri;
+      const [offset, compressedSize, size, method] = ref.zip;
+      // Wanted on screen: read at once, as it is; in the background, in slices.
+      const zip = pause && this.archive();
+      out.writeSync(zip ? await unzip(zip, { name: key, offset, compressedSize, size, method }, pause) : readZipData(this.source(), offset, compressedSize, size, method));
       return out.uri;
     }
     // Still converting: look the image up directly. FB2 pictures are already
@@ -354,7 +358,7 @@ export class BookData {
     if (zip && e) {
       const ext = /\.([a-z0-9]{2,5})$/i.exec(key)?.[1]?.toLowerCase() ?? 'jpg';
       const out = imageFile(this.entry.id, `z_${safe}.${ext}`);
-      if (!out.exists) out.writeSync(zip.read(e));
+      if (!out.exists) out.writeSync(pause ? await unzip(zip, e, pause) : zip.read(e));
       return out.uri;
     }
     return null;
@@ -382,6 +386,26 @@ export class BookData {
     this.src = null;
     this.zip = undefined;
   }
+}
+
+/**
+ * A picture taken out of the book's ZIP a slice at a time, with `pause`
+ * between them (in the background: a big one doesn't hold up the app while
+ * the next chunk is prepared). Written whole once it's all there.
+ */
+async function unzip(zip: ZipArchive, e: ZipEntry, pause?: Breather): Promise<Uint8Array> {
+  if (e.size > MAX_READ_BYTES || e.compressedSize > MAX_READ_BYTES) throw new Error(`Picture too big: ${e.name}`);
+  const parts: Uint8Array[] = [];
+  let n = 0;
+  await zip.stream(
+    e,
+    (bytes) => {
+      parts.push(bytes);
+      n += bytes.length;
+    },
+    pause,
+  );
+  return concatBytes(parts, n);
 }
 
 /** A picture's size: SVGs from their own markup (the image loader can't open them), others from the loader. */

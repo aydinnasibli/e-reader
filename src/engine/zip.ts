@@ -3,6 +3,7 @@
 // 500 MB EPUB full of images costs the same to open as a 1 MB one.
 
 import { Inflate, inflateSync } from 'fflate';
+import { le16, le32, le64 } from './bytes';
 import { BookError, type ByteSource, CUT_SHORT, READ_SLICE, concatBytes } from './io';
 import { decodeUtf8, looksLikeUtf8 } from './decode';
 
@@ -57,16 +58,6 @@ const ZIP64_LOCATOR_SIG = 0x07064b50;
 const CD_SIG = 0x02014b50;
 const LOCAL_SIG = 0x04034b50;
 
-function u16(b: Uint8Array, o: number) {
-  return b[o] | (b[o + 1] << 8);
-}
-function u32(b: Uint8Array, o: number) {
-  return (b[o] | (b[o + 1] << 8) | (b[o + 2] << 16)) + b[o + 3] * 0x1000000;
-}
-function u64(b: Uint8Array, o: number) {
-  return u32(b, o) + u32(b, o + 4) * 0x100000000;
-}
-
 export class ZipArchive {
   readonly entries = new Map<string, ZipEntry>();
 
@@ -89,19 +80,19 @@ export class ZipArchive {
     let eocd = -1;
     let fallback = -1;
     for (let i = tail.length - 22; i >= 0; i--) {
-      if (u32(tail, i) !== EOCD_SIG) continue;
+      if (le32(tail, i) !== EOCD_SIG) continue;
       if (fallback < 0) fallback = i;
-      if (i + 22 + u16(tail, i + 20) === tail.length) {
+      if (i + 22 + le16(tail, i + 20) === tail.length) {
         eocd = i;
         break;
       }
     }
     if (eocd < 0) {
       for (let i = fallback; i >= 0; i--) {
-        if (u32(tail, i) !== EOCD_SIG) continue;
-        const at = u32(tail, i + 16);
+        if (le32(tail, i) !== EOCD_SIG) continue;
+        const at = le32(tail, i + 16);
         const sig = at + 4 <= size ? this.src.read(at, 4) : null;
-        if ((sig && sig.length === 4 && u32(sig, 0) === CD_SIG) || u16(tail, i + 10) === 0) {
+        if ((sig && sig.length === 4 && le32(sig, 0) === CD_SIG) || le16(tail, i + 10) === 0) {
           eocd = i;
           break;
         }
@@ -111,34 +102,34 @@ export class ZipArchive {
     if (eocd < 0) {
       // The directory is the end of the file: a ZIP without it was cut short.
       const start = this.src.read(0, 4);
-      if (start.length === 4 && u32(start, 0) === LOCAL_SIG) throw new BookError(CUT_SHORT);
+      if (start.length === 4 && le32(start, 0) === LOCAL_SIG) throw new BookError(CUT_SHORT);
       throw new Error('Not a ZIP file (no end of central directory)');
     }
-    let count = u16(tail, eocd + 10);
-    let cdSize = u32(tail, eocd + 12);
-    let cdOffset = u32(tail, eocd + 16);
+    let count = le16(tail, eocd + 10);
+    let cdSize = le32(tail, eocd + 12);
+    let cdOffset = le32(tail, eocd + 16);
     if (cdOffset === 0xffffffff || count === 0xffff) {
       // ZIP64: the locator sits right before the EOCD record.
       const loc = eocd - 20;
-      if (loc >= 0 && u32(tail, loc) === ZIP64_LOCATOR_SIG) {
-        const rec = this.src.read(u64(tail, loc + 8), 56);
-        count = u64(rec, 32);
-        cdSize = u64(rec, 40);
-        cdOffset = u64(rec, 48);
+      if (loc >= 0 && le32(tail, loc) === ZIP64_LOCATOR_SIG) {
+        const rec = this.src.read(le64(tail, loc + 8), 56);
+        count = le64(rec, 32);
+        cdSize = le64(rec, 40);
+        cdOffset = le64(rec, 48);
       }
     }
     const cd = this.src.read(cdOffset, cdSize);
     let p = 0;
     for (let i = 0; i < count && p + 46 <= cd.length; i++) {
-      if (u32(cd, p) !== CD_SIG) break;
-      const flags = u16(cd, p + 8);
-      const method = u16(cd, p + 10);
-      let compressedSize = u32(cd, p + 20);
-      let size = u32(cd, p + 24);
-      const nameLen = u16(cd, p + 28);
-      const extraLen = u16(cd, p + 30);
-      const commentLen = u16(cd, p + 32);
-      let offset = u32(cd, p + 42);
+      if (le32(cd, p) !== CD_SIG) break;
+      const flags = le16(cd, p + 8);
+      const method = le16(cd, p + 10);
+      let compressedSize = le32(cd, p + 20);
+      let size = le32(cd, p + 24);
+      const nameLen = le16(cd, p + 28);
+      const extraLen = le16(cd, p + 30);
+      const commentLen = le16(cd, p + 32);
+      let offset = le32(cd, p + 42);
       const nameBytes = cd.subarray(p + 46, p + 46 + nameLen);
       // Bit 11 says UTF-8, but many tools write UTF-8 names without it; legacy
       // code-page names almost never form valid UTF-8.
@@ -147,19 +138,19 @@ export class ZipArchive {
       let e = p + 46 + nameLen;
       const eEnd = e + extraLen;
       while (e + 4 <= eEnd) {
-        const id = u16(cd, e);
-        const len = u16(cd, e + 2);
+        const id = le16(cd, e);
+        const len = le16(cd, e + 2);
         if (id === 1) {
           let q = e + 4;
           if (size === 0xffffffff) {
-            size = u64(cd, q);
+            size = le64(cd, q);
             q += 8;
           }
           if (compressedSize === 0xffffffff) {
-            compressedSize = u64(cd, q);
+            compressedSize = le64(cd, q);
             q += 8;
           }
-          if (offset === 0xffffffff) offset = u64(cd, q);
+          if (offset === 0xffffffff) offset = le64(cd, q);
         }
         e += 4 + len;
       }
@@ -186,10 +177,20 @@ export class ZipArchive {
     return this.byLower.get(path.toLowerCase());
   }
 
+  /**
+   * How much of an entry's data is really in the file: one that claims to
+   * run past its end (a damaged file, a download cut short) ends where the
+   * file does, as if it had been cut there, instead of being read on as
+   * gigabytes of nothing.
+   */
+  private dataInFile(e: ZipEntry, start: number): number {
+    return Math.max(0, Math.min(e.compressedSize, this.src.size - start));
+  }
+
   dataOffset(e: ZipEntry): number {
     const h = this.src.read(e.offset, 30);
-    if (u32(h, 0) !== LOCAL_SIG) throw new Error(`Bad local header for ${e.name}`);
-    return e.offset + 30 + u16(h, 26) + u16(h, 28);
+    if (le32(h, 0) !== LOCAL_SIG) throw new Error(`Bad local header for ${e.name}`);
+    return e.offset + 30 + le16(h, 26) + le16(h, 28);
   }
 
   /** Read and decompress a whole entry. Use for small files (OPF, NCX, images). */
@@ -206,7 +207,8 @@ export class ZipArchive {
   head(e: ZipEntry, n: number): Uint8Array {
     if (unreadable(e)) return new Uint8Array(0);
     const start = this.dataOffset(e);
-    if (e.method === 0) return this.src.read(start, Math.min(n, e.compressedSize));
+    const total = this.dataInFile(e, start);
+    if (e.method === 0) return this.src.read(start, Math.min(n, total));
     const parts: Uint8Array[] = [];
     let got = 0;
     const inflater = new Inflate((chunk) => {
@@ -215,9 +217,9 @@ export class ZipArchive {
     });
     // (Read in pieces about the size wanted: a picture's first 4 KB shouldn't cost 16.)
     const piece = Math.min(DEFLATED_SLICE, Math.max(1024, n));
-    for (let pos = 0; pos < e.compressedSize && got < n; ) {
-      const len = Math.min(piece, e.compressedSize - pos);
-      inflater.push(this.src.read(start + pos, len), pos + len >= e.compressedSize);
+    for (let pos = 0; pos < total && got < n; ) {
+      const len = Math.min(piece, total - pos);
+      inflater.push(this.src.read(start + pos, len), pos + len >= total);
       pos += len;
     }
     return concatBytes(parts, got).subarray(0, n);
@@ -232,7 +234,7 @@ export class ZipArchive {
     const why = unreadable(e);
     if (why) throw new BookError(why);
     const start = this.dataOffset(e);
-    const total = e.compressedSize;
+    const total = this.dataInFile(e, start);
     // Real entries inflate to the size they declare; one that keeps going is a
     // zip bomb that would fill the phone with converted text.
     const limit = Math.min(MAX_ENTRY_BYTES, e.size + SIZE_SLACK);
@@ -277,16 +279,16 @@ export function leadingEntries(src: ByteSource, max = 16): LeadingEntry[] {
   const out: LeadingEntry[] = [];
   for (let p = 0; out.length < max && p + 30 <= src.size; ) {
     const h = src.read(p, 30);
-    if (h.length < 30 || u32(h, 0) !== LOCAL_SIG) break;
-    const flags = u16(h, 6);
-    const compressedSize = u32(h, 18);
-    const nameLen = u16(h, 26);
+    if (h.length < 30 || le32(h, 0) !== LOCAL_SIG) break;
+    const flags = le16(h, 6);
+    const compressedSize = le32(h, 18);
+    const nameLen = le16(h, 26);
     const nameBytes = src.read(p + 30, nameLen);
     if (nameBytes.length < nameLen) break;
-    const dataOffset = p + 30 + nameLen + u16(h, 28);
+    const dataOffset = p + 30 + nameLen + le16(h, 28);
     out.push({
       name: pathOf(flags & 0x800 || looksLikeUtf8(nameBytes) ? decodeUtf8(nameBytes) : latin1(nameBytes)),
-      method: u16(h, 8),
+      method: le16(h, 8),
       compressedSize,
       dataOffset,
     });
@@ -300,7 +302,7 @@ export function leadingEntries(src: ByteSource, max = 16): LeadingEntry[] {
 export function readZipData(src: ByteSource, offset: number, compressedSize: number, size: number, method: number): Uint8Array {
   if (size > MAX_READ_BYTES || compressedSize > MAX_READ_BYTES) throw new BookError(TOO_BIG);
   const h = src.read(offset, 30);
-  const start = offset + 30 + u16(h, 26) + u16(h, 28);
+  const start = offset + 30 + le16(h, 26) + le16(h, 28);
   const data = src.read(start, compressedSize);
   if (method === 0) return data;
   return inflateSync(data, { out: new Uint8Array(size) });

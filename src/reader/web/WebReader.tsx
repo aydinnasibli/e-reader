@@ -22,11 +22,12 @@ import { loadPageSizes, savePageSizes } from '../pageStore';
 import { drawn, layoutKeyOf, lookOf, toBlock, toDrawn } from '../look';
 import type { TextPoint } from '../selection';
 import { Battery, Clock, ClockBattery } from '../StatusInfo';
+import { breather } from '../breather';
 import { bookCss } from './css';
-import { chunkHtml } from './html';
+import { chunkHtml, chunkHtmlSliced } from './html';
 import { PAGE_HTML, PAGE_SOURCE_HASH } from './page.generated';
 import { FOOTER, HEADER, META_SCALE, webFrame } from './frame';
-import type { Chunk, DrawnPoint, FromPage, PageCaret, PageMark, Target, ToPage } from './protocol';
+import type { Chunk, DrawnPoint, FromPage, PageCaret, PageCounts, PageMark, Target, ToPage } from './protocol';
 import { webFont } from './webFonts';
 
 /** A selection on the page: its first and last character, and where its ends are on screen (window coordinates). */
@@ -49,6 +50,9 @@ export interface PageInfo {
   /** The layout the numbers are for. */
   key: string;
 }
+
+/** A piece of the highlight tool's drag: block `b`, characters [s, e). */
+export type StrokeMark = Mark & { b: number };
 
 /** The window and the safe-area insets around it. */
 export type Area = { width: number; height: number; top: number; bottom: number; left: number; right: number };
@@ -83,6 +87,8 @@ interface Props {
   onTap(): void;
   /** Highlights and search hits for a block (the selection is drawn by the page itself). */
   marksFor?(b: number): Mark[] | undefined;
+  /** The highlight tool's drag as it goes, in book offsets: drawn over the marks, sent on its own. */
+  stroke?: StrokeMark[] | null;
   onLink?(target: string): void;
   bookmarked?: boolean;
   footerRight?: string;
@@ -111,6 +117,12 @@ interface Props {
 
 /** How long a change in the window's height or the insets must hold before the book is laid out for it. */
 const SETTLE_MS = 300;
+/**
+ * After the system bars go (the menu closed, the Display panel opened), their
+ * insets take a while to go too, in steps (the status bar, then the
+ * navigation bar): what they are in between isn't taken until this long after.
+ */
+const BARS_GONE_MS = 1000;
 
 /**
  * The size and safe-area insets the book is laid out for. The system bars
@@ -119,7 +131,8 @@ const SETTLE_MS = 300;
  * navigation bar on Android, at the side of a phone on its side); laying the
  * book out again for that would move the text and change the page numbers.
  * So a change of width (rotation, split screen, a fold) is taken at once, any
- * other only once it has held for a moment with the bars hidden. `settled`:
+ * other only once it has held for a moment with the bars hidden (longer just
+ * after they went: their insets go in steps). `settled`:
  * the area has held since the reader opened, so the book is laid out once,
  * for the bars already hidden. `steady`: nothing is still settling (the
  * insets that come a moment after a rotation).
@@ -137,6 +150,13 @@ export function useReadingArea(barsShown: boolean, size?: { width: number; heigh
   nowRef.current = now;
   const [area, setArea] = useState(now);
   const [settled, setSettled] = useState(false);
+  /** When the bars last went away (0: not since the reader opened, when they're hidden from the start). */
+  const barsGone = useRef(0);
+  const barsWere = useRef(barsShown);
+  useEffect(() => {
+    if (barsWere.current && !barsShown) barsGone.current = Date.now();
+    barsWere.current = barsShown;
+  }, [barsShown]);
   /** A rotation (or the like) was laid out for at once; what comes with it is still arriving. */
   const [turning, setTurning] = useState(false);
   const across = now.width !== area.width;
@@ -148,11 +168,14 @@ export function useReadingArea(barsShown: boolean, size?: { width: number; heigh
     !across && (now.height !== area.height || now.top !== area.top || now.bottom !== area.bottom || now.left !== area.left || now.right !== area.right);
   useEffect(() => {
     if (barsShown || (settled && !changed && !turning)) return;
-    const t = setTimeout(() => {
-      setArea(nowRef.current);
-      setSettled(true);
-      setTurning(false);
-    }, SETTLE_MS);
+    const t = setTimeout(
+      () => {
+        setArea(nowRef.current);
+        setSettled(true);
+        setTurning(false);
+      },
+      Math.max(SETTLE_MS, barsGone.current + BARS_GONE_MS - Date.now()),
+    );
     return () => clearTimeout(t);
   }, [barsShown, changed, settled, turning, now.height, now.top, now.bottom, now.left, now.right]);
   return { area: across ? now : area, settled, steady: settled && !turning && !(changed && !barsShown) };
@@ -206,6 +229,21 @@ const HTML_KEPT = 8;
 const READY_MS = 10_000;
 /** The page's process dying again this soon after it was started again: something is wrong with the book's page. */
 const DIED_AGAIN_MS = 10_000;
+/** Laid out for another width (the phone turned): the page is covered until it's drawn for this one, or this long at most. */
+const COVER_MS = 10_000;
+
+/**
+ * What a chunk is made for: to be shown (opening, a jump, the page waiting
+ * at its edge: made at once), ahead of the reader, or to measure a layout on
+ * (both in the background, in pieces with pauses).
+ */
+type ChunkUse = 'show' | 'ahead' | 'measure';
+
+/** Every origin passes the WebView's own check; onlyBookFiles decides (react-native-webview opens a URL that fails it in the browser). */
+const ORIGINS = ['*'];
+/** Only the page itself and the book's own files: nothing in a book navigates away. */
+const onlyBookFiles = (r: { url: string }) => r.url.startsWith('file:') || r.url.startsWith('about:');
+const isWide = (a: { width: number; height: number }) => a.width > a.height;
 
 /** The layout part of a key sent to the page (`<layout>#<content>`). */
 const layoutOf = (key: string) => key.slice(0, key.lastIndexOf('#'));
@@ -225,7 +263,35 @@ export const WebReader = memo(function WebReader(props: Props) {
   const [webKey, setWebKey] = useState(0);
   /** The page couldn't be shown: what to say. */
   const [broken, setBroken] = useState<string | null>(null);
-  const { fontScale } = useWindowDimensions();
+  const win = useWindowDimensions();
+  const { fontScale } = win;
+
+  // ---- covered while laid out for another width ----
+  /**
+   * The width (and mode) the text is laid out for, and the one it was last
+   * drawn for. When the phone turns, the WebView takes its new size at once
+   * but its text only comes in its new layout a while later (the screen tells
+   * the page, the page lays it out again): until then it's covered, rather
+   * than show the old layout cut off or in half the screen (the page hides it
+   * too, from the moment its size changes: page/main.ts). Also while the
+   * window has turned and the reader's own size hasn't caught up yet. Not for
+   * a change of height or of the insets (the system bars): the old layout
+   * still fits the screen then, near enough, for the moment it takes.
+   */
+  const geometry = `${mode}|${frame.width}`;
+  const geometryRef = useRef(geometry);
+  geometryRef.current = geometry;
+  const [drawnFor, setDrawnFor] = useState(geometry);
+  const turningOver = isWide(win) !== isWide(area);
+  const waitingFor = drawnFor !== geometry || turningOver ? `${geometry}|${turningOver}` : null;
+  /** A cover that has been up COVER_MS: taken off anyway (the page may never draw). */
+  const [gaveUp, setGaveUp] = useState<string | null>(null);
+  useEffect(() => {
+    if (!waitingFor) return;
+    const t = setTimeout(() => setGaveUp(waitingFor), COVER_MS);
+    return () => clearTimeout(t);
+  }, [waitingFor]);
+  const covered = !!waitingFor && gaveUp !== waitingFor;
 
   // The latest props, for the message handler (which is created once).
   const latest = useRef(props);
@@ -269,6 +335,8 @@ export const WebReader = memo(function WebReader(props: Props) {
   const pageKey = useRef('');
   const pageLayout = useRef('');
   const pageContent = useRef(0);
+  /** Layouts being measured on typical chunks of the book, and the page set-up each was asked of. */
+  const measuring = useRef(new Map<string, string>());
 
   // ---- chunks ----
   /** What the chunks' HTML depends on besides the book. */
@@ -276,11 +344,13 @@ export const WebReader = memo(function WebReader(props: Props) {
   const htmlCache = useRef(new Map<string, Promise<Chunk>>());
   /** Chunks drawn without pictures that weren't there yet (still converting): drawn again when the book is complete. */
   const missingPictures = useRef(new Set<number>());
-  const chunkOf = useCallback(
-    async (c: number, quiet = false): Promise<Chunk> => {
+  /** Chunks being made in the background that are now wanted on screen: made the rest of the way without pauses. */
+  const hurry = useRef(new Set<number>());
+  const makeChunk = useCallback(
+    async (c: number, use: ChunkUse): Promise<Chunk> => {
       // The chunk's blocks are kept in the book's memory while it's on the page: its text is read from there.
-      // `quiet`: a chunk only measured on; a damaged one fails here instead of stopping the book.
-      const blocks = await (quiet ? book.tryLoadChunk(c) : book.loadChunk(c));
+      // A chunk only measured on: a damaged one fails here instead of stopping the book.
+      const blocks = await (use === 'measure' ? book.tryLoadChunk(c) : book.loadChunk(c));
       const key = `${c}|${htmlKey}`;
       const cache = htmlCache.current;
       let p = cache.get(key);
@@ -289,14 +359,19 @@ export const WebReader = memo(function WebReader(props: Props) {
         cache.set(key, p);
         return p;
       }
+      // On screen: made at once (a pause there waits for the next frame: twice as long or more). In the
+      // background: its pictures taken out and its paragraphs hyphenated in pieces, the app answering between them.
+      const pause = use === 'show' ? undefined : breather(() => hurry.current.has(c));
       p = (async () => {
         const images = new Map<string, ImageInfo | null>();
-        await Promise.all(blocks.filter((b) => b.k === 'img' && b.s).map(async (b) => images.set(b.s!, await book.imageInfo(b.s!).catch(() => null))));
+        await Promise.all(blocks.filter((b) => b.k === 'img' && b.s).map(async (b) => images.set(b.s!, await book.imageInfo(b.s!, pause).catch(() => null))));
         if (!book.complete && [...images.values()].some((i) => !i)) {
           missingPictures.current.add(c);
           cache.delete(key);
         }
-        return { c, html: chunkHtml(blocks, book.chunkStart(c), latest.current.settings, lang, images), chars: book.chunkChars(c), joins: book.joins(c) };
+        const settings = latest.current.settings;
+        const html = pause ? await chunkHtmlSliced(blocks, book.chunkStart(c), settings, lang, images, pause) : chunkHtml(blocks, book.chunkStart(c), settings, lang, images);
+        return { c, html, chars: book.chunkChars(c), joins: book.joins(c) };
       })();
       cache.set(key, p);
       p.catch(() => cache.delete(key));
@@ -304,6 +379,18 @@ export const WebReader = memo(function WebReader(props: Props) {
       return p;
     },
     [book, htmlKey, lang],
+  );
+  const chunkOf = useCallback(
+    async (c: number, use: ChunkUse = 'show'): Promise<Chunk> => {
+      if (use !== 'show') return makeChunk(c, use);
+      hurry.current.add(c);
+      try {
+        return await makeChunk(c, use);
+      } finally {
+        hurry.current.delete(c);
+      }
+    },
+    [makeChunk],
   );
   const chunkOfRef = useRef(chunkOf);
   chunkOfRef.current = chunkOf;
@@ -322,14 +409,14 @@ export const WebReader = memo(function WebReader(props: Props) {
   const wanted = useRef(new Set<number>());
 
   const addChunks = useCallback(
-    async (cs: number[]) => {
+    async (cs: number[], use: 'show' | 'ahead') => {
       const g = gen.current;
       const fresh = cs.filter((c) => c >= 0 && !shown.current.has(c));
       for (const c of fresh) if (c >= book.chunkCount) wanted.current.add(c);
       const have = fresh.filter((c) => c < book.chunkCount);
       if (!have.length) return;
       setShown([...shown.current, ...have]);
-      const chunks = await Promise.all(have.map((c) => chunkOf(c)));
+      const chunks = await Promise.all(have.map((c) => chunkOf(c, use)));
       // The page was given other chunks meanwhile (a jump), or dropped some of these (read back from): not added.
       const still = chunks.filter((ch) => shown.current.has(ch.c));
       if (g !== gen.current || !still.length) return;
@@ -349,7 +436,8 @@ export const WebReader = memo(function WebReader(props: Props) {
       }
       const near: number[] = [];
       for (let x = c - AROUND; x <= c + AROUND; x++) if (x >= 0) near.push(x);
-      void addChunks(near);
+      // Ahead of the reader: made in the background (the page asks for one it reaches first: 'need').
+      void addChunks(near, 'ahead');
     },
     [addChunks, send, setShown],
   );
@@ -386,6 +474,16 @@ export const WebReader = memo(function WebReader(props: Props) {
   const sendMarksRef = useRef(sendMarks);
   sendMarksRef.current = sendMarks;
   useEffect(() => sendMarks(), [sendMarks]);
+  // The highlight tool's drag, as it goes: only itself is drawn again, not every mark.
+  const stroke = props.stroke;
+  useEffect(() => {
+    const out: PageMark[] = [];
+    for (const m of stroke ?? []) {
+      const d = looks(m.b);
+      if (d) out.push({ b: m.b, s: toDrawn(d, m.s), e: toDrawn(d, m.e), color: m.color });
+    }
+    send({ t: 'stroke', marks: out });
+  }, [stroke, looks, send]);
 
   /** Put the chunks around chunk `c` in the page and show the target (made once they're loaded: drawn offsets need the blocks). */
   const showIn = useCallback(
@@ -423,6 +521,8 @@ export const WebReader = memo(function WebReader(props: Props) {
       if (!ready.current) return;
       pageLayout.current = layoutKey;
       pageKey.current = `${layoutKey}#${pageContent.current}`;
+      // A measure asked of another set-up isn't answered if this one reached the page first (page/main.ts): asked again.
+      for (const [k, asked] of measuring.current) if (asked !== pageKey.current) measuring.current.delete(k);
       send({
         t: 'setup',
         key: pageKey.current,
@@ -509,7 +609,7 @@ export const WebReader = memo(function WebReader(props: Props) {
   const pageInfoRef = useRef(pageInfo);
   pageInfoRef.current = pageInfo;
   /** The last page numbers the page reported, and the layout they're in. */
-  const pagesMsg = useRef<{ m: Extract<FromPage, { t: 'pages' }>; layout: string } | null>(null);
+  const pagesMsg = useRef<{ m: PageCounts; layout: string } | null>(null);
   const numbersCache = useRef<{ key: string; numbers: PageNumbers } | null>(null);
   /** Kept for good: page N means the same place from now on, in this layout. */
   const keepSize = useCallback((key: string, per: number) => {
@@ -519,8 +619,6 @@ export const WebReader = memo(function WebReader(props: Props) {
     sizes.current.set(key, per);
     savePageSizes(bk.entry.id, sizes.current, bk.complete ? bk.estimatedWeight : undefined);
   }, []);
-  /** Layouts being measured on typical chunks of the book, and the page set-up each was asked of. */
-  const measuring = useRef(new Map<string, string>());
   /** Layouts whose typical chunks can't be read (a damaged chunk): measured on the chunks laid out instead. */
   const unmeasurable = useRef(new Set<string>());
   /** Ask the page to lay out chunks like most of the book out of sight, to measure layout `key` on (see typicalChunks). */
@@ -530,7 +628,7 @@ export const WebReader = memo(function WebReader(props: Props) {
       // Asked once per set-up: one asked of an older one (the page was set up again since) got no answer.
       if (measuring.current.get(key) === asked) return;
       measuring.current.set(key, asked);
-      void Promise.all(picks.map((c) => chunkOfRef.current(c, true))).then(
+      void Promise.all(picks.map((c) => chunkOfRef.current(c, 'measure'))).then(
         (chunks) => {
           // Drawn without pictures still to come (converting), they'd take fewer pages than they will:
           // measured again once the book is complete.
@@ -620,7 +718,8 @@ export const WebReader = memo(function WebReader(props: Props) {
     send({ t: 'bounds', count: book.chunkCount, complete: book.complete });
     const now = [...wanted.current].filter((c) => c < book.chunkCount);
     for (const c of now) wanted.current.delete(c);
-    if (now.length) void addChunks(now);
+    // (Asked for by the page at its edge: wanted on screen.)
+    if (now.length) void addChunks(now, 'show');
     updatePages();
     // Pictures that weren't there yet while converting: their chunks are drawn again, and
     // layouts measured without them are measured again.
@@ -690,20 +789,24 @@ export const WebReader = memo(function WebReader(props: Props) {
         toPageNumber.current = false;
         const layout = layoutOf(m.key);
         lastShown.current = { first: m.first, layout };
+        // All of it in this one go (one redraw a page turn): the place, and the page numbers of the page shown.
         setShownAt(pos);
         p.onPosition(pos, m.next ? toBook(m.next) : undefined, m.turned, m.lastPage && m.turned);
+        if (m.pages) {
+          pagesMsg.current = { m: m.pages, layout };
+          updatePagesRef.current();
+        }
         aroundRef.current(m.chunk);
-        if (layout === layoutKeyRef.current && readyKey.current !== layout) {
-          readyKey.current = layout;
-          p.onLayoutReady?.(layout);
+        if (layout === layoutKeyRef.current) {
+          // Drawn for the size it's shown at: nothing to cover any more.
+          setDrawnFor(geometryRef.current);
+          if (readyKey.current !== layout) {
+            readyKey.current = layout;
+            p.onLayoutReady?.(layout);
+          }
         }
         return;
       }
-      case 'pages':
-        // Sent right after 'shown', about the same page.
-        if (!lastShown.current) return;
-        pagesMsg.current = { m, layout: lastShown.current.layout };
-        return updatePages();
       case 'measured': {
         // Kept for the layout it was measured in, even if another has been set up since.
         const bk = p.book;
@@ -722,7 +825,7 @@ export const WebReader = memo(function WebReader(props: Props) {
         const lo = Math.min(...have);
         const hi = Math.max(...have);
         const next = m.chunks.filter((c) => c === lo - 1 || c === hi + 1);
-        return void (next.length && addChunksRef.current(next));
+        return void (next.length && addChunksRef.current(next, 'show'));
       }
       case 'tap':
         return p.onTap();
@@ -757,9 +860,13 @@ export const WebReader = memo(function WebReader(props: Props) {
         pageSelected.current = false;
         lastSelection.current = '';
         return p.onSelection?.(null);
+      // The highlight tool put away: the page may not have heard yet (its message is on the way), and
+      // a touch meanwhile marks nothing. A drag it was making is only taken off the screen.
       case 'markTap':
+        if (!p.marking) return;
         return p.onMarkTap?.(m.at ? toBook(m.at) : null);
       case 'markDrag':
+        if (!p.marking) return p.onMarkDrag?.(null, null, true);
         return p.onMarkDrag?.(m.from ? toBook(m.from) : null, m.to ? toBook(m.to) : null, m.done);
       case 'error':
         recordCrash('error', new Error(`Reader page: ${m.message}`));
@@ -778,8 +885,11 @@ export const WebReader = memo(function WebReader(props: Props) {
     setShown([]);
   }, [setShown]);
   // iPhone: the system can stop the page's process (memory); the same WebView loads it again.
+  /** Counted: the page loaded again has the same time to say it's ready as a new one. */
+  const [reloads, setReloads] = useState(0);
   const reloadPage = useCallback(() => {
     lost();
+    setReloads((n) => n + 1);
     web.current?.reload();
   }, [lost]);
   // Android: a WebView whose renderer process died can't be used again; a new one is made.
@@ -814,7 +924,7 @@ export const WebReader = memo(function WebReader(props: Props) {
       } else setBroken("The page didn't load.");
     }, READY_MS);
     return () => clearTimeout(t);
-  }, [webKey, inline, broken]);
+  }, [webKey, inline, broken, reloads]);
 
   const chapter = book.chapterAt(shownAt.b)?.t;
   const pct = book.fraction(shownAt) * 100;
@@ -822,20 +932,24 @@ export const WebReader = memo(function WebReader(props: Props) {
     ? `${pageInfo.last > pageInfo.page ? `${pageInfo.page}–${pageInfo.last}` : pageInfo.page} of ${pageInfo.approx ? '~' : ''}${pageInfo.total} · `
     : '';
 
+  const setWeb = useCallback((w: Pick<WebView, 'injectJavaScript' | 'reload'> | null) => {
+    web.current = w;
+  }, []);
+  // An opaque WKWebView is white until the page first draws (a white flash in dark themes): see-through,
+  // it shows the page's colour behind it instead.
+  const webStyle = useMemo(() => ({ flex: 1, backgroundColor: Platform.OS === 'ios' ? 'transparent' : theme.bg }), [theme.bg]);
+  const containerStyle = useMemo(() => ({ backgroundColor: theme.bg }), [theme.bg]);
   const webView = broken ? null : (
     <WebView
       key={webKey}
-      ref={(w) => {
-        web.current = w;
-      }}
+      ref={setWeb}
       source={source}
-      originWhitelist={['*']}
+      originWhitelist={ORIGINS}
       allowingReadAccessToURL={Paths.document.uri}
       allowFileAccess
       allowFileAccessFromFileURLs
       onMessage={onMessage}
-      // Only the page itself and the book's own files: nothing in a book navigates away.
-      onShouldStartLoadWithRequest={(r: { url: string }) => r.url.startsWith('file:') || r.url.startsWith('about:')}
+      onShouldStartLoadWithRequest={onlyBookFiles}
       onContentProcessDidTerminate={reloadPage}
       onRenderProcessGone={rendererGone}
       scrollEnabled={mode === 'scroll'}
@@ -851,10 +965,8 @@ export const WebReader = memo(function WebReader(props: Props) {
       contentInsetAdjustmentBehavior="never"
       automaticallyAdjustContentInsets={false}
       webviewDebuggingEnabled={__DEV__}
-      // An opaque WKWebView is white until the page first draws (a white flash in dark themes): see-through,
-      // it shows the page's colour behind it instead.
-      style={{ flex: 1, backgroundColor: Platform.OS === 'ios' ? 'transparent' : theme.bg }}
-      containerStyle={{ backgroundColor: theme.bg }}
+      style={webStyle}
+      containerStyle={containerStyle}
     />
   );
 
@@ -924,6 +1036,8 @@ export const WebReader = memo(function WebReader(props: Props) {
           </Text>
         </View>
       )}
+      {/* Laid out for another size: the page's colour until the text is drawn for this one (taps wait too). Not over a message. */}
+      {covered && !overlay ? <View testID="page-cover" style={[StyleSheet.absoluteFill, { backgroundColor: theme.bg }]} /> : null}
     </View>
   );
 });

@@ -1,10 +1,11 @@
-// The basics of a book's own CSS: italic, bold, small capitals, centred and
-// right-aligned text, hidden text. From linked style sheets, <style> and
-// style="". Fonts, sizes, colours and margins stay the reader's.
+// The basics of a book's own CSS: italic, bold, small capitals, raised and
+// lowered text, centred and right-aligned text, hidden text. From linked
+// style sheets, <style> and style="". Fonts, sizes, colours and margins stay
+// the reader's.
 
-import { describe, expect, it } from 'vitest';
-import { StyleSheet, parseDeclarations, styleOf } from '../src/engine/css';
-import { BOLD, type Block, ITALIC, SMALLCAPS, blockText } from '../src/engine/types';
+import { describe, expect, it, vi } from 'vitest';
+import { PathIndex, type StyledElement, StyleSheet, parseDeclarations, styleOf } from '../src/engine/css';
+import { BOLD, type Block, ITALIC, LINK, SMALLCAPS, SUB, SUP, blockText } from '../src/engine/types';
 import { ingestBytes, makeEpub, xhtml } from './helpers';
 
 const css = (sheet: string) => ({
@@ -78,6 +79,29 @@ describe('style sheets', () => {
     expect(b.map((x) => x.r)).toEqual([[['Small caps', SMALLCAPS]], ['Not'], [['Short', ITALIC | BOLD]]]);
   });
 
+  it('class and id names in any alphabet, and escaped ones', async () => {
+    const b = await blocksOf(
+      '<p class="başlık">Kalın</p><p><span class="İtalik">eğik</span> düz</p><p id="bölüm1">Orta</p><p class="a.b">küçük</p><p class="10">on</p>',
+      '.başlık { font-weight: bold } .İtalik { font-style: italic } #bölüm1 { text-align: center } .a\\.b { font-variant: small-caps } .\\31 0 { font-style: italic }',
+    );
+    expect(b.map((x) => [x.r, x.a])).toEqual([
+      [[['Kalın', BOLD]], undefined],
+      [[['eğik ', ITALIC], 'düz'], undefined],
+      [['Orta'], 'c'],
+      [[['küçük', SMALLCAPS]], undefined],
+      [[['on', ITALIC]], undefined],
+    ]);
+  });
+
+  it('vertical-align raises and lowers text a class styles (a note’s mark, a formula); baseline undoes <sup>', async () => {
+    const b = await blocksOf(
+      '<p>x<span class="up">2</span> H<span class="low">2</span>O <sup><span class="flat">not raised</span></sup></p><p>Word<a href="#n" class="fn">1</a></p><p id="n">Note.</p>',
+      '.up { vertical-align: super } .low { vertical-align: sub } .flat { vertical-align: baseline } .fn { vertical-align: top }',
+    );
+    expect(b[0].r).toEqual(['x', ['2', SUP], ' H', ['2', SUB], 'O not raised']);
+    expect(b[1].r).toEqual(['Word', ['1', SUP | LINK, 'OEBPS/a.xhtml#n']]);
+  });
+
   it('media queries, font faces and selectors it can’t match are left out', async () => {
     const b = await blocksOf(
       '<p class="k">Kindle only hides this</p><p class="first">First</p><p>x</p>',
@@ -114,24 +138,43 @@ describe('undoing inherited styles', () => {
 });
 
 describe('style sheets and sloppy markup', () => {
-  it('hundreds of unclosed elements and descendant rules cost about as little as no rules', async () => {
-    let css = '';
-    for (let i = 0; i < 200; i++) css += `.c${i} span { font-style: italic } div.x${i} p span.y { font-weight: bold }\n`;
-    const body = `<p>${Array.from({ length: 1000 }, (_, i) => `<span class="s">word${i} `).join('')}</p>`;
-    const time = async (sheet: string) => {
-      const t0 = performance.now();
-      await blocksOf(body, sheet);
-      return performance.now() - t0;
-    };
-    await time('');
-    // (Taken in turns, best of three: a busy machine slows both alike.)
-    let plain = Infinity;
-    let styled = Infinity;
-    for (let i = 0; i < 3; i++) {
-      plain = Math.min(plain, await time(''));
-      styled = Math.min(styled, await time(css));
+  // (Counted, not timed: a busy machine made a timing fail.)
+  let rules = '';
+  for (let i = 0; i < 200; i++) rules += `.c${i} span { font-style: italic } div.x${i} p span.y { font-weight: bold }\n`;
+
+  it('hundreds of unclosed elements and descendant rules: ancestors are looked at only for a rule that could match', () => {
+    const sheet = new StyleSheet();
+    sheet.add(rules);
+    const index = new PathIndex();
+    const path: StyledElement[] = [];
+    let looked = 0;
+    const counted = new Proxy(path, {
+      get(target, key, receiver) {
+        if (typeof key === 'string' && /^\d+$/.test(key)) looked++;
+        return Reflect.get(target, key, receiver);
+      },
+    });
+    // 1000 <span class="s"> left open, one inside the other, as the converter sees them.
+    for (let i = 0; i < 1000; i++) {
+      const e: StyledElement = { name: 'span', classes: ['s'] };
+      styleOf([sheet], e, counted, undefined, index);
+      path.push(e);
+      index.add(e, 1);
     }
-    // Matching every rule against every open element made this 50 times slower (and far worse under Hermes).
-    expect(styled).toBeLessThan(plain * 6 + 20);
+    // Matching every rule against the open elements looked at 64 of them for each of
+    // the 200 ".cN span" rules, for each element: twelve million in all (50 times slower).
+    expect(looked).toBeLessThan(1000);
+  });
+
+  it('the converter tells the matching what the open elements have', async () => {
+    const collect = vi.spyOn(StyleSheet.prototype, 'collect');
+    try {
+      const b = await blocksOf(`<p>${Array.from({ length: 1000 }, (_, i) => `<span class="s">word${i} `).join('')}</p>`, rules);
+      expect(blockText(b[0]).startsWith('word0 word1 ')).toBe(true);
+      expect(collect.mock.calls.length).toBeGreaterThan(1000);
+      expect(collect.mock.calls.every((c) => c[4] instanceof PathIndex)).toBe(true);
+    } finally {
+      collect.mockRestore();
+    }
   });
 });

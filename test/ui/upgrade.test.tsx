@@ -70,7 +70,7 @@ it('while the book is open it is read as it was; the new conversion takes over o
   a.start();
   // Converted, waiting in next/.
   await waitFor(() => expect(memfs.disk.has(`${dir}/next/manifest.json`)).toBe(true), { timeout: 15000 });
-  await new Promise((r) => setTimeout(r, 200));
+  await a.library.whenQueueIdle();
   expect(read<Manifest>('manifest.json').v).toBe(1);
   expect(read<Annotations>('annotations.json').highlights.find((h) => h.id === 'the')!.b).toBe(OLD_FIRST + 20);
   expect(a.library.getBook(ID)?.engine).not.toBe(ENGINE_VERSION);
@@ -93,7 +93,7 @@ it('killed in the middle of the swap: the next start finishes it before anything
   });
   a.start();
   await waitFor(() => expect(memfs.disk.has(`${dir}/next/commit.json`)).toBe(true), { timeout: 15000 });
-  await new Promise((r) => setTimeout(r, 100));
+  await a.library.whenQueueIdle();
   jest.restoreAllMocks();
   // Half done: new chunks, old manifest.
   expect(read<Manifest>('manifest.json').v).toBe(1);
@@ -123,7 +123,7 @@ it('the moved marks can’t be saved (a full phone): nothing changes, the space 
   jest.spyOn(require('react-native').Alert, 'alert').mockImplementation(() => {});
   a.start();
   await waitFor(() => expect(refused).toBeGreaterThan(0), { timeout: 15000 });
-  await new Promise((r) => setTimeout(r, 100));
+  await a.library.whenQueueIdle();
   jest.restoreAllMocks();
   // Nothing swapped: the old conversion, its marks where they were, on disk and on screen; no plan
   // left to be carried out later on marks that will have changed by then, and the new conversion's
@@ -177,7 +177,7 @@ it('a plan that couldn’t be carried out, nor removed, isn’t carried out at t
   jest.spyOn(require('react-native').Alert, 'alert').mockImplementation(() => {});
   a.start();
   await waitFor(() => expect(refused).toBeGreaterThan(0), { timeout: 15000 });
-  await new Promise((r) => setTimeout(r, 100));
+  await a.library.whenQueueIdle();
   jest.restoreAllMocks();
   expect(memfs.disk.has(`${dir}/next/commit.json`)).toBe(true);
   // The person reads on and highlights a word in the old conversion.
@@ -208,7 +208,7 @@ it('no room for a second conversion beside the first: not started (the book stay
   memfs.setFreeSpace(1000);
   try {
     a.start();
-    await new Promise((r) => setTimeout(r, 300));
+    await a.library.whenQueueIdle();
   } finally {
     memfs.setFreeSpace(undefined);
     jest.restoreAllMocks();
@@ -231,7 +231,7 @@ it('a picture that can’t be written: the new conversion isn’t put in place o
     return write.apply(this, args);
   });
   a.start();
-  await new Promise((r) => setTimeout(r, 1500));
+  await a.library.whenQueueIdle();
   jest.restoreAllMocks();
   expect(read<Manifest>('manifest.json').v).toBe(1);
   expect([...memfs.disk.keys()].filter((k) => k.startsWith(`${dir}/next`))).toEqual([]);
@@ -248,7 +248,7 @@ it('a backup being made: no new conversion is swapped in until it is done, so it
   // While a backup is being made, the book is closed, which would swap its new conversion in.
   await a.library.withoutSwaps(async () => {
     a.library.setBookOpen(ID, false);
-    await new Promise((r) => setTimeout(r, 1500));
+    await a.library.whenQueueIdle();
     expect(read<Manifest>('manifest.json').v).toBe(1);
     expect(a.library.getBook(ID)?.engine).not.toBe(ENGINE_VERSION);
   });
@@ -276,7 +276,7 @@ it('converting it again kept closing the app: it keeps the conversion it has and
   memfs.putFile(`${dir}/next/c/0.json`, strToU8('{"b":[]}'));
   const a = app();
   a.start();
-  await new Promise((r) => setTimeout(r, 300));
+  await a.library.whenQueueIdle();
   expect(a.library.getBook(ID)).toMatchObject({ status: 'ready', upgradeFailed: ENGINE_VERSION, attempts: undefined });
   expect(read<Manifest>('manifest.json').v).toBe(1);
   expect([...memfs.disk.keys()].filter((k) => k.startsWith(`${dir}/next`))).toEqual([]);
@@ -311,7 +311,7 @@ it('a book whose file an earlier version lost keeps its conversion and says so o
   const again = app();
   const alertAgain = jest.spyOn(require('react-native').Alert, 'alert').mockImplementation(() => {});
   again.start();
-  await new Promise((r) => setTimeout(r, 200));
+  await again.library.whenQueueIdle();
   expect(alertAgain).not.toHaveBeenCalled();
 
   // Picked again: the book gets its file back and then its new conversion, with its marks.

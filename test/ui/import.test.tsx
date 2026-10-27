@@ -17,6 +17,7 @@ jest.mock('@/engine/ingest', () => ({
 
 import { strToU8, zipSync } from 'fflate';
 import { Platform } from 'react-native';
+import { crashReport } from '@/lib/crashLog';
 import { getBook, importBooks, updateBook } from '@/lib/library';
 import * as memfs from './memfs';
 
@@ -111,6 +112,31 @@ it('a file the app isn’t let read (Expo Go on Android: "Missing READ permissio
   memfs.putForeign(uri, bytes(13), { denied: true });
   mockPicks.push([{ name: 'alice.epub', uri, size: 200_000 }]);
   expect(await importBooks()).toMatchObject({ added: 0, unreadable: ['alice.epub'], failed: [] });
+});
+
+it('why a picked file couldn’t be read is kept in the crash log', async () => {
+  const uri = 'content://com.android.providers.downloads.documents/document/locked-again';
+  memfs.putForeign(uri, bytes(29), { denied: true });
+  mockPicks.push([{ name: 'emma.epub', uri, size: 200_000 }]);
+  expect(await importBooks()).toMatchObject({ added: 0, unreadable: ['emma.epub'] });
+  expect(crashReport()).toContain("Missing 'READ' permission");
+});
+
+it('a book that can’t be put on the shelf for another reason isn’t blamed on free space, and why is in the crash log', async () => {
+  pick(['stuck.epub', bytes(23)]);
+  // Moving the app's own copy into the book's folder fails (not for space).
+  const move = memfs.File.prototype.moveSync;
+  const spy = jest.spyOn(memfs.File.prototype, 'moveSync').mockImplementation(function (this: memfs.File, ...args) {
+    if (this.uri.startsWith('mem://cache/incoming/')) throw new Error('java.io.IOException: I/O error');
+    return move.apply(this, args);
+  });
+  try {
+    expect(await importBooks()).toMatchObject({ added: 0, failed: [], unreadable: [], other: ['stuck.epub'] });
+  } finally {
+    spy.mockRestore();
+  }
+  expect(crashReport()).toContain('I/O error');
+  expect(cacheLeft()).toEqual([]);
 });
 
 it('no room for a book: it is refused before copying, as not enough space', async () => {

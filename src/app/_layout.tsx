@@ -17,6 +17,13 @@ import { noteLastCrash } from '@/ui/crashDialogs';
 import { DialogHost } from '@/ui/dialogs';
 import { useAppColors } from '@/ui/theme';
 
+/**
+ * A link straight into a screen (necreader://book/…) opens it over the
+ * library, so Back goes to the library instead of leaving the app. (`anchor`
+ * is Expo Router 58's name for what was `initialRouteName`.)
+ */
+export const unstable_settings = { anchor: 'index' };
+
 function savePending() {
   flushLibrary();
   flushStats();

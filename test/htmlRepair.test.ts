@@ -39,6 +39,10 @@ describe('implied end tags', () => {
     expect(kindsAndText('<table><tr><td><p>a<p>b</td><td>c</td></tr></table>')).toEqual(['p:a b · c']);
   });
 
+  it('the body ends a head left open, as browsers end it: the chapter isn’t skipped with the head', () => {
+    expect(kindsAndText('<html><head><title>T</title><body><h1>Bir</h1><p>Metin burada.</p></body></html>')).toEqual(['h1:Bir', 'p:Metin burada.']);
+  });
+
   it('stray end tags are dropped at once: thousands of them take no longer than the text', () => {
     const time = (n: number) => {
       let s = '<body>';
@@ -84,6 +88,10 @@ describe('entities', () => {
     expect(decodeEntities('&#150;x&#151; it&#146;s &#147;q&#148; &#128;5 &#x99;')).toBe('–x— it’s “q” €5 ™');
     expect(decodeEntities('&#0;&#xD800;&#x110000;')).toBe('\ufffd\ufffd\ufffd');
   });
+
+  it('a name every object has ("constructor", "toString") is no entity: it stays as written', () => {
+    expect(decodeEntities('a &constructor; b &toString; c')).toBe('a &constructor; b &toString; c');
+  });
 });
 
 describe('things that aren’t text', () => {
@@ -114,8 +122,13 @@ describe('markup that never ends', () => {
       return performance.now() - t0;
     };
     time(1000);
-    const small = time(5000);
-    const big = time(40_000);
+    // (Taken in turns, best of three: a busy machine slows both alike.)
+    let small = Infinity;
+    let big = Infinity;
+    for (let i = 0; i < 3; i++) {
+      small = Math.min(small, time(5000));
+      big = Math.min(big, time(40_000));
+    }
     expect(big / Math.max(small, 1)).toBeLessThan(20);
   });
 

@@ -3,11 +3,13 @@
 // within the block, so they survive font and layout changes.
 
 import { File, Paths } from 'expo-file-system';
-import { useSyncExternalStore } from 'react';
-import { Alert } from 'react-native';
 import type { HighlightColor } from '@/ui/theme';
+import { isRecord } from './guards';
 import { cutRange } from './highlightRanges';
+import { newId } from './ids';
+import { notice } from './notices';
 import { readJson, writeJson } from './storage';
+import { createStore } from './store';
 
 export interface Bookmark {
   id: string;
@@ -39,20 +41,18 @@ export interface Annotations {
 const EMPTY: Annotations = { bookmarks: [], highlights: [] };
 const cache = new Map<string, Annotations>();
 const byBlock = new Map<string, Map<number, Highlight[]>>();
-const listeners = new Set<() => void>();
+const store = createStore();
 /** Bumped on every change, for screens that show several books' annotations. */
 let version = 0;
 
 const file = (bookId: string) => new File(Paths.document, 'books', bookId, 'annotations.json');
 
-function newId() {
-  return Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
-}
+const isAnnotations = (v: unknown) => isRecord(v) && Array.isArray(v.highlights) && Array.isArray(v.bookmarks);
 
 export function getAnnotations(bookId: string): Annotations {
   let a = cache.get(bookId);
   if (!a) {
-    a = readJson<Annotations>(file(bookId)) ?? EMPTY;
+    a = readJson<Annotations>(file(bookId), isAnnotations) ?? EMPTY;
     cache.set(bookId, a);
   }
   return a;
@@ -99,31 +99,19 @@ function save(bookId: string, a: Annotations) {
   flushAnnotations();
   if (!write(bookId) && !warned) {
     warned = true;
-    Alert.alert('Couldn’t save', 'Your highlights and bookmarks couldn’t be saved, probably because the phone is out of space. They’re kept while the app is open and saved as soon as there’s room.');
+    notice('Couldn’t save', 'Your highlights and bookmarks couldn’t be saved, probably because the phone is out of space. They’re kept while the app is open and saved as soon as there’s room.');
   } else if (!unsaved.size) warned = false;
   version++;
-  listeners.forEach((l) => l());
+  store.notify();
 }
 
 /** Changes whenever any book's annotations change. */
 export function useAnnotationsVersion(): number {
-  return useSyncExternalStore(
-    (l) => {
-      listeners.add(l);
-      return () => listeners.delete(l);
-    },
-    () => version,
-  );
+  return store.useValue(() => version);
 }
 
 export function useAnnotations(bookId: string): Annotations {
-  return useSyncExternalStore(
-    (l) => {
-      listeners.add(l);
-      return () => listeners.delete(l);
-    },
-    () => getAnnotations(bookId),
-  );
+  return store.useValue(() => getAnnotations(bookId));
 }
 
 /** Highlights grouped by block, for drawing. Stable until annotations change. */
@@ -161,6 +149,19 @@ export function addHighlight(bookId: string, h: Omit<Highlight, 'id' | 'createdA
   const rest = cutRange(a.highlights, h.b, h.s, h.e, newId);
   save(bookId, { ...a, highlights: [...rest, full].sort(byPosition) });
   return full;
+}
+
+/**
+ * The highlights with a note that highlighting [s, e) of block `b` would
+ * take over whole (addHighlight), losing their notes: to ask first. One that
+ * keeps a part outside the range keeps its note there.
+ */
+export function notedHighlightsTakenOver(bookId: string, b: number, s: number, e: number): Highlight[] {
+  const noted = getAnnotations(bookId).highlights.filter((h) => h.b === b && !!h.note?.trim());
+  if (!noted.length) return [];
+  // A part left over keeps the highlight's id (and note); a right-hand part split off gets another.
+  const kept = new Set(cutRange(noted, b, s, e, () => '').map((h) => h.id));
+  return noted.filter((h) => !kept.has(h.id));
 }
 
 /** Remove highlighting from [s, e) of a block, trimming or splitting highlights. */
@@ -207,7 +208,7 @@ export function replaceAnnotations(bookId: string, a: Annotations) {
   cache.set(bookId, sorted);
   byBlock.delete(bookId);
   version++;
-  listeners.forEach((l) => l());
+  store.notify();
 }
 
 export function forgetAnnotations(bookId: string) {

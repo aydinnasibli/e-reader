@@ -126,7 +126,14 @@ async function open(win, { touch = true, dpr = 3 } = {}) {
   page.on('pageerror', (e) => console.log('PAGE ERROR', e.message));
   await page.addInitScript(() => {
     window.__out = [];
-    window.ReactNativeWebView = { postMessage: (d) => window.__out.push(JSON.parse(d)) };
+    // Page numbers come inside 'shown'; the checks below read them as their own message.
+    window.ReactNativeWebView = {
+      postMessage: (d) => {
+        const m = JSON.parse(d);
+        window.__out.push(m);
+        if (m.t === 'shown' && m.pages) window.__out.push({ t: 'pages', ...m.pages });
+      },
+    };
   });
   await page.goto('file://' + PAGE_FILE);
   const send = (m) => page.evaluate((m) => window.__nec(m), m);

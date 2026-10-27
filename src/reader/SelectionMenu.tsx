@@ -7,7 +7,8 @@ import { Pressable, StyleSheet, Text, View, useWindowDimensions } from 'react-na
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import type { PageCaret as Caret } from './web/protocol';
 
-const HEIGHT = 38;
+/** The bar's height: each item is a full-size target for the finger. */
+const HEIGHT = 44;
 /** The arrow is a square turned 45°, centred on the bar's edge; its tip sticks out this far. */
 const SIDE = 12;
 const ARROW = Math.ceil(SIDE * Math.SQRT1_2);

@@ -230,6 +230,24 @@ it('no room on the phone: says that, not that the file can’t be read', async (
   expect(tempLeft()).toEqual([]);
 });
 
+it('a book that can’t be put on the shelf for another reason says so, not that the phone is full', async () => {
+  // Moving the app's own copy into the book's folder fails (not for space).
+  const move = memfs.File.prototype.moveSync;
+  const spy = jest.spyOn(memfs.File.prototype, 'moveSync').mockImplementation(function (this: memfs.File, ...args) {
+    if (this.uri.startsWith('mem://cache/incoming/')) throw new Error('java.io.IOException: I/O error');
+    return move.apply(this, args);
+  });
+  try {
+    await openSharedFile(share(makeEpub('Stuck on the way in. '), 'stuck.epub'));
+  } finally {
+    spy.mockRestore();
+  }
+  expect(alert).toHaveBeenCalledWith('Couldn’t add this book', expect.stringMatching(/Crash log/));
+  expect(alert).not.toHaveBeenCalledWith('Not enough free space', expect.anything());
+  expect(mockPush).not.toHaveBeenCalled();
+  expect(tempLeft()).toEqual([]);
+});
+
 it('the library knows while a shared file is being added', async () => {
   // Every value the library screen is drawn with (the whole add finishes within one act()).
   const seen: boolean[] = [];

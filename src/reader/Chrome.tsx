@@ -10,6 +10,8 @@ import { Tap } from '@/ui/Tap';
 
 /** The tool labels share one row: they grow with the phone's text size only this far. */
 const LABEL_SCALE = 1.3;
+/** The least a button is to the finger, both ways (its own size: a hit area past its row isn't touched on Android). */
+const TARGET = 44;
 
 interface Props {
   visible: boolean;
@@ -73,7 +75,6 @@ export function Chrome(p: Props) {
     <Tap
       onPress={onPress}
       disabled={!onPress}
-      hitSlop={10}
       style={[styles.chapterBtn, { opacity: onPress ? 1 : 0.3 }]}
       accessibilityLabel={dir === 'prev' ? 'Previous chapter' : 'Next chapter'}>
       <Ionicons name={dir === 'prev' ? 'play-skip-back-outline' : 'play-skip-forward-outline'} size={20} color={theme.text} />
@@ -122,20 +123,18 @@ export function Chrome(p: Props) {
           thumbTintColor={Platform.OS === 'android' ? theme.accent : undefined}
         />
         <View style={styles.infoRow}>
-          {/* Where you are, as a button: tap to type a page to go to. */}
-          <Tap
-            onPress={p.onGoTo}
-            hitSlop={6}
-            accessibilityRole="button"
-            accessibilityLabel="Go to page"
-            style={[styles.goTo, { borderColor: theme.accent }]}>
-            <Ionicons name="keypad-outline" size={14} color={theme.accent} />
-            <Text numberOfLines={1} maxFontSizeMultiplier={LABEL_SCALE} style={[styles.small, styles.goToText, { color: theme.text }]}>
-              {p.pageLabel ? `${p.pageLabel(shown)} · ` : ''}
-              {(shown * 100).toFixed(1)}%
-            </Text>
+          {/* Where you are, as a button: tap to type a page to go to. The pill is drawn in a full-height target. */}
+          <Tap onPress={p.onGoTo} accessibilityRole="button" accessibilityLabel="Go to page" style={styles.goToTarget}>
+            <View style={[styles.goTo, { borderColor: theme.accent }]}>
+              <Ionicons name="keypad-outline" size={14} color={theme.accent} />
+              <Text numberOfLines={1} maxFontSizeMultiplier={LABEL_SCALE} style={[styles.small, styles.goToText, { color: theme.text }]}>
+                {p.pageLabel ? `${p.pageLabel(shown)} · ` : ''}
+                {(shown * 100).toFixed(1)}%
+              </Text>
+            </View>
           </Tap>
-          <Text numberOfLines={1} style={[styles.small, styles.info, { color: theme.muted }]}>
+          {/* Beside it on two lines where it fits, else on a line of its own: never cut short. */}
+          <Text numberOfLines={2} maxFontSizeMultiplier={LABEL_SCALE} style={[styles.small, styles.info, { color: theme.muted }]}>
             {(drag !== null && p.infoAt ? p.infoAt(drag) : p.info) ?? ''}
           </Text>
         </View>
@@ -168,21 +167,24 @@ const styles = StyleSheet.create({
     left: 0,
     right: 0,
     bottom: 0,
-    paddingTop: 12,
+    // (The chapter row's buttons are full-size targets: the title sits where it did with 12.)
+    paddingTop: 4,
     borderTopWidth: StyleSheet.hairlineWidth,
   },
   back: { padding: 8, width: 40 },
   title: { flex: 1, fontSize: 15, fontWeight: '600', textAlign: 'center' },
-  tools: { flexDirection: 'row', justifyContent: 'space-around', marginTop: 10, paddingTop: 10, borderTopWidth: StyleSheet.hairlineWidth },
+  tools: { flexDirection: 'row', justifyContent: 'space-around', marginTop: 2, paddingTop: 10, borderTopWidth: StyleSheet.hairlineWidth },
   tool: { alignItems: 'center', minWidth: 58, paddingVertical: 2 },
   toolLabel: { fontSize: 11, marginTop: 3 },
   chapterRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-  chapterBtn: { padding: 4 },
+  chapterBtn: { width: TARGET, height: TARGET, alignItems: 'center', justifyContent: 'center' },
   chapter: { flex: 1, fontSize: 14, fontWeight: '600', textAlign: 'center' },
+  goToTarget: { minHeight: TARGET, justifyContent: 'center' },
   goTo: { flexDirection: 'row', alignItems: 'center', gap: 6, borderWidth: 1, borderRadius: 14, paddingHorizontal: 10, paddingVertical: 5 },
   goToText: { fontWeight: '600' },
   slider: { alignSelf: 'stretch', height: 40 },
-  infoRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  infoRow: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'space-between', alignItems: 'center', columnGap: 12 },
   small: { fontSize: 12 },
-  info: { flexShrink: 1, textAlign: 'right', marginLeft: 12 },
+  // Two lines of about 25 characters beside the page pill; less room than that, and it goes under it.
+  info: { flexGrow: 1, flexShrink: 1, flexBasis: 150, textAlign: 'right' },
 });

@@ -8,8 +8,8 @@ import * as Clipboard from 'expo-clipboard';
 import * as Haptics from 'expo-haptics';
 import { useRef, useState } from 'react';
 import { Share } from 'react-native';
-import { addHighlight, clearHighlightRange, updateHighlight, useAnnotations } from '@/lib/annotations';
-import { confirmDeleteHighlight, hasNote } from '@/ui/confirm';
+import { addHighlight, clearHighlightRange, notedHighlightsTakenOver, updateHighlight, useAnnotations } from '@/lib/annotations';
+import { confirmDeleteHighlight, confirmHighlightOverNote, hasNote } from '@/ui/confirm';
 import { showPrompt } from '@/ui/dialogs';
 import type { HighlightColor } from '@/ui/theme';
 import type { LookupKind } from './LookupCard';
@@ -101,7 +101,10 @@ export function useSelection({ bookId, bookTitle, textOf, continues, chapterOf, 
     if (!rs.length) return;
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {});
     if (erase) return clearRanges(rs, () => setMadeIds([]));
-    setMadeIds(rs.map((r) => addHighlight(bookId, { ...r, color, text: textOf(r.b)!.slice(r.s, r.e), chapter: chapterOf(r.b) }).id));
+    const add = () => setMadeIds(rs.map((r) => addHighlight(bookId, { ...r, color, text: textOf(r.b)!.slice(r.s, r.e), chapter: chapterOf(r.b) }).id));
+    // A highlight with a note that the new one takes over whole goes, note and all: ask first, as erasing does.
+    if (rs.some((r) => notedHighlightsTakenOver(bookId, r.b, r.s, r.e).length)) confirmHighlightOverNote(add);
+    else add();
   };
 
   /** A tap with the highlight tool: the word highlighted, or the highlight tapped taken away, all of it (a drag takes away part). */

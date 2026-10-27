@@ -80,7 +80,6 @@
           "category": ["DEFAULT"],
           "data": [
             { "scheme": "content" },
-            { "scheme": "file" },
             { "mimeType": "application/epub+zip" },
             { "mimeType": "application/x-fictionbook+xml" },
             { "mimeType": "application/x-fictionbook" },

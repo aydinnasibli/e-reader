@@ -59,11 +59,11 @@ describe('windows-1254 (Turkish)', () => {
     expect(sniffEncoding(legacy(ru, 'koi8-r'))).toBe('koi8-r');
   });
 
-  it('an FB2 saying encoding="windows-1254" (or a label it doesn’t know) reads as Turkish', async () => {
+  it('an FB2 saying encoding="windows-1254" (or a label it doesn’t know, even one every object has) reads as Turkish', async () => {
     const fb2 = (label: string) =>
       `<?xml version="1.0" encoding="${label}"?><FictionBook><description><title-info><book-title>Yaşlı adam</book-title><lang>tr</lang></title-info></description>` +
       `<body><section><p>${TR}</p></section></body></FictionBook>`;
-    for (const label of ['windows-1254', 'ISO-8859-9', 'x-mac-turkish']) {
+    for (const label of ['windows-1254', 'ISO-8859-9', 'x-mac-turkish', 'constructor']) {
       const r = await ingestBytes(legacy(fb2(label), 'windows-1254'), 'k.fb2');
       expect(texts(r)[0]).toBe(TR);
       expect(r.manifest.title).toBe('Yaşlı adam');

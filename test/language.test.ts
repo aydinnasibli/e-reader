@@ -19,6 +19,8 @@ describe('language tags', () => {
     expect(normaliseLanguage('')).toBeUndefined();
     expect(normaliseLanguage('  ')).toBeUndefined();
     expect(normaliseLanguage('klingon')).toBeUndefined();
+    // (Not something every object has.)
+    expect(normaliseLanguage('constructor')).toBeUndefined();
   });
 });
 

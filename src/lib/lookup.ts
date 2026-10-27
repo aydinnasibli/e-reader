@@ -165,7 +165,8 @@ export function stripHtml(html: string): string {
       if (ENTITIES[e]) return ENTITIES[e];
       if (e[0] === '#') {
         const n = e[1] === 'x' || e[1] === 'X' ? parseInt(e.slice(2), 16) : parseInt(e.slice(1), 10);
-        return Number.isFinite(n) ? String.fromCodePoint(n) : m;
+        // Beyond the last code point (a damaged entry) String.fromCodePoint throws: kept as written.
+        return Number.isFinite(n) && n <= 0x10ffff ? String.fromCodePoint(n) : m;
       }
       return m;
     })
@@ -378,7 +379,17 @@ function askTdk(w: string, signal?: AbortSignal): Promise<Definition | null> {
       signal?.addEventListener('abort', stop);
       getJson(tdkUrl(w), IDENTIFIED, ctl.signal, TDK_TIMEOUT_MS)
         .then(
-          (json) => finish(() => resolve(parseTdk(json))),
+          (json) => {
+            // An answer that can't be read fails the look-up instead of leaving it waiting forever.
+            let def: Definition | null = null;
+            try {
+              def = parseTdk(json);
+            } catch (e) {
+              finish(() => reject(new LookupError(`TDK: ${String(e)}`)));
+              return;
+            }
+            finish(() => resolve(def));
+          },
           (e: unknown) => {
             if (signal?.aborted || ++failed === 2) finish(() => reject(e));
             // Failed before the second went out: it goes now.

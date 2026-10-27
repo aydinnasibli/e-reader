@@ -71,7 +71,7 @@ vi.mock('expo-file-system', () => {
   return { File, Directory, Paths: { document: { path: '/doc' } } };
 });
 
-const { chunkHtml, blockHtml, escapeHtml, joinsBefore } = await import('@/reader/web/html');
+const { chunkHtml, chunkHtmlSliced, blockHtml, escapeHtml, joinsBefore } = await import('@/reader/web/html');
 const { bookCss } = await import('@/reader/web/css');
 const { webFrame, charWidth, MEASURE } = await import('@/reader/web/frame');
 const { sanitizeSettings, THEMES } = await import('@/lib/settings');
@@ -111,8 +111,8 @@ describe('blocks as HTML', () => {
   it('marks up headings, styles and footnote links; escapes the text', () => {
     const plain = html.replace(/­/g, '');
     expect(plain).toContain('<h2 data-b="100" class="h2">Chapter &lt;One&gt; &amp; &quot;Two&quot;</h2>');
-    expect(plain).toContain('<span class="i">Ishmael</span>');
-    expect(html).toContain('<span class="sup a" data-link="n1">¹</span>');
+    // (The note mark straight after the word stays on the line with its last letter.)
+    expect(plain).toContain('<span class="i">Ishmae</span><span class="nw"><span class="i">l</span><span class="sup a" data-link="n1">¹</span></span>');
   });
 
   it('a paragraph stored in several blocks is one paragraph: each block an inline part of it', () => {
@@ -144,6 +144,32 @@ describe('blocks as HTML', () => {
   it('pictures keep their size (for a stable layout), their shape, never over twice it, as wide as the column and as high as a page at most', () => {
     expect(html).toContain('<img src="file:///img/c.png" width="300" height="400" style="width:min(100%,600px,calc(var(--page-h) * 0.75));height:auto"');
     expect(blockHtml({ k: 'img', s: 'x' }, 7, settings, 'en', null)).toBe('<div data-b="7" class="img"></div>');
+  });
+
+  it("a footnote mark never starts a line: the space before it doesn't break, one straight after a word stays with its last letter", () => {
+    const plain = { ...settings, hyphenate: false, indent: false };
+    const note = (r: Block['r']) => blockHtml({ k: 'p', r }, 0, plain, 'en');
+    // EPUB: a link; FB2: a superscript link. A space before it: drawn as one that doesn't break, one character for one.
+    const spaced: Block['r'] = ['as the sea ', ['[12]', 32, 'n12'], ' went on'];
+    expect(note(spaced)).toBe('<p data-b="0" class="p">as the sea <span class="a" data-link="n12">[12]</span> went on</p>');
+    expect(parseChunk(note(spaced))[0].text.length).toBe('as the sea [12] went on'.length);
+    expect(note(['the end ', ['3', 8]])).toContain('end <span class="sup">3</span>');
+    // Straight after a word (and its full stop): the stop and the mark on one line.
+    expect(note(['the end.', ['¹', 8 | 32, 'n1'], ' Then'])).toBe('<p data-b="0" class="p">the end<span class="nw">.<span class="sup a" data-link="n1">¹</span></span> Then</p>');
+    expect(note([['Ishmael', 2], ['²', 8 | 32, 'n2']])).toBe('<p data-b="0" class="p"><span class="i">Ishmae</span><span class="nw"><span class="i">l</span><span class="sup a" data-link="n2">²</span></span></p>');
+    // Not a mark: a long link, or an ordinary run, are left as they are.
+    expect(note(['see ', ['the next chapter', 32, 'ch2']])).toBe('<p data-b="0" class="p">see <span class="a" data-link="ch2">the next chapter</span></p>');
+    expect(note(['plain text'])).toBe('<p data-b="0" class="p">plain text</p>');
+  });
+
+  it('a chunk can be made a paragraph at a time, with a pause between them: the same HTML', async () => {
+    let pauses = 0;
+    const sliced = await chunkHtmlSliced(blocks, 100, settings, 'en', new Map([['cover.png', { uri: 'file:///img/c.png', width: 300, height: 400 }]]), async () => {
+      pauses++;
+    });
+    expect(sliced).toBe(html);
+    // The heading, the paragraph in two parts, the empty line, the rule, the picture.
+    expect(pauses).toBe(5);
   });
 });
 

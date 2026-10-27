@@ -12,7 +12,12 @@ const UTIS: Record<string, string> = {
   'application/json': 'public.json',
 };
 
-export async function shareTextFile(fileName: string, text: string, mimeType = 'text/markdown') {
+/**
+ * `textFallback: false`: only as a file, and throws if it can't be shared as
+ * one. For a backup: sent as message text it can't be picked to be restored,
+ * and a long one is cut off or fails on the way.
+ */
+export async function shareTextFile(fileName: string, text: string, mimeType = 'text/markdown', { textFallback = true }: { textFallback?: boolean } = {}) {
   try {
     if (await Sharing.isAvailableAsync()) {
       const f = new File(Paths.cache, fileName);
@@ -21,8 +26,10 @@ export async function shareTextFile(fileName: string, text: string, mimeType = '
       await Sharing.shareAsync(f.uri, { mimeType, UTI: UTIS[mimeType] ?? 'public.data', dialogTitle: fileName });
       return;
     }
-  } catch {
+  } catch (e) {
+    if (!textFallback) throw e;
     // fall back to sharing the text itself
   }
+  if (!textFallback) throw new Error('Sharing files isn’t available');
   await Share.share({ message: text, title: fileName });
 }

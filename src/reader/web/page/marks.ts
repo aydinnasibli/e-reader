@@ -2,15 +2,18 @@
 // background wrapped around it. (The CSS Custom Highlight API would leave the
 // page as it is, but WebKit draws no highlights over text that can't be
 // selected, and the book's text can't be: the page selects it itself,
-// selection.ts.)
+// selection.ts.) The highlight tool's drag is drawn the same way, in spans of
+// its own inside the marks' (over them), so moving it redraws only itself.
 
 import type { PageMark } from '../protocol';
 import { rangeIn } from './text';
 
 let current: PageMark[] = [];
+let stroke: PageMark[] = [];
 
-function unwrap() {
-  for (const span of [...document.querySelectorAll('span[data-mark]')]) {
+/** Take the spans of one layer (`data-mark` or `data-stroke`) off the text. */
+function unwrap(layer: 'mark' | 'stroke') {
+  for (const span of [...document.querySelectorAll(`span[data-${layer}]`)]) {
     const parent = span.parentNode!;
     while (span.firstChild) parent.insertBefore(span.firstChild, span);
     parent.removeChild(span);
@@ -19,7 +22,7 @@ function unwrap() {
 }
 
 /** Wrap the text of a range in spans with a background, node by node. */
-function wrap(r: Range, color: string) {
+function wrap(r: Range, color: string, layer: 'mark' | 'stroke') {
   const walker = document.createTreeWalker(r.commonAncestorContainer, NodeFilter.SHOW_TEXT);
   const nodes: Text[] = [];
   for (let n = walker.nextNode() as Text | null; n; n = walker.nextNode() as Text | null) if (r.intersectsNode(n)) nodes.push(n);
@@ -31,10 +34,17 @@ function wrap(r: Range, color: string) {
     const piece = s > 0 ? n.splitText(s) : n;
     if (e - s < piece.data.length) piece.splitText(e - s);
     const span = document.createElement('span');
-    span.dataset.mark = '1';
+    span.dataset[layer] = '1';
     span.style.backgroundColor = color;
     piece.parentNode!.insertBefore(span, piece);
     span.appendChild(piece);
+  }
+}
+
+function wrapAll(marks: PageMark[], layer: 'mark' | 'stroke') {
+  for (const m of marks) {
+    const r = m.e > m.s ? rangeIn(document, m.b, m.s, m.e) : null;
+    if (r) wrap(r, m.color, layer);
   }
 }
 
@@ -44,11 +54,18 @@ export function setMarks(marks: PageMark[]) {
   draw();
 }
 
-/** Draw the marks again (blocks were added to the page). */
+/** The highlight tool's drag as it goes (none: it's over); the marks under it stay as they are. */
+export function setStroke(marks: PageMark[]) {
+  if (!marks.length && !stroke.length) return;
+  stroke = marks;
+  unwrap('stroke');
+  wrapAll(stroke, 'stroke');
+}
+
+/** Draw the marks again (blocks were added to the page), the drag over them. */
 export function draw() {
-  unwrap();
-  for (const m of current) {
-    const r = m.e > m.s ? rangeIn(document, m.b, m.s, m.e) : null;
-    if (r) wrap(r, m.color);
-  }
+  unwrap('stroke');
+  unwrap('mark');
+  wrapAll(current, 'mark');
+  wrapAll(stroke, 'stroke');
 }

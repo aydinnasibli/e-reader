@@ -3,8 +3,9 @@
 // daily totals.
 
 import { File, Paths } from 'expo-file-system';
-import { useSyncExternalStore } from 'react';
+import { isRecord } from './guards';
 import { readJson, saveJson } from './storage';
+import { createStore } from './store';
 
 export interface BookStats {
   /** Time spent reading (breaks capped, background and flipping excluded). */
@@ -38,10 +39,16 @@ const MIN_RUN_MS = 20_000;
 const file = () => new File(Paths.document, 'stats.json');
 let stats: Stats | null = null;
 let saveTimer: ReturnType<typeof setTimeout> | null = null;
-const listeners = new Set<() => void>();
+const store = createStore();
 
 function get(): Stats {
-  if (!stats) stats = { days: {}, books: {}, ...(readJson<Partial<Stats>>(file()) ?? {}) };
+  if (!stats) {
+    const { days, books } = readJson<Record<string, unknown>>(file(), isRecord) ?? {};
+    stats = {
+      days: isRecord(days) ? (days as Stats['days']) : {},
+      books: isRecord(books) ? (books as Stats['books']) : {},
+    };
+  }
   return stats;
 }
 
@@ -62,7 +69,7 @@ export function recordReading(bookId: string, ms: number, sMs = 0, sChars = 0) {
     days: { ...s.days, [day]: (s.days[day] ?? 0) + ms },
     books: { ...s.books, [bookId]: { ...b, ms: b.ms + ms, sMs: (b.sMs ?? 0) + sMs, sChars: (b.sChars ?? 0) + sChars } },
   };
-  listeners.forEach((l) => l());
+  store.notify();
   if (!saveTimer) saveTimer = setTimeout(flushStats, 2000);
 }
 
@@ -74,13 +81,7 @@ export function flushStats() {
 }
 
 export function useStats(): Stats {
-  return useSyncExternalStore(
-    (l) => {
-      listeners.add(l);
-      return () => listeners.delete(l);
-    },
-    get,
-  );
+  return store.useValue(get);
 }
 
 export function getStats(): Readonly<Stats> {
@@ -90,7 +91,7 @@ export function getStats(): Readonly<Stats> {
 function replace(next: Stats) {
   stats = next;
   saveJson(file(), stats);
-  listeners.forEach((l) => l());
+  store.notify();
 }
 
 // Stats from a backup: per day and per book, the larger of the two, so that

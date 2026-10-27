@@ -146,7 +146,7 @@ describe('highlight tool', () => {
     await fireEvent.press(screen.getByLabelText('Highlight colour green'));
     // From the first word of P1 to the first word of P2, drawn as the finger moves.
     await emit({ t: 'markDrag', from: { b: 1, i: 1 }, to: { b: 2, i: 1 }, done: false });
-    expect(page().marks.some((m) => m.b === 1 && m.s === 0)).toBe(true);
+    expect(page().stroke.some((m) => m.b === 1 && m.s === 0)).toBe(true);
     expect(highlights()).toEqual([]);
     await emit({ t: 'markDrag', from: { b: 1, i: 1 }, to: { b: 2, i: 1 }, done: true });
     expect(highlights()).toEqual([
@@ -179,7 +179,7 @@ describe('tap zones', () => {
     setSettings({ seenTapZones: false });
     await openBook();
     expect(screen.getByText('Menu')).toBeTruthy();
-    expect(screen.getAllByText('Next page').length).toBe(1);
+    expect(screen.getAllByText('Next\npage').length).toBe(1);
     await fireEvent.press(screen.getByLabelText('Got it'));
     expect(screen.queryByText('Menu')).toBeNull();
   }, 30000);

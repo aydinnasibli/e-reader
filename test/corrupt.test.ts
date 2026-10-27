@@ -1,13 +1,19 @@
 // Damaged files: every byte-level corruption of a book must end in a manifest
 // or an error, quickly. Never a hang, a crash of the test runner, or a buffer
 // sized by a lie in the file (a ZIP entry claiming to be 4 GB).
+//
+// "Quickly" is counted, not timed (a busy machine made a timing fail): the
+// reads of the file, the pauses between slices of work and the output stay
+// within a small multiple of what the book itself takes. A loop over a size
+// the file lies about shows as thousands of them; a real hang as the test's
+// own time limit.
 
 import { strToU8, zipSync } from 'fflate';
 import { describe, expect, it } from 'vitest';
-import { sniffFormat } from '../src/engine/ingest';
+import { ingestBook, sniffFormat } from '../src/engine/ingest';
 import { BookError, CUT_SHORT } from '../src/engine/io';
 import { MAX_ENTRY_BYTES, ZipArchive } from '../src/engine/zip';
-import { MemorySource, enc, ingestBytes } from './helpers';
+import { MemorySink, MemorySource, enc, ingestBytes } from './helpers';
 import { buildMobi } from './mobiFixture';
 
 /** Small deterministic PRNG (mulberry32), so failures reproduce. */
@@ -58,21 +64,47 @@ function mutate(bytes: Uint8Array, r: () => number): Uint8Array {
 
 const CASES = 150;
 
+/** Convert `bytes`, counting the work: reads of the file (and bytes read), pauses, and bytes written. */
+async function counted(bytes: Uint8Array, name: string) {
+  const work = { reads: 0, read: 0, pauses: 0, written: 0 };
+  const file = new MemorySource(bytes);
+  const src = {
+    size: file.size,
+    read(offset: number, length: number) {
+      const b = file.read(offset, length);
+      work.reads++;
+      work.read += b.length;
+      return b;
+    },
+  };
+  const sink = new MemorySink();
+  const pause = async () => {
+    work.pauses++;
+  };
+  try {
+    await ingestBook({ src, sink, progress() {}, pause, fallbackTitle: name }, name);
+  } catch (e) {
+    expect(e).toBeInstanceOf(Error);
+  }
+  work.written = sink.bytesWritten;
+  for (const image of sink.images.values()) work.written += image.length;
+  return work;
+}
+
 describe.each([
   ['epub', epub, 'x.epub'],
   ['fb2', fb2, 'x.fb2'],
   ['mobi', mobi, 'x.mobi'],
 ])('corrupted %s', (_kind, make, name) => {
-  it(`${CASES} random corruptions all end in a book or an error`, async () => {
+  it(`${CASES} random corruptions all end in a book or an error, with little more work than the book takes`, async () => {
     const good = make();
+    const whole = await counted(good, name);
+    // Fifty times the book's own: a corruption takes a few times that at most, a loop over a lying size thousands.
+    const most = { reads: 50 * whole.reads, read: 50 * good.length, pauses: 50 * Math.max(1, whole.pauses), written: 50 * Math.max(whole.written, good.length) };
     const r = rng(name.length * 7919);
     for (let i = 0; i < CASES; i++) {
-      const bad = mutate(good, r);
-      const t0 = Date.now();
-      await ingestBytes(bad, name).catch((e) => {
-        expect(e).toBeInstanceOf(Error);
-      });
-      expect(Date.now() - t0, `case ${i} took too long`).toBeLessThan(3000);
+      const work = await counted(mutate(good, r), name);
+      for (const k of ['reads', 'read', 'pauses', 'written'] as const) expect(work[k], `case ${i}: ${k}`).toBeLessThanOrEqual(most[k]);
     }
   }, 120_000);
 });

@@ -29,12 +29,21 @@ const file = () => new File(Paths.document, 'storage.json');
 
 export type MigrationResult = 'current' | 'migrated' | 'failed' | 'newer';
 
+/** The app's own steps' result this start, once they have run (migrateOnce). */
+let done: MigrationResult | null = null;
+
 /**
  * Bring the saved files up to the current version. Files from before
  * versioning count as version 1. A step that throws is recorded in the crash
  * log and tried again next start; the steps before it stay done.
  */
 export function migrateStorage(steps: MigrationStep[] = STEPS, latest = STORAGE_VERSION): MigrationResult {
+  const result = run(steps, latest);
+  if (steps === STEPS && latest === STORAGE_VERSION) done = result;
+  return result;
+}
+
+function run(steps: MigrationStep[], latest: number): MigrationResult {
   const saved = readJson<{ version?: unknown }>(file());
   const start = typeof saved?.version === 'number' ? saved.version : 1;
   // Written by a newer build (the app was downgraded): leave them as they are.
@@ -53,4 +62,14 @@ export function migrateStorage(steps: MigrationStep[] = STEPS, latest = STORAGE_
     return 'failed';
   }
   return version === start ? 'current' : 'migrated';
+}
+
+/**
+ * migrateStorage() once per start, before the first file is read: the
+ * library calls it on loading, which can come first from "Open with" (a cold
+ * start by a shared file runs before the root layout); not again if it has run.
+ */
+export function migrateOnce(): MigrationResult {
+  done ??= migrateStorage();
+  return done;
 }

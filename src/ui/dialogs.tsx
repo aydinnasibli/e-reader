@@ -3,7 +3,7 @@
 
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { useEffect, useState } from 'react';
-import { Pressable, StyleSheet, Text, TextInput, View, useWindowDimensions } from 'react-native';
+import { Keyboard, Pressable, StyleSheet, Text, TextInput, View, useWindowDimensions } from 'react-native';
 import { Sheet } from './Sheet';
 import { useAppColors } from './theme';
 import { Tap } from '@/ui/Tap';
@@ -49,17 +49,27 @@ export function showPrompt(title: string, opts: PromptOptions) {
 export function DialogHost() {
   const c = useAppColors();
   const [dialog, setDialog] = useState<Dialog | null>(current);
+  // What the sheet shows: the open dialog, and once it's closed the one just
+  // closed, so that the sheet doesn't go blank (or a card at the top turn into
+  // an empty bottom sheet) while it animates away.
+  const [shown, setShown] = useState<Dialog | null>(current);
   const [text, setText] = useState('');
   useEffect(() => {
     listener = (d) => {
       setDialog(d);
+      if (d) setShown(d);
       if (d?.kind === 'prompt') setText(d.initial ?? '');
     };
     return () => {
       listener = null;
     };
   }, []);
-  const close = () => open(null);
+  const close = () => {
+    // The text box is still drawn while its card fades away; the keyboard goes now.
+    if (dialog?.kind === 'prompt') Keyboard.dismiss();
+    open(null);
+  };
+  // Only the open dialog acts: a second tap while it closes does nothing.
   const submit = () => {
     if (dialog?.kind !== 'prompt') return;
     const value = text.trim();
@@ -68,35 +78,38 @@ export function DialogHost() {
   };
   const colors = { bg: c.elevated, text: c.text, border: c.border };
   // A phone on its side has little room above the keyboard: a one-line box gets its buttons beside it.
-  const beside = useWindowDimensions().height < 500 && dialog?.kind === 'prompt' && !dialog.multiline;
+  const beside = useWindowDimensions().height < 500 && shown?.kind === 'prompt' && !shown.multiline;
 
   return (
-    <Sheet visible={!!dialog} onClose={close} colors={colors} title={dialog?.title} position={dialog?.kind === 'prompt' ? 'top' : 'bottom'} scroll>
-      {dialog?.kind === 'actions' &&
-        dialog.actions.map((a, i) => (
+    <Sheet visible={!!dialog} onClose={close} colors={colors} title={shown?.title} position={shown?.kind === 'prompt' ? 'top' : 'bottom'} scroll>
+      {shown?.kind === 'actions' &&
+        shown.actions.map((a, i) => (
           <Pressable
             key={i}
             style={({ pressed }) => [styles.row, pressed && { backgroundColor: c.chip }]}
+            // A toggle (a view, a collection the book is in) says whether it's on; its tick isn't read out.
+            accessibilityState={'checked' in a ? { checked: !!a.checked } : undefined}
             onPress={() => {
+              if (!dialog) return;
               close();
               // Let the sheet close before the action opens anything else.
               setTimeout(a.onPress, 250);
             }}>
-            {a.icon ? <Ionicons name={a.icon} size={21} color={a.destructive ? c.danger : c.text} style={styles.icon} /> : null}
+            {a.icon ? <Ionicons name={a.icon} size={21} color={a.destructive ? c.danger : c.text} style={styles.icon} aria-hidden /> : null}
             <Text style={[styles.label, { color: a.destructive ? c.danger : c.text }]}>{a.label}</Text>
-            {a.checked ? <Ionicons name="checkmark" size={20} color={c.accent} /> : null}
+            {a.checked ? <Ionicons name="checkmark" size={20} color={c.accent} aria-hidden /> : null}
           </Pressable>
         ))}
-      {dialog?.kind === 'prompt' && (
+      {shown?.kind === 'prompt' && (
         <View style={[styles.prompt, beside && styles.promptBeside]}>
           <TextInput
             autoFocus
             value={text}
             onChangeText={setText}
-            placeholder={dialog.placeholder}
+            placeholder={shown.placeholder}
             placeholderTextColor={c.secondary}
-            multiline={dialog.multiline}
-            style={[styles.input, dialog.multiline && styles.multiline, beside && styles.grow, { color: c.text, borderColor: c.border, backgroundColor: c.card }]}
+            multiline={shown.multiline}
+            style={[styles.input, shown.multiline && styles.multiline, beside && styles.grow, { color: c.text, borderColor: c.border, backgroundColor: c.card }]}
             onSubmitEditing={submit}
             returnKeyType="done"
           />
@@ -107,7 +120,7 @@ export function DialogHost() {
             <Tap
               onPress={submit}
               style={[styles.btn, beside && styles.btnBeside, { backgroundColor: c.accent }]}>
-              <Text style={{ color: c.accentText, fontSize: 16, fontWeight: '600' }}>{dialog.confirm ?? 'Save'}</Text>
+              <Text style={{ color: c.accentText, fontSize: 16, fontWeight: '600' }}>{shown.confirm ?? 'Save'}</Text>
             </Tap>
           </View>
         </View>

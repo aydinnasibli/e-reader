@@ -12,3 +12,9 @@ export function formatMinutes(min: number) {
   const r = m % 60;
   return r ? `${h} h ${r} min` : `${h} h`;
 }
+
+/** "1 highlight", "3 highlights". */
+export const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
+
+/** "27 October 2026", in the phone's language. */
+export const formatLongDate = (ms: number) => new Date(ms).toLocaleDateString(undefined, { day: 'numeric', month: 'long', year: 'numeric' });

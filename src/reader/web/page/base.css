@@ -32,12 +32,16 @@ html[data-mode='page'] #scroll { display: none; }
 .sup, .sub { line-height: 0; }
 .sup { vertical-align: super; }
 .sub { vertical-align: sub; }
+/* A footnote mark straight after a word stays on the line with it (html.ts). */
+.nw { white-space: nowrap; }
 /* A footnote mark is a small thing to tap: it answers a little around it too. */
 [data-link] { position: relative; }
 [data-link]::after { content: ''; position: absolute; inset: -12px -10px; }
 /* Turkish and Azeri: "fi" drawn as one letter would hide the dot of the i. */
 :lang(tr), :lang(az) { font-variant-ligatures: no-common-ligatures; }
 .end { text-align: center; padding: 32px 0; font-size: 13px; display: none; }
+/* Laid out for another width (the phone turned): hidden until it's laid out for this one (main.ts). */
+html.relayout #viewport, html.relayout #scroll { visibility: hidden; }
 /* The line read, marked for a moment after the layout changed (flash.ts): over the text, out of its way. */
 html[data-mode='scroll'] #scroll { position: relative; }
 .flash { position: absolute; pointer-events: none; -webkit-user-select: none; user-select: none; background: var(--flash); border-radius: 3px; transition: opacity 0.6s ease-out; }

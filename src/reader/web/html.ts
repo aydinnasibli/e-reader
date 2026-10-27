@@ -6,7 +6,7 @@
 // blocks, `c`): they're drawn as one paragraph, a wrapper (data-w) holding
 // each block as an inline part, so its lines run on where the blocks meet.
 
-import { BOLD, type Block, ITALIC, MONO, type Run, SMALLCAPS, SUB, SUP, runLink, runStyle, runText } from '@/engine/types';
+import { BOLD, type Block, ITALIC, MONO, type Run, SMALLCAPS, SUB, SUP, makeRun, runLink, runStyle, runText } from '@/engine/types';
 import { CHUNK_BLOCKS, CHUNK_CHARS } from '@/engine/writer';
 import type { ReaderSettings } from '@/lib/settings';
 import type { ImageInfo } from '../book';
@@ -40,7 +40,43 @@ function classes(b: Block, continued: boolean) {
   return blockClass(b) + (continued ? ' c' : '') + (b.a === 'c' ? ' ac' : b.a === 'r' ? ' ar' : '');
 }
 
-const runsHtml = (blk: Block, settings: ReaderSettings, lang: string | undefined) => drawn(blk, lookOf(blk, settings, lang)).runs.map(runHtml).join('');
+/** A footnote mark ("¹", "[12]", "*"): a superscript or a link, short and without spaces. */
+const isNoteMark = (r: Run) => {
+  const t = runText(r);
+  return (!!(runStyle(r) & SUP) || !!runLink(r)) && t.length > 0 && t.length <= 8 && !/\s/.test(t);
+};
+const withText = (r: Run, text: string): Run => makeRun(text, runStyle(r), runLink(r));
+/** The last letter (or mark) of a text, with any accents on it. */
+const LAST = /[^\s\u00ad]\p{M}*$/u;
+
+/**
+ * A block's drawn runs as HTML. A footnote mark never starts a line: the
+ * space before it is drawn as one that doesn't break (U+00A0: one character
+ * for one, so offsets stay as they are), and one straight after a word
+ * ("word.[1]") is kept on the line with the word's last letter.
+ */
+function runsHtml(blk: Block, settings: ReaderSettings, lang: string | undefined): string {
+  const runs = drawn(blk, lookOf(blk, settings, lang)).runs;
+  let out = '';
+  for (let k = 0; k < runs.length; k++) {
+    const r = runs[k];
+    const next = runs[k + 1];
+    const t = runText(r);
+    if (!next || !isNoteMark(next) || isNoteMark(r)) out += runHtml(r);
+    else if (t.endsWith(' ')) out += runHtml(withText(r, `${t.slice(0, -1)}\u00a0`));
+    else {
+      const last = LAST.exec(t)?.[0];
+      if (!last) {
+        out += runHtml(r);
+        continue;
+      }
+      const head = t.slice(0, t.length - last.length);
+      out += `${head ? runHtml(withText(r, head)) : ''}<span class="nw">${runHtml(withText(r, last))}${runHtml(next)}</span>`;
+      k++;
+    }
+  }
+  return out;
+}
 
 /** One block as HTML. `image`: its picture, for an image block (null: none to show). */
 export function blockHtml(blk: Block, b: number, settings: ReaderSettings, lang: string | undefined, image?: ImageInfo | null): string {
@@ -66,17 +102,39 @@ function paragraphHtml(blocks: Block[], first: number, settings: ReaderSettings,
 
 const isText = (b: Block) => b.k === 'p' || b.k === 'q' || b.k === 'v' || b.k === 'pre' || b.k === 'h';
 
-/** A chunk's blocks (the first one is block `first`), with the pictures of its image blocks. */
-export function chunkHtml(blocks: Block[], first: number, settings: ReaderSettings, lang: string | undefined, images: Map<string, ImageInfo | null>): string {
-  let out = '';
+/** A chunk's blocks as HTML, a paragraph (or a paragraph in parts) at a time. */
+function* chunkPieces(blocks: Block[], first: number, settings: ReaderSettings, lang: string | undefined, images: Map<string, ImageInfo | null>) {
   for (let k = 0; k < blocks.length; ) {
     const blk = blocks[k];
     let end = k + 1;
     if (isText(blk)) while (end < blocks.length && blocks[end].c && blocks[end].k === blk.k) end++;
     // A paragraph in parts, or the rest of one from the chunk before (which the page may join to it).
-    if (end - k > 1 || (k === 0 && blk.c && isText(blk))) out += paragraphHtml(blocks.slice(k, end), first + k, settings, lang);
-    else out += blockHtml(blk, first + k, settings, lang, blk.s ? images.get(blk.s) : undefined);
+    if (end - k > 1 || (k === 0 && blk.c && isText(blk))) yield paragraphHtml(blocks.slice(k, end), first + k, settings, lang);
+    else yield blockHtml(blk, first + k, settings, lang, blk.s ? images.get(blk.s) : undefined);
     k = end;
+  }
+}
+
+/** A chunk's blocks (the first one is block `first`), with the pictures of its image blocks. */
+export function chunkHtml(blocks: Block[], first: number, settings: ReaderSettings, lang: string | undefined, images: Map<string, ImageInfo | null>): string {
+  let out = '';
+  for (const piece of chunkPieces(blocks, first, settings, lang, images)) out += piece;
+  return out;
+}
+
+/** The same, made a paragraph at a time with `pause` awaited between them: a long chunk doesn't hold up the app. */
+export async function chunkHtmlSliced(
+  blocks: Block[],
+  first: number,
+  settings: ReaderSettings,
+  lang: string | undefined,
+  images: Map<string, ImageInfo | null>,
+  pause: () => Promise<void>,
+): Promise<string> {
+  let out = '';
+  for (const piece of chunkPieces(blocks, first, settings, lang, images)) {
+    out += piece;
+    await pause();
   }
   return out;
 }

@@ -58,14 +58,28 @@ describe('tables', () => {
     expect(boldText(blocks[0]).trim()).toBe('Head');
   });
 
-  it('a huge table converts quickly, one block per row', async () => {
-    const rows = Array.from({ length: 20_000 }, (_, i) => `<tr><td>r${i}</td><td>v${i}</td><td>w${i}</td></tr>`).join('\n');
-    const t0 = Date.now();
-    const { blocks } = await ingestBytes(chapter(`<table>${rows}</table>`), 'h.epub');
-    expect(blocks).toHaveLength(20_000);
-    expect(blockText(blocks[19_999])).toBe('r19999 · v19999 · w19999');
-    expect(Date.now() - t0).toBeLessThan(5000);
-  });
+  it('a huge table converts in time linear in its rows, one block per row', async () => {
+    const table = (n: number) => chapter(`<table>${Array.from({ length: n }, (_, i) => `<tr><td>r${i}</td><td>v${i}</td><td>w${i}</td></tr>`).join('\n')}</table>`);
+    const small = table(1500);
+    const big = table(6000);
+    const time = async (bytes: Uint8Array) => {
+      const t0 = performance.now();
+      await ingestBytes(bytes, 'h.epub');
+      return performance.now() - t0;
+    };
+    const { blocks } = await ingestBytes(big, 'h.epub');
+    expect(blocks).toHaveLength(6000);
+    expect(blockText(blocks[5999])).toBe('r5999 · v5999 · w5999');
+    // (Compared, not timed against a clock: taken in turns, best of three, so a busy machine slows both alike.)
+    let s = Infinity;
+    let b = Infinity;
+    for (let i = 0; i < 3; i++) {
+      s = Math.min(s, await time(small));
+      b = Math.min(b, await time(big));
+    }
+    // Linear (×4), not quadratic (×16).
+    expect(b / Math.max(s, 1)).toBeLessThan(10);
+  }, 60_000);
 });
 
 const ENC = (algorithm: string, uri: string) =>

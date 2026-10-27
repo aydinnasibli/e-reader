@@ -8,9 +8,10 @@ import { HtmlToBlocks } from './html';
 import { BookError, DRM_MESSAGE, type IngestContext } from './io';
 import { bookLanguage } from './language';
 import { type MarkupHandler, MarkupTokenizer } from './markup';
-import { ENGINE_VERSION, type ImageRef, type Manifest, type Position, type TocEntry } from './types';
-import { pictureSize } from './picture';
-import { BookWriter, cleanText, pictureLines } from './writer';
+import { LinkTargets } from './links';
+import { ENGINE_VERSION, type ImageRef, type Manifest, type TocEntry, record } from './types';
+import { PictureProbe } from './picture';
+import { BookWriter, cleanText } from './writer';
 import type { ZipArchive } from './zip';
 
 interface ManifestItem {
@@ -91,21 +92,59 @@ function readContainer(zip: ZipArchive): string {
   throw new BookError('This EPUB is damaged: the list of its chapters is missing.');
 }
 
+/** A creator's roles, as MARC relator codes ('aut', 'trl', 'ill'...). */
+interface Creator {
+  name: string;
+  id: string;
+  roles: string[];
+}
+
+/** The role an element gives itself: EPUB 2's opf:role (under any prefix). */
+function roleAttr(attrs: Record<string, string>): string {
+  for (const k in attrs) if (k === 'role' || k.endsWith(':role')) return attrs[k].trim().toLowerCase();
+  return '';
+}
+
+/**
+ * The book's authors. Translators, illustrators and editors are creators
+ * too: when any creator is named an author ('aut'), only authors and
+ * creators given no role are; otherwise all of them are.
+ */
+function authorsOf(creators: Creator[], refined: Map<string, string[]>): string[] {
+  for (const c of creators) if (c.id) c.roles.push(...(refined.get(c.id) ?? []));
+  if (!creators.some((c) => c.roles.includes('aut'))) return creators.map((c) => c.name);
+  return creators.filter((c) => !c.roles.length || c.roles.includes('aut')).map((c) => c.name);
+}
+
 function readPackage(zip: ZipArchive, opfPath: string): Package {
   const entry = zip.find(opfPath);
   if (!entry) throw new BookError('This EPUB is damaged: the list of its chapters is missing.');
   const pkg: Package = { title: '', authors: [], lang: '', items: new Map(), spine: [], tocId: '', coverId: '', guideCover: '' };
-  let capture: 'title' | 'creator' | 'language' | null = null;
+  // The element whose text is being read: a title, creator or language, or
+  // an EPUB 3 <meta> giving the role of the creator with the id `refines`.
+  let capture: 'title' | 'creator' | 'language' | 'meta' | null = null;
   let buf = '';
   let inMetadata = false;
+  const creators: Creator[] = [];
+  let creator: Creator | null = null;
+  let refines = '';
+  const refined = new Map<string, string[]>();
   parseXml(zip.read(entry), {
     open(name, attrs) {
       if (name === 'metadata') inMetadata = true;
       else if (inMetadata && (name === 'title' || name === 'creator' || name === 'language')) {
         capture = name;
         buf = '';
+        if (name === 'creator') {
+          const role = roleAttr(attrs);
+          creator = { name: '', id: attrs.id ?? '', roles: role ? [role] : [] };
+        }
       } else if (name === 'meta' && attrs.name === 'cover' && attrs.content) pkg.coverId = attrs.content;
-      else if (name === 'item' && attrs.id && attrs.href) {
+      else if (inMetadata && name === 'meta' && attrs.property === 'role' && attrs.refines) {
+        capture = 'meta';
+        buf = '';
+        refines = attrs.refines.trim().replace(/^#/, '');
+      } else if (name === 'item' && attrs.id && attrs.href) {
         pkg.items.set(attrs.id, {
           id: attrs.id,
           href: resolvePath(opfPath, attrs.href),
@@ -122,8 +161,9 @@ function readPackage(zip: ZipArchive, opfPath: string): Package {
         const v = cleanText(buf.replace(/\s+/g, ' ').trim());
         if (v) {
           if (capture === 'title' && !pkg.title) pkg.title = v;
-          else if (capture === 'creator') pkg.authors.push(v);
+          else if (capture === 'creator' && creator) creators.push({ ...creator, name: v });
           else if (capture === 'language' && !pkg.lang) pkg.lang = v;
+          else if (capture === 'meta') refined.set(refines, [...(refined.get(refines) ?? []), v.toLowerCase()]);
         }
         capture = null;
       }
@@ -132,6 +172,7 @@ function readPackage(zip: ZipArchive, opfPath: string): Package {
       if (capture) buf += t;
     },
   });
+  pkg.authors = authorsOf(creators, refined);
   return pkg;
 }
 
@@ -372,8 +413,6 @@ function findCover(zip: ZipArchive, pkg: Package, opfPath: string): { path: stri
   return null;
 }
 
-/** Bytes of pictures read for their sizes between two pauses. */
-const PROBE_BUDGET = 64 * 1024;
 /** A note is shorter than this, in blocks; a link to more is to a chapter or section. */
 const NOTE_MAX_BLOCKS = 20;
 
@@ -405,7 +444,7 @@ export async function ingestEpub(ctx: IngestContext, zip: ZipArchive): Promise<M
   await ctx.pause();
 
   const w = new BookWriter(ctx.sink);
-  const images: Record<string, ImageRef> = {};
+  const images = record<ImageRef>();
 
   let cover: string | undefined;
   let coverFile: string | undefined;
@@ -430,44 +469,29 @@ export async function ingestEpub(ctx: IngestContext, zip: ZipArchive): Promise<M
 
   const fileStart = new Map<string, number>();
   const fileEnd = new Map<string, number>();
-  // Where each element id is (first time seen), for the contents and for links back:
-  // its block, and its exact place when it's inside the text (a note's mark).
-  const idBlock = new Map<string, number>();
-  const idPlace = new Map<string, Position>();
-  const blockOf = (key: string) => idPlace.get(key)?.b ?? idBlock.get(key);
+  // Where each element id is, for the contents and for links back.
+  const targets = new LinkTargets();
   // Footnotes: every internal link seen so far, and where linked ids start/end.
   const linkKeys = new Set<string>();
-  const notes: Record<string, [number, number]> = {};
+  const notes = record<[number, number]>();
   // What tells a note from a place to go to: a link reading like a note's
   // mark, or a target saying it's a note; and a target that's a heading.
   const markedLinks = new Set<string>();
   const noteTargets = new Set<string>();
   const placeTargets = new Set<string>();
 
-  // Each picture's page space, from the size its file's first bytes give. That
-  // means reading (and inflating) them in the middle of a slice of text, so
-  // only so much is read between two pauses; past that a picture counts as
-  // an average one. (A chapter of 300 photos would otherwise freeze the app.)
+  // Each picture's page space, from the size its file's first bytes give.
   const imageSpace = new Map<string, number | undefined>();
-  let probeBudget = PROBE_BUDGET;
+  const probe = new PictureProbe();
   const imageKey = (path: string): string | null => {
     if (!images[path]) {
       const ie = zip.find(path);
       if (!ie) return null;
       images[path] = { zip: [ie.offset, ie.compressedSize, ie.size, ie.method], ext: extOf(path) };
       let lines: number | undefined;
-      if (probeBudget > 0) {
+      if (probe.open) {
         try {
-          const head = zip.head(ie, 4 * 1024);
-          probeBudget -= head.length;
-          let size = pictureSize(head);
-          // A JPEG's size can come after its metadata: a little further, if there's room.
-          if (!size && head[0] === 0xff && ie.size > head.length && probeBudget >= 16 * 1024) {
-            const more = zip.head(ie, 16 * 1024);
-            probeBudget -= more.length;
-            size = pictureSize(more);
-          }
-          if (size) lines = pictureLines(size[0], size[1]);
+          lines = probe.lines(zip.head(ie, 4 * 1024), ie.size, (n) => zip.head(ie, n));
         } catch {
           // damaged: counted as an average picture
         }
@@ -501,7 +525,7 @@ export async function ingestEpub(ctx: IngestContext, zip: ZipArchive): Promise<M
     if (!entry) continue;
     w.chapterBreak();
     if (!fileStart.has(item.href)) fileStart.set(item.href, w.blockIndex);
-    probeBudget = PROBE_BUDGET;
+    probe.reset();
     if (kind === 'picture') {
       // A page that is only a picture (comics, plates, some covers).
       const key = imageKey(item.href);
@@ -519,12 +543,7 @@ export async function ingestEpub(ctx: IngestContext, zip: ZipArchive): Promise<M
         linkKeys.add(key);
         return key;
       },
-      onId: (id, b, place) => {
-        const key = `${item.href}#${id}`;
-        if (idBlock.has(key)) return;
-        idBlock.set(key, b);
-        if (place) idPlace.set(key, place);
-      },
+      onId: (id, b, place) => targets.see(`${item.href}#${id}`, b, place),
       onIdStart: (id, b, kind) => {
         const key = `${item.href}#${id}`;
         if (kind === 'note') noteTargets.add(key);
@@ -572,7 +591,7 @@ export async function ingestEpub(ctx: IngestContext, zip: ZipArchive): Promise<M
       async (f) => {
         ctx.progress((doneBytes + f * entry.compressedSize) / totalBytes);
         await ctx.pause();
-        probeBudget = PROBE_BUDGET;
+        probe.reset();
       },
     );
     tok.feed(decoder.end());
@@ -588,19 +607,12 @@ export async function ingestEpub(ctx: IngestContext, zip: ZipArchive): Promise<M
   // And a link that neither reads like a note's mark nor points at a note
   // (a contents page, "see chapter 3"), or that points at a heading or at
   // something longer than a note, is a place to go to too.
-  const anchors: Record<string, number> = {};
-  const anchorOffsets: Record<string, number> = {};
-  const anchor = (key: string, b: number) => {
-    const place = idPlace.get(key);
-    anchors[key] = b;
-    if (place?.b === b && place.o > 0) anchorOffsets[key] = place.o;
-  };
   for (const key of linkKeys) {
     const n = notes[key];
     if (n && !placeTargets.has(key) && n[1] - n[0] <= NOTE_MAX_BLOCKS && (markedLinks.has(key) || noteTargets.has(key))) continue;
     if (n) {
       delete notes[key];
-      anchor(key, blockOf(key) ?? n[0]);
+      targets.anchor(key, targets.blockOf(key) ?? n[0]);
       continue;
     }
     if (!key.includes('#')) {
@@ -608,19 +620,18 @@ export async function ingestEpub(ctx: IngestContext, zip: ZipArchive): Promise<M
       if (b === undefined) continue;
       const end = fileEnd.get(key) ?? b + 1;
       if (end - b <= NOTE_FILE_BLOCKS && markedLinks.has(key)) notes[key] = [b, Math.max(end, b + 1)];
-      else anchor(key, b);
+      else targets.anchor(key, b);
       continue;
     }
     // A link to something seen before it: typically a note's way back to where it was referenced.
-    const b = blockOf(key);
-    if (b !== undefined && b < w.totalBlocks) anchor(key, b);
+    targets.anchorAtId(key, w.totalBlocks);
   }
 
   let toc: TocEntry[] = [];
   for (const t of rawToc) {
     const hash = t.href.indexOf('#');
     const path = canon(hash >= 0 ? t.href.slice(0, hash) : t.href);
-    const b = hash >= 0 ? (blockOf(`${path}#${fragmentOf(t.href)}`) ?? fileStart.get(path)) : fileStart.get(path);
+    const b = hash >= 0 ? (targets.blockOf(`${path}#${fragmentOf(t.href)}`) ?? fileStart.get(path)) : fileStart.get(path);
     if (b !== undefined && b < w.totalBlocks) toc.push({ t: t.t, l: t.l, b });
   }
   if (!toc.length) toc = w.headings;
@@ -640,7 +651,7 @@ export async function ingestEpub(ctx: IngestContext, zip: ZipArchive): Promise<M
     images,
     cover,
     notes,
-    anchors,
-    anchorOffsets,
+    anchors: targets.anchors,
+    anchorOffsets: targets.anchorOffsets,
   };
 }

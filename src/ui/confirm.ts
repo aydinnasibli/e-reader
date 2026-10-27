@@ -4,8 +4,7 @@
 import { Alert } from 'react-native';
 import { type Highlight, getAnnotations } from '@/lib/annotations';
 import { type BookEntry, deleteBook } from '@/lib/library';
-
-const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
+import { plural } from '@/ui/format';
 
 /** What else goes when a book is removed, e.g. "its 3 highlights and 1 bookmark". */
 export function annotationsSummary(bookId: string): string | null {
@@ -35,6 +34,14 @@ export function confirmRemoveBook(book: BookEntry, leave?: () => void) {
 }
 
 export const hasNote = (h: Pick<Highlight, 'note'>) => !!h.note?.trim();
+
+/** A new highlight that would take over a highlight with a note, and so lose the note. */
+export function confirmHighlightOverNote(onHighlight: () => void) {
+  Alert.alert('Highlight over a note?', 'Text here is already highlighted with a note. The new highlight replaces it, and the note is deleted.', [
+    { text: 'Cancel', style: 'cancel' },
+    { text: 'Highlight', style: 'destructive', onPress: onHighlight },
+  ]);
+}
 
 export function confirmDeleteHighlight(withNote: boolean, onDelete: () => void) {
   Alert.alert(withNote ? 'Delete highlight and its note?' : 'Delete highlight?', undefined, [

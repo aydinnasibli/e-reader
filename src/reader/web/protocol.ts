@@ -100,6 +100,8 @@ export type ToPage =
   | { t: 'go'; target: Target }
   | { t: 'turn'; dir: 1 | -1 }
   | { t: 'marks'; marks: PageMark[] }
+  /** The highlight tool's drag as it goes, drawn over the marks (sent alone: the marks stay as they are). */
+  | { t: 'stroke'; marks: PageMark[] }
   /** The highlight tool: touches mark text instead of selecting it or turning pages; edge taps still turn. */
   | { t: 'tool'; marking: boolean }
   | { t: 'clearSelection' }
@@ -113,24 +115,32 @@ export type ToPage =
    */
   | { t: 'measure'; key: string; chunks: Chunk[] };
 
+/**
+ * Pages per chunk laid out (page mode), for page numbers. A page belongs to
+ * the chunk of its first character, so a chunk's pages are the ones that
+ * start in it: where a chunk goes on from the one before (Chunk.joins), the
+ * page they share is the earlier chunk's last, and a short chunk can have
+ * none. `chunk` and `page` are the chunk of the page shown (in a spread, the
+ * left-hand one) and its index among that chunk's pages; `span` is how many
+ * pages are showing (2 in a spread whose right-hand page has text; absent: 1).
+ */
+export interface PageCounts {
+  counts: { c: number; pages: number; chars: number }[];
+  chunk: number;
+  page: number;
+  span?: 1 | 2;
+}
+
 export type FromPage =
   | { t: 'ready' }
   /**
    * The page (page mode) or the top of the screen (scroll mode) shows from
    * `first`, in chunk `chunk`; the next page starts at `next`. `turned`: a
-   * page turn got here. `key` is the layout it was laid out with.
+   * page turn got here. `key` is the layout it was laid out with. `pages`:
+   * the page numbers' counts (page mode), in the same message, so the screen
+   * takes in a page turn at once.
    */
-  | { t: 'shown'; first: DrawnPoint; next: DrawnPoint | null; chunk: number; turned: boolean; key: string; lastPage: boolean }
-  /**
-   * Pages per chunk laid out (page mode), for page numbers. A page belongs to
-   * the chunk of its first character, so a chunk's pages are the ones that
-   * start in it: where a chunk goes on from the one before (Chunk.joins), the
-   * page they share is the earlier chunk's last, and a short chunk can have
-   * none. `chunk` and `page` are the chunk of the page shown (in a spread, the
-   * left-hand one) and its index among that chunk's pages; `span` is how many
-   * pages are showing (2 in a spread whose right-hand page has text; absent: 1).
-   */
-  | { t: 'pages'; counts: { c: number; pages: number; chars: number }[]; chunk: number; page: number; span?: 1 | 2 }
+  | { t: 'shown'; first: DrawnPoint; next: DrawnPoint | null; chunk: number; turned: boolean; key: string; lastPage: boolean; pages?: PageCounts }
   /** The page needs these chunks (it reached the edge of what it has). */
   | { t: 'need'; chunks: number[] }
   /** The answer to 'measure': pages (columns, as in 'pages') each chunk takes on its own in layout `key`. */

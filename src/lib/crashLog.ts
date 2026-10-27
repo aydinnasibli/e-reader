@@ -5,9 +5,11 @@
 
 import Constants from 'expo-constants';
 import { File, Paths } from 'expo-file-system';
-import { useEffect, useSyncExternalStore } from 'react';
+import { useEffect } from 'react';
 import { Platform } from 'react-native';
+import { isRecord } from './guards';
 import { readJson, saveJson } from './storage';
+import { createStore } from './store';
 
 /**
  * fatal: closed the app · screen: a screen showed its error page instead ·
@@ -39,12 +41,12 @@ const BUILD = Number(Constants.expoConfig?.extra?.buildNumber ?? 0);
 const file = () => new File(Paths.document, 'crashes.json');
 let crashes: Crash[] | null = null;
 let screen: string | undefined;
-const listeners = new Set<() => void>();
+const store = createStore();
 
 function all(): Crash[] {
   if (!crashes) {
-    const saved = readJson<Crash[]>(file());
-    crashes = Array.isArray(saved) ? saved : [];
+    const saved = readJson<unknown[]>(file(), Array.isArray);
+    crashes = (saved ?? []).filter((c): c is Crash => isRecord(c) && typeof c.message === 'string' && typeof c.at === 'number');
   }
   return crashes;
 }
@@ -52,7 +54,7 @@ function all(): Crash[] {
 function set(next: Crash[]) {
   crashes = next.slice(-KEEP);
   saveJson(file(), crashes);
-  listeners.forEach((l) => l());
+  store.notify();
 }
 
 /** The screen now open, noted with the next crash. */
@@ -95,13 +97,7 @@ export function useRecordScreenError(error: Error) {
 }
 
 export function useCrashes(): Crash[] {
-  return useSyncExternalStore(
-    (l) => {
-      listeners.add(l);
-      return () => listeners.delete(l);
-    },
-    all,
-  );
+  return store.useValue(all);
 }
 
 export function clearCrashes() {

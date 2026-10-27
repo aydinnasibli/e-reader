@@ -1,11 +1,12 @@
 // The little of a book's own CSS the reader honours: italic, bold, small
-// capitals, centred or right-aligned text, and text hidden with display:none.
-// Fonts, sizes, colours and margins stay the reader's settings. Selectors are
-// matched as far as they're cheap to match while streaming: element names,
-// classes, ids, and descendant/child combinations of those; anything else
+// capitals, raised and lowered text (vertical-align), centred or
+// right-aligned text, and text hidden with display:none. Fonts, sizes,
+// colours and margins stay the reader's settings. Selectors are matched as
+// far as they're cheap to match while streaming: element names, classes,
+// ids, and descendant/child combinations of those; anything else
 // (attributes, pseudo-classes, siblings) is left out.
 
-import { BOLD, ITALIC, SMALLCAPS } from './types';
+import { BOLD, ITALIC, SMALLCAPS, SUB, SUP } from './types';
 
 /** What a rule or a style="" attribute says, in the terms the converter uses. */
 export interface Declarations {
@@ -151,6 +152,19 @@ export function parseDeclarations(text: string): Declarations {
         else if (value === 'right' || value === 'end') d.align = 'r';
         else if (value === 'left' || value === 'start' || value === 'justify' || value === 'initial') d.align = 'l';
         break;
+      case 'vertical-align':
+        // Raised or lowered by a class rather than <sup>/<sub>: a note's mark, an exponent, a chemical formula.
+        if (value === 'super' || value === 'top') {
+          d.set = (d.set & ~SUB) | SUP;
+          d.clear = (d.clear & ~SUP) | SUB;
+        } else if (value === 'sub') {
+          d.set = (d.set & ~SUP) | SUB;
+          d.clear = (d.clear & ~SUB) | SUP;
+        } else if (value === 'baseline') {
+          d.set &= ~(SUP | SUB);
+          d.clear |= SUP | SUB;
+        }
+        break;
       case 'display':
         if (value !== 'inherit' && value !== 'initial' && value !== 'unset') d.hidden = value === 'none';
         break;
@@ -176,24 +190,64 @@ function merge(base: Declarations, d: Declarations): Declarations {
   };
 }
 
+/**
+ * A character of a class or id name: any letter, in any alphabet (".başlık",
+ * "#bölüm1"), a digit, '_' or '-', or an escape: up to six hex digits and
+ * the space ending them ("\31 0" is "10"), or one other character ("\:").
+ */
+const NAME_CHAR = String.raw`(?:[\w\u0080-\uffff-]|\\[0-9a-fA-F]{1,6}\s?|\\[^\r\n\f0-9a-fA-F])`;
+const COMPOUND = new RegExp(String.raw`^(\*|[a-zA-Z][\w-]*)?((?:[.#]${NAME_CHAR}+)*)$`);
+const NAME_PIECE = new RegExp(String.raw`[.#]${NAME_CHAR}+`, 'g');
+const ESCAPE = /\\([0-9a-fA-F]{1,6})\s?|\\(.)/g;
+
+/** A class or id name as the HTML writes it: its escapes undone. */
+function unescapeName(name: string): string {
+  if (name.indexOf('\\') < 0) return name;
+  return name.replace(ESCAPE, (_, hex: string | undefined, ch: string) => {
+    if (!hex) return ch;
+    const cp = parseInt(hex, 16);
+    return cp && cp <= 0x10ffff && (cp < 0xd800 || cp > 0xdfff) ? String.fromCodePoint(cp) : '\ufffd';
+  });
+}
+
 /** Parse one compound selector; null if it uses anything we don't match. */
 function compound(text: string): Compound | null {
-  const m = /^(\*|[a-zA-Z][\w-]*)?((?:[.#][\w-]+)*)$/.exec(text);
+  const m = COMPOUND.exec(text);
   if (!m) return null;
   const c: Compound = { classes: [] };
   if (m[1] && m[1] !== '*') c.name = m[1].toLowerCase();
-  for (const piece of m[2].match(/[.#][\w-]+/g) ?? []) {
-    if (piece[0] === '.') c.classes.push(piece.slice(1));
-    else c.id = piece.slice(1);
+  for (const piece of m[2].match(NAME_PIECE) ?? []) {
+    const name = unescapeName(piece.slice(1));
+    if (piece[0] === '.') c.classes.push(name);
+    else c.id = name;
   }
   return c;
 }
 
+/** A selector's compounds and '>' combinators, split at whitespace that isn't part of an escape. */
+function selectorTokens(text: string): string[] {
+  const tokens: string[] = [];
+  let cur = '';
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (c === '\\') {
+      // The escape and what it escapes: hex digits and the space after them, or one character.
+      const hex = /^[0-9a-fA-F]{1,6}\s?/.exec(text.slice(i + 1, i + 8));
+      const n = hex ? hex[0].length : 1;
+      cur += text.slice(i, i + 1 + n);
+      i += n;
+    } else if (c === '>' || c === ' ' || c === '\t' || c === '\n' || c === '\r' || c === '\f') {
+      if (cur) tokens.push(cur);
+      cur = '';
+      if (c === '>') tokens.push('>');
+    } else cur += c;
+  }
+  if (cur) tokens.push(cur);
+  return tokens;
+}
+
 function parseSelector(text: string): { parts: Compound[]; child: boolean[]; specificity: number } | null {
-  const tokens = text
-    .trim()
-    .replace(/\s*>\s*/g, ' > ')
-    .split(/\s+/);
+  const tokens = selectorTokens(text);
   const parts: Compound[] = [];
   const child: boolean[] = [];
   let pendingChild = false;

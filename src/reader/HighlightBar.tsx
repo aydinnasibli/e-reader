@@ -38,16 +38,12 @@ export function HighlightBar({ theme, bottom, color, made, hasNote, onColor, onN
   );
   return (
     <View style={[styles.panel, { bottom: bottom ?? insets.bottom + 12, backgroundColor: theme.chrome, borderColor: theme.border }]}>
-      <View style={styles.row}>
+      <View style={[styles.row, styles.colors]}>
+        {/* Each colour a full-size target for the finger, its dot drawn in the middle. */}
         {(Object.keys(HIGHLIGHT_COLORS) as HighlightColor[]).map((c) => (
-          <Tap
-            key={c}
-            onPress={() => onColor(c)}
-            hitSlop={6}
-            accessibilityLabel={`Highlight colour ${c}`}
-            accessibilityState={{ selected: c === color }}
-            style={[styles.dot, { backgroundColor: highlightColor(c, theme.dark), borderColor: c === color ? theme.text : 'transparent' }]}
-          />
+          <Tap key={c} onPress={() => onColor(c)} accessibilityLabel={`Highlight colour ${c}`} accessibilityState={{ selected: c === color }} style={styles.target}>
+            <View style={[styles.dot, { backgroundColor: highlightColor(c, theme.dark), borderColor: c === color ? theme.text : 'transparent' }]} />
+          </Tap>
         ))}
         <Tap onPress={onDone} hitSlop={8} style={[styles.done, { backgroundColor: theme.accent }]} accessibilityLabel="Done highlighting">
           <Text style={styles.doneText}>Done</Text>
@@ -88,7 +84,10 @@ const styles = StyleSheet.create({
   action: { alignItems: 'center', minWidth: 52 },
   actionLabel: { fontSize: 12, marginTop: 2 },
   hint: { fontSize: 13, textAlign: 'center' },
+  // The dots 14 apart, as before they were full-size targets.
+  colors: { gap: 0 },
+  target: { width: 44, height: 44, alignItems: 'center', justifyContent: 'center' },
   dot: { width: 30, height: 30, borderRadius: 15, borderWidth: 2 },
-  done: { borderRadius: 18, paddingHorizontal: 14, paddingVertical: 7, marginLeft: 4 },
+  done: { borderRadius: 18, paddingHorizontal: 14, paddingVertical: 7, marginLeft: 11 },
   doneText: { color: '#fff', fontWeight: '600', fontSize: 14 },
 });

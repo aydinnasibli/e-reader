@@ -2,10 +2,8 @@
 // GIF, WebP, BMP), without decoding it: how much of a page it takes decides
 // its share of the page numbers (see blockWeight in writer.ts).
 
-const be16 = (b: Uint8Array, o: number) => (b[o] << 8) | b[o + 1];
-const le16 = (b: Uint8Array, o: number) => b[o] | (b[o + 1] << 8);
-const be32 = (b: Uint8Array, o: number) => ((b[o] << 24) >>> 0) + ((b[o + 1] << 16) | (b[o + 2] << 8) | b[o + 3]);
-const le32 = (b: Uint8Array, o: number) => (b[o] | (b[o + 1] << 8) | (b[o + 2] << 16)) + b[o + 3] * 0x1000000;
+import { be16, be32, le16, le32 } from './bytes';
+import { pictureLines } from './writer';
 
 /** Width and height, or null if the bytes don't say (another format, or the size comes later in the file). */
 export function pictureSize(b: Uint8Array): [number, number] | null {
@@ -50,4 +48,45 @@ export function pictureSize(b: Uint8Array): [number, number] | null {
 
 function valid(w: number, h: number): [number, number] | null {
   return w > 0 && h > 0 && w < 100_000 && h < 100_000 ? [w, h] : null;
+}
+
+/** Bytes of pictures read for their sizes between two pauses. */
+const PROBE_BUDGET = 64 * 1024;
+/** How much of a JPEG is read when its size comes after its metadata. */
+const JPEG_MORE = 16 * 1024;
+
+/**
+ * The page space pictures take, from the sizes their first bytes give.
+ * Reading (and inflating) them happens in the middle of a slice of text, so
+ * only so much is read between two pauses; past that a picture counts as an
+ * average one. (A chapter of 300 photos would otherwise freeze the app.)
+ */
+export class PictureProbe {
+  private budget = PROBE_BUDGET;
+
+  /** There's some of the budget left: a picture's first bytes may be read. */
+  get open(): boolean {
+    return this.budget > 0;
+  }
+
+  /** A pause came: the budget starts over. */
+  reset() {
+    this.budget = PROBE_BUDGET;
+  }
+
+  /**
+   * The lines (pictureLines) a picture of `total` bytes takes, from its first
+   * bytes `head`; undefined if they don't say. A JPEG's size can come after
+   * its metadata: `more(n)` gives its first n bytes, read if there's room.
+   */
+  lines(head: Uint8Array, total: number, more: (n: number) => Uint8Array): number | undefined {
+    this.budget -= head.length;
+    let size = pictureSize(head);
+    if (!size && head[0] === 0xff && total > head.length && this.budget >= JPEG_MORE) {
+      const longer = more(JPEG_MORE);
+      this.budget -= longer.length;
+      size = pictureSize(longer);
+    }
+    return size ? pictureLines(size[0], size[1]) : undefined;
+  }
 }

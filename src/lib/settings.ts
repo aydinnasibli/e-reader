@@ -2,11 +2,12 @@
 // colour themes, including user-defined colours and automatic night mode.
 
 import { File, Paths } from 'expo-file-system';
-import { useSyncExternalStore } from 'react';
 import { Appearance, PixelRatio, useColorScheme } from 'react-native';
 import { HIGHLIGHT_COLORS, type HighlightColor } from '@/ui/theme';
 import type { Weight } from './fonts';
+import { isRecord } from './guards';
 import { readJson, saveJson } from './storage';
+import { createStore } from './store';
 
 export type ThemeName = 'light' | 'paper' | 'sepia' | 'mint' | 'gray' | 'night' | 'dark' | 'black' | 'custom';
 export type ReadMode = 'page' | 'scroll';
@@ -116,7 +117,7 @@ const DEFAULTS: ReaderSettings = {
 
 const file = () => new File(Paths.document, 'settings.json');
 let settings: ReaderSettings | null = null;
-const listeners = new Set<() => void>();
+const store = createStore();
 
 /** Bring settings saved by older versions up to date. */
 function migrate(raw: Record<string, unknown>): Partial<ReaderSettings> {
@@ -196,7 +197,7 @@ export function firstRunFontSize(scale: number): number {
 
 function current(): ReaderSettings {
   if (!settings) {
-    const saved = readJson<Record<string, unknown>>(file());
+    const saved = readJson<Record<string, unknown>>(file(), isRecord);
     // First run: start in a dark theme if the phone is in dark mode, at the phone's text size.
     const first: ReaderSettings = saved
       ? DEFAULTS
@@ -211,19 +212,13 @@ export function getSettings(): ReaderSettings {
 }
 
 export function useSettings(): ReaderSettings {
-  return useSyncExternalStore(
-    (l) => {
-      listeners.add(l);
-      return () => listeners.delete(l);
-    },
-    current,
-  );
+  return store.useValue(current);
 }
 
 export function setSettings(patch: Partial<ReaderSettings>) {
   settings = { ...current(), ...patch };
   saveJson(file(), settings);
-  listeners.forEach((l) => l());
+  store.notify();
 }
 
 /** Reset text and spacing (not colours or page options). */

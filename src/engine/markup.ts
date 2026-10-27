@@ -3,6 +3,8 @@
 // builds a DOM, so a 100 MB chapter costs no more memory than a 100 KB one.
 // Malformed markup (common in ebooks) degrades to text instead of throwing.
 
+import { record } from './types';
+
 export interface MarkupHandler {
   open(name: string, attrs: Record<string, string>, selfClosing: boolean): void;
   close(name: string): void;
@@ -12,19 +14,20 @@ export interface MarkupHandler {
 }
 
 // The HTML 4 named entities (as HTML5 decodes them), and a few later ones
-// ebooks use. Names are case-sensitive: &Omega; is Ω, &omega; is ω.
-const ENTITIES: Record<string, string> = {};
+// ebooks use. Names are case-sensitive: &Omega; is Ω, &omega; is ω. (A Map:
+// "&constructor;" in a book is text, not something every object has.)
+const ENTITIES = new Map<string, string>();
 // Latin-1: &nbsp; to &yuml; are U+00A0..U+00FF in order.
 'nbsp iexcl cent pound curren yen brvbar sect uml copy ordf laquo not shy reg macr deg plusmn sup2 sup3 acute micro para middot cedil sup1 ordm raquo frac14 frac12 frac34 iquest Agrave Aacute Acirc Atilde Auml Aring AElig Ccedil Egrave Eacute Ecirc Euml Igrave Iacute Icirc Iuml ETH Ntilde Ograve Oacute Ocirc Otilde Ouml times Oslash Ugrave Uacute Ucirc Uuml Yacute THORN szlig agrave aacute acirc atilde auml aring aelig ccedil egrave eacute ecirc euml igrave iacute icirc iuml eth ntilde ograve oacute ocirc otilde ouml divide oslash ugrave uacute ucirc uuml yacute thorn yuml'
   .split(' ')
-  .forEach((name, i) => (ENTITIES[name] = String.fromCharCode(0xa0 + i)));
+  .forEach((name, i) => ENTITIES.set(name, String.fromCharCode(0xa0 + i)));
 // Greek: &Alpha; to &Omega; and &alpha; to &omega; follow the Unicode order (there's no capital final sigma).
 'Alpha Beta Gamma Delta Epsilon Zeta Eta Theta Iota Kappa Lambda Mu Nu Xi Omicron Pi Rho - Sigma Tau Upsilon Phi Chi Psi Omega'
   .split(' ')
   .forEach((name, i) => {
     if (name === '-') return;
-    ENTITIES[name] = String.fromCharCode(0x391 + i);
-    ENTITIES[name.toLowerCase()] = String.fromCharCode(0x3b1 + i);
+    ENTITIES.set(name, String.fromCharCode(0x391 + i));
+    ENTITIES.set(name.toLowerCase(), String.fromCharCode(0x3b1 + i));
   });
 for (const pair of (
   'quot:22 amp:26 apos:27 lt:3c gt:3e QUOT:22 AMP:26 LT:3c GT:3e COPY:a9 REG:ae ' +
@@ -41,7 +44,7 @@ for (const pair of (
   'lang:27e8 rang:27e9 loz:25ca spades:2660 clubs:2663 hearts:2665 diams:2666'
 ).split(' ')) {
   const [name, hex] = pair.split(':');
-  ENTITIES[name] = String.fromCharCode(parseInt(hex, 16));
+  ENTITIES.set(name, String.fromCharCode(parseInt(hex, 16)));
 }
 
 // &#128; to &#159; name the windows-1252 characters there, as old HTML meant them (&#150; is an en dash).
@@ -60,13 +63,13 @@ export function decodeEntities(s: string): string {
       if (!cp || cp > 0x10ffff || (cp >= 0xd800 && cp <= 0xdfff)) return '\ufffd';
       return String.fromCodePoint(cp);
     }
-    return ENTITIES[e] ?? m;
+    return ENTITIES.get(e) ?? m;
   });
 }
 
 const ATTR_RE = /([^\s=/"']+)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'>]+)))?/g;
-// Elements whose content is raw text that must not be tokenized.
-const RAW_TEXT = new Set(['script', 'style']);
+/** Elements whose content is raw text that must not be tokenized: HTML's (FB2 has none, its <style> holds text). */
+const HTML_RAW_TEXT: ReadonlySet<string> = new Set(['script', 'style']);
 // Tags longer than this (an image embedded as a data: URI, a huge SVG path)
 // aren't buffered: the tag is skipped up to its closing '>'.
 const MAX_TAG = 64 * 1024;
@@ -90,7 +93,11 @@ export class MarkupTokenizer {
    */
   private until: { end: string; text: boolean } | null = null;
 
-  constructor(private h: MarkupHandler) {}
+  /** `rawText`: the elements whose content isn't markup (see HTML_RAW_TEXT). */
+  constructor(
+    private h: MarkupHandler,
+    private rawText: ReadonlySet<string> = HTML_RAW_TEXT,
+  ) {}
 
   feed(chunk: string) {
     this.buf = this.pos < this.buf.length ? this.buf.slice(this.pos) + chunk : chunk;
@@ -244,7 +251,7 @@ export class MarkupTokenizer {
     const m = /^[^\s/>]+/.exec(inner);
     if (!m) return;
     const name = localName(m[0]);
-    const attrs: Record<string, string> = {};
+    const attrs = record<string>();
     const rest = inner.slice(m[0].length);
     if (rest.trim()) {
       ATTR_RE.lastIndex = 0;
@@ -255,7 +262,7 @@ export class MarkupTokenizer {
     }
     this.h.open(name, attrs, selfClosing);
     if (selfClosing) this.h.close(name);
-    else if (RAW_TEXT.has(name)) this.raw = new RegExp(`</(?:[^\\s>/:]+:)?${name}(?=[\\s>/])`, 'gi');
+    else if (this.rawText.has(name)) this.raw = new RegExp(`</(?:[^\\s>/:]+:)?${name}(?=[\\s>/])`, 'gi');
   }
 }
 

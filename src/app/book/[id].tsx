@@ -13,13 +13,14 @@ import { bookTimeMs, readingSpeed, useStats } from '@/lib/stats';
 import { Cover } from '@/ui/Cover';
 import { confirmRemoveBook } from '@/ui/confirm';
 import { showActions, showPrompt } from '@/ui/dialogs';
-import { formatBytes, formatMinutes } from '@/ui/format';
+import { formatBytes, formatLongDate, formatMinutes } from '@/ui/format';
 import { useColumnPadding } from '@/ui/layout';
+import { pushOnce } from '@/ui/navigate';
 import { useAppColors } from '@/ui/theme';
 import { Tap } from '@/ui/Tap';
 
 const FORMAT_NAMES: Record<string, string> = { epub: 'EPUB', fb2: 'FB2', txt: 'Plain text', mobi: 'MOBI', azw3: 'AZW3 (Kindle)' };
-const date = (ms: number) => (ms ? new Date(ms).toLocaleDateString(undefined, { day: 'numeric', month: 'long', year: 'numeric' }) : '—');
+const date = (ms: number) => (ms ? formatLongDate(ms) : '—');
 
 /**
  * Languages a book can be set to by hand, the ones read most first. A book's
@@ -148,7 +149,7 @@ export default function BookDetails() {
       </View>
 
       <Tap
-        onPress={() => router.push({ pathname: '/reader/[id]', params: { id } })}
+        onPress={() => pushOnce({ pathname: '/reader/[id]', params: { id } })}
         style={[styles.open, { backgroundColor: c.accent }]}
         accessibilityLabel={percent > 0 ? 'Continue reading' : 'Start reading'}>
         <Text style={{ color: c.accentText, fontSize: 16, fontWeight: '600' }}>{percent > 0 && !finished ? `Continue reading · ${Math.round(percent * 100)}%` : 'Read'}</Text>

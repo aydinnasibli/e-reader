@@ -1,10 +1,12 @@
 /// <reference types="jest" />
-// The highlights & notes screen and the book details screen.
+// The highlights & notes screen, the book details screen, and the page for a
+// link that leads nowhere.
 
 import { fireEvent, render, screen } from '@testing-library/react-native';
 import { addHighlight } from '@/lib/annotations';
 import NotesScreen from '@/app/notes';
 import BookDetails from '@/app/book/[id]';
+import NotFound from '@/app/+not-found';
 
 const mockBooks: Record<string, unknown>[] = [
   { id: 'a', title: 'Moby-Dick', author: 'Herman Melville', fileName: 'moby.epub', format: 'epub', size: 1_300_000, addedAt: 1, openedAt: 20, status: 'ready', progress: 1, percent: 0.25 },
@@ -17,13 +19,15 @@ const mockRename = jest.fn();
 const mockRestore = jest.fn();
 const mockSetLanguage = jest.fn();
 const mockActions = jest.fn();
+const mockDismissTo = jest.fn();
 let mockParams: Record<string, string> = {};
 
 jest.mock('expo-router', () => ({
   Stack: { Screen: () => null },
-  router: { push: (...a: unknown[]) => mockPush(...a), back: jest.fn() },
+  router: { push: (...a: unknown[]) => mockPush(...a), back: jest.fn(), dismissTo: (...a: unknown[]) => mockDismissTo(...a) },
   useLocalSearchParams: () => mockParams,
 }));
+jest.mock('@/lib/appUpdate', () => ({ CURRENT_BUILD: 0, canSelfUpdate: () => false, checkForUpdate: jest.fn(), useUpdateState: () => ({ kind: 'idle' }) }));
 jest.mock('@/lib/library', () => ({
   useLibrary: () => mockBooks,
   useBook: (id: string) => mockBooks.find((b) => b.id === id),
@@ -94,6 +98,42 @@ describe('highlights & notes', () => {
     } finally {
       spy.mockRestore();
     }
+  });
+
+  it('a screen reader says a highlight as its quote, its note and where it is', async () => {
+    await render(<NotesScreen />);
+    expect(screen.getByLabelText(/^Call me Ishmael\., Loomings, .+$/)).toBeTruthy();
+    expect(screen.getByLabelText(/^a damp, drizzly November, note: Mood\., Loomings, .+$/)).toBeTruthy();
+  });
+
+  it('while searching, a tap on a highlight opens it, and scrolling puts the keyboard away', async () => {
+    await render(<NotesScreen />);
+    // By default the first tap while the keyboard is up only put the keyboard away.
+    const lists = screen.container.queryAll((n) => n.props.keyboardShouldPersistTaps !== undefined);
+    expect(lists.length).toBeGreaterThan(0);
+    for (const l of lists) expect([l.props.keyboardShouldPersistTaps, l.props.keyboardDismissMode]).toEqual(['handled', 'on-drag']);
+  });
+
+  it('a quick double tap opens a highlight once', async () => {
+    const now = jest.spyOn(Date, 'now').mockReturnValue(1_000);
+    try {
+      mockPush.mockClear();
+      await render(<NotesScreen />);
+      await fireEvent.press(screen.getByText('Call me Ishmael.'));
+      await fireEvent.press(screen.getByText('Call me Ishmael.'));
+      expect(mockPush).toHaveBeenCalledTimes(1);
+    } finally {
+      now.mockRestore();
+    }
+  });
+});
+
+describe('a link that leads nowhere', () => {
+  it('says so, and goes to the library', async () => {
+    await render(<NotFound />);
+    expect(screen.getByText('Nothing here')).toBeTruthy();
+    await fireEvent.press(screen.getByText('Go to the library'));
+    expect(mockDismissTo).toHaveBeenCalledWith('/');
   });
 });
 

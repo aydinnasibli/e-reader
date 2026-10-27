@@ -11,10 +11,11 @@
 
 import { File, Paths } from 'expo-file-system';
 import { router, usePathname } from 'expo-router';
-import { useEffect, useSyncExternalStore } from 'react';
+import { useEffect } from 'react';
 import { Alert, Platform } from 'react-native';
 import { getBook, importSharedFile, loadLibrary } from './library';
 import { readJson, saveJson } from './storage';
+import { createStore } from './store';
 
 /** A file handed over by another app, rather than a link into this one. */
 export function isSharedFileUrl(url: string): boolean {
@@ -81,23 +82,17 @@ function dropInboxCopy(url: string) {
 }
 
 const inFlight = new Set<string>();
-const listeners = new Set<() => void>();
+const store = createStore();
 
 function setInFlight(url: string, adding: boolean) {
   if (adding) inFlight.add(url);
   else inFlight.delete(url);
-  listeners.forEach((l) => l());
+  store.notify();
 }
 
 /** True while a shared file is being added, for the library to say so. */
 export function useAddingSharedFile(): boolean {
-  return useSyncExternalStore(
-    (l) => {
-      listeners.add(l);
-      return () => listeners.delete(l);
-    },
-    () => inFlight.size > 0,
-  );
+  return store.useValue(() => inFlight.size > 0);
 }
 
 /**
@@ -124,6 +119,8 @@ export async function openSharedFile(url: string, initial = false): Promise<void
       Alert.alert('This file isn’t a book the app can open', 'Books can be EPUB, FB2, MOBI, AZW3 or TXT files.');
     } else if (res.failed === 'space') {
       Alert.alert('Not enough free space', 'There isn’t enough free space on this phone for this book. Free some up, then open it again.');
+    } else if (res.failed === 'other') {
+      Alert.alert('Couldn’t add this book', 'Something went wrong while adding it. Try opening it again; if it keeps happening, Library → View → Crash log says what went wrong.');
     } else {
       Alert.alert('Couldn’t open this file', 'The app it came from didn’t let this app read it. Save it to the phone (Files or Downloads) and open it from there.');
     }

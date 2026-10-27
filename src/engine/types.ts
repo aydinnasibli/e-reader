@@ -64,8 +64,13 @@ export type BookFormat = 'epub' | 'fb2' | 'txt' | 'mobi' | 'azw3';
  * dropped or reordered): highlights, bookmarks and reading positions are
  * block numbers, so a book converted again by a newer version needs its
  * annotations moved along (by their saved text) or they land elsewhere.
+ *
+ * 3: FB2 elements left open are closed with the one around them, FB2's
+ * <style> keeps its text, <body> ends an unclosed <head>, the book's styles
+ * read class names in any alphabet and raise text with vertical-align, FB2
+ * pictures never share a file, and translators aren't listed as authors.
  */
-export const ENGINE_VERSION = 2;
+export const ENGINE_VERSION = 3;
 
 export interface Manifest {
   /** ENGINE_VERSION of the converter that made it. */
@@ -118,6 +123,14 @@ export interface ChunkFile {
 export interface Position {
   b: number;
   o: number;
+}
+
+/**
+ * An empty record for keys that come from a book (paths, ids, link targets):
+ * it inherits none, so a book's "constructor" or "__proto__" is just a key.
+ */
+export function record<T>(): Record<string, T> {
+  return Object.create(null) as Record<string, T>;
 }
 
 export function runText(r: Run): string {

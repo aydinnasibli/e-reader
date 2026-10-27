@@ -216,8 +216,9 @@ export function createDecoder(enc: Encoding, allowNative = true): StreamDecoder 
 }
 
 // Encoding names as files write them, with everything but letters and digits
-// left out ("ISO_8859-9" -> "iso88599"): the labels browsers accept.
-const LABELS: Record<string, Encoding> = {};
+// left out ("ISO_8859-9" -> "iso88599"): the labels browsers accept. (A Map:
+// encoding="constructor" is an unknown label, not something every object has.)
+const LABELS = new Map<string, Encoding>();
 for (const [enc, names] of [
   ['utf-8', 'utf8 unicode11utf8 unicode20utf8 xunicode20utf8'],
   ['utf-16le', 'utf16 utf16le unicode ucs2 iso10646ucs2 csunicode unicodefeff'],
@@ -227,13 +228,13 @@ for (const [enc, names] of [
   ['windows-1254', 'windows1254 cp1254 xcp1254 win1254 iso88599 iso885991989 latin5 l5 isoir148 csisolatin5'],
   ['koi8-r', 'koi8r koi8 koi cskoi8r koi8u koi8ru'],
 ] as const) {
-  for (const n of names.split(' ')) LABELS[n] = enc;
+  for (const n of names.split(' ')) LABELS.set(n, enc);
 }
 
 /** The encoding an encoding label names; null if it isn't one we know. */
 export function normalizeEncoding(label: string | null | undefined): Encoding | null {
   if (!label) return null;
-  return LABELS[label.toLowerCase().replace(/[^a-z0-9]/g, '')] ?? null;
+  return LABELS.get(label.toLowerCase().replace(/[^a-z0-9]/g, '')) ?? null;
 }
 
 export function detectBom(bytes: Uint8Array): { enc: Encoding; skip: number } | null {

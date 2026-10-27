@@ -3,6 +3,7 @@ import { useEffect } from 'react';
 import { ActivityIndicator, AppState, type StyleProp, StyleSheet, Text, View, type ViewStyle } from 'react-native';
 import { canSelfUpdate, checkForUpdate, cleanOldDownloads, dismissUpdateError, installUpdate, snoozeUpdate, useUpdateState } from '@/lib/appUpdate';
 import { formatBytes } from './format';
+import { ProgressBar } from './ProgressBar';
 import { useAppColors } from './theme';
 import { Tap } from '@/ui/Tap';
 
@@ -62,9 +63,7 @@ export function UpdateBanner({ style }: { style?: StyleProp<ViewStyle> }) {
           {s.kind === 'downloading' ? `Downloading… ${Math.round(s.progress * 100)}%` : s.kind === 'installing' ? 'Opening installer…' : 'New version available'}
         </Text>
         {s.kind === 'downloading' ? (
-          <View style={[styles.track, { backgroundColor: c.border }]}>
-            <View style={[styles.fill, { width: `${Math.round(s.progress * 100)}%`, backgroundColor: c.accent }]} />
-          </View>
+          <ProgressBar value={s.progress} color={c.accent} track={c.border} height={4} style={styles.track} />
         ) : s.kind === 'available' && s.tried ? (
           <Text style={{ color: c.secondary, fontSize: 13 }}>
             Not installed yet. If Android asked, tap Settings, allow installing from this app, then go back and tap Update again.
@@ -109,6 +108,5 @@ const styles = StyleSheet.create({
   // What a finger can hit: at least 44 points around the drawn button or link.
   target: { minWidth: 44, minHeight: 44, alignItems: 'center', justifyContent: 'center' },
   actions: { alignItems: 'center' },
-  track: { height: 4, borderRadius: 2, overflow: 'hidden', marginTop: 4 },
-  fill: { height: 4 },
+  track: { marginTop: 4 },
 });

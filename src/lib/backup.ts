@@ -12,9 +12,10 @@ import { ENGINE_VERSION, type Manifest, type Position } from '@/engine/types';
 import { HIGHLIGHT_COLORS } from '@/ui/theme';
 import { type Annotations, type Bookmark, type Highlight, getAnnotations } from './annotations';
 import { SORT_LABELS, type SortKey, type ViewMode, collectionNamed, getShelves, setSort, setView } from './collections';
+import { ownKey } from './guards';
 import { type BookEntry, bookConversion, fingerprintBook, flushLibrary, getBooks, loadManifest, queueMarks, updateBook, withoutSwaps } from './library';
-import { type Anchor, anchorsOn, marksOf } from './remap';
-import { type SavedBook, addPending, applySaved } from './restore';
+import { anchorsOn, marksOf } from './remap';
+import { type SavedAnchor, type SavedBook, addPending, applySaved } from './restore';
 import { getSettings, sanitizeSettings, setSettings } from './settings';
 import { type BookStats, getStats, mergeDays } from './stats';
 
@@ -41,34 +42,53 @@ export interface Backup {
  * converter version) finds them all the same. Highlights' own text is left
  * out: it is the highlight's.
  */
-async function anchorsFor(b: BookEntry, ann: Annotations, manifest: Manifest): Promise<Record<string, Anchor> | undefined> {
+async function anchorsFor(b: BookEntry, ann: Annotations, manifest: Manifest): Promise<Record<string, SavedAnchor> | undefined> {
   if (!ann.highlights.length && !ann.bookmarks.length && !b.position) return undefined;
   try {
     const conv = bookConversion(b.id, manifest);
     if (!conv) return undefined;
-    const anchors = await anchorsOn(conv, marksOf(ann.highlights, ann.bookmarks, b.position));
+    const anchors: Record<string, SavedAnchor> = await anchorsOn(conv, marksOf(ann.highlights, ann.bookmarks, b.position));
     const own = new Map(ann.highlights.map((h) => [`h${h.id}`, h.text]));
-    for (const [key, a] of Object.entries(anchors)) if (own.get(key) === a.text) anchors[key] = { ...a, text: undefined as unknown as string };
-    return JSON.parse(JSON.stringify(anchors)) as Record<string, Anchor>;
+    for (const [key, a] of Object.entries(anchors)) {
+      if (own.get(key) !== a.text) continue;
+      const saved = { ...a };
+      delete saved.text;
+      anchors[key] = saved;
+    }
+    return anchors;
   } catch {
     return undefined; // the block numbers and texts are still there
   }
 }
 
+export interface BackupReport {
+  backup: Backup;
+  /** Titles of books left out: without their file (or its fingerprint) another phone can't tell which book they are. */
+  skipped: string[];
+}
+
 /** A backup of everything; no book's new conversion is swapped in while it is made (library.ts withoutSwaps). */
-export function createBackup(now = Date.now()): Promise<Backup> {
+export function createBackupReport(now = Date.now()): Promise<BackupReport> {
   return withoutSwaps(() => makeBackup(now));
 }
 
-async function makeBackup(now: number): Promise<Backup> {
+export async function createBackup(now = Date.now()): Promise<Backup> {
+  return (await createBackupReport(now)).backup;
+}
+
+async function makeBackup(now: number): Promise<BackupReport> {
   const shelves = getShelves();
   const names = new Map(shelves.collections.map((c) => [c.id, c.name]));
   const stats = getStats();
   const books: SavedBook[] = [];
+  const skipped: string[] = [];
   for (const b of getBooks()) {
     // Without a readable file there's nothing to recognise the book by later.
     const fp = fingerprintBook(b);
-    if (!fp) continue;
+    if (!fp) {
+      skipped.push(b.title || 'Untitled');
+      continue;
+    }
     const annotations = getAnnotations(b.id);
     // One conversion's manifest for both its version and the anchors read from it.
     const manifest = b.status === 'ready' ? loadManifest(b.id) : null;
@@ -89,7 +109,7 @@ async function makeBackup(now: number): Promise<Backup> {
       ...(stats.books[b.id] ? { stats: stats.books[b.id] } : {}),
     });
   }
-  return {
+  const backup: Backup = {
     kind: BACKUP_KIND,
     version: 1,
     createdAt: now,
@@ -101,6 +121,7 @@ async function makeBackup(now: number): Promise<Backup> {
     days: stats.days,
     books,
   };
+  return { backup, skipped };
 }
 
 // ---------- reading a backup: any file can be picked, so every field is checked ----------
@@ -119,7 +140,8 @@ function position(v: unknown): Position | undefined {
 
 function highlight(v: unknown): Highlight[] {
   if (!isObj(v) || !str(v.id) || !index(v.b) || !index(v.s) || !index(v.e) || v.e <= v.s || !str(v.text)) return [];
-  if (!str(v.color) || !(v.color in HIGHLIGHT_COLORS)) return [];
+  // Its own keys only: "constructor" is `in` every object.
+  if (!ownKey(HIGHLIGHT_COLORS, v.color)) return [];
   return [
     {
       id: v.id,
@@ -148,16 +170,16 @@ function annotations(v: unknown): Annotations {
 /** Longest text kept in an anchor (a long highlight's own text is the highlight's). */
 const ANCHOR_TEXT = 4000;
 
-function anchors(v: unknown, ann: Annotations): Record<string, Anchor> | undefined {
+function anchors(v: unknown, ann: Annotations): Record<string, SavedAnchor> | undefined {
   if (!isObj(v)) return undefined;
   const keys = new Set(['place', ...ann.highlights.map((h) => `h${h.id}`), ...ann.bookmarks.map((x) => `m${x.id}`)]);
-  const out: Record<string, Anchor> = {};
+  const out: Record<string, SavedAnchor> = {};
   for (const [key, a] of Object.entries(v)) {
     if (!keys.has(key) || !isObj(a)) continue;
     const at = num(a.at) && a.at >= 0 && a.at <= 1 ? { at: a.at } : index(a.b) && index(a.o) ? { b: a.b, o: a.o } : null;
     if (!at) continue;
     const text = (k: string, max: number) => (str(a[k]) ? { [k]: (a[k] as string).slice(0, max) } : {});
-    out[key] = { ...at, ...text('text', ANCHOR_TEXT), ...text('before', 200), ...text('after', 200) } as Anchor;
+    out[key] = { ...at, ...text('text', ANCHOR_TEXT), ...text('before', 200), ...text('after', 200) } as SavedAnchor;
   }
   return Object.keys(out).length ? out : undefined;
 }
@@ -210,7 +232,7 @@ export function parseBackup(text: string): Backup | null {
     createdAt: num(raw.createdAt) ? raw.createdAt : 0,
     build: num(raw.build) ? raw.build : 0,
     settings: isObj(raw.settings) ? raw.settings : {},
-    ...(str(raw.sort) && raw.sort in SORT_LABELS ? { sort: raw.sort as SortKey } : {}),
+    ...(ownKey(SORT_LABELS, raw.sort) ? { sort: raw.sort as SortKey } : {}),
     ...(raw.view === 'grid' || raw.view === 'list' ? { view: raw.view } : {}),
     collections: list(raw.collections).filter((c): c is string => str(c) && !!c.trim()),
     days,

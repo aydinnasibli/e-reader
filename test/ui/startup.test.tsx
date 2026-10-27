@@ -1,7 +1,8 @@
 /// <reference types="jest" />
 // Starting up: the splash screen stays until the icons' font has loaded (or a
 // few seconds have passed), so no icon shows blank. And the screen shown after
-// a crash while drawing can still update the app (Android APK).
+// a crash while drawing can still update the app (Android APK). A link into
+// a screen has the library under it.
 
 import { act, fireEvent, render, screen } from '@testing-library/react-native';
 import type { ReactNode } from 'react';
@@ -145,4 +146,9 @@ describe('the crash screen', () => {
     await render(<ErrorScreen title="Book not found" actions={[{ label: 'Back to library', onPress: () => {}, primary: true }]} />);
     expect(screen.queryByText('Check for updates')).toBeNull();
   });
+});
+
+it('a link straight into a screen opens it over the library, so Back goes to the library', () => {
+  // Expo Router 58 reads `anchor` (`initialRouteName` is its old, deprecated name).
+  expect(require('@/app/_layout').unstable_settings).toEqual({ anchor: 'index' });
 });

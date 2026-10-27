@@ -130,7 +130,8 @@ export function DisplayPanel({ visible, onClose, settings, theme, onSlide }: Pro
           </Tap>
         </View>
         <Sliding.Provider value={setSliding}>
-          <ScrollView contentContainerStyle={styles.body} showsVerticalScrollIndicator={false} scrollEnabled={!sliding}>
+          {/* One per tab (its key): a tab opens at its top, not where the last one was scrolled to. */}
+          <ScrollView key={tab} testID="display-body" contentContainerStyle={styles.body} showsVerticalScrollIndicator={false} scrollEnabled={!sliding}>
             {tab === 'text' && <TextTab s={settings} c={c} slide={onSlide} />}
             {tab === 'spacing' && <SpacingTab s={settings} c={c} slide={onSlide} />}
             {tab === 'colors' && <ColorsTab s={settings} c={c} />}
@@ -392,7 +393,8 @@ function Swatches({ c, colors, value, onPick }: { c: Theme; colors: string[]; va
             onPress={() => onPick(col)}
             accessibilityLabel={col}
             accessibilityState={{ selected: on }}
-            style={[styles.colorDot, { backgroundColor: col, borderColor: on ? c.accent : c.border, borderWidth: on ? 3 : 2 }]}
+            // On a dark panel the dark colours' edge is drawn lighter: a black dot on a black panel still shows.
+            style={[styles.colorDot, { backgroundColor: col, borderColor: on ? c.accent : c.dark ? c.muted : c.border, borderWidth: on ? 3 : 2 }]}
           />
         );
       })}

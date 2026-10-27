@@ -72,3 +72,20 @@ it('leaves files from a newer build alone', () => {
   expect(migrateStorage([{ to: STORAGE_VERSION + 1, run: () => {} }])).toBe('newer');
   expect(version()).toBe(STORAGE_VERSION + 1);
 });
+
+it('migrateOnce: once per start, however many things load the files (the library, the root layout)', async () => {
+  vi.resetModules();
+  const fresh = await import('@/lib/migrations');
+  expect(fresh.migrateOnce()).toBe('current');
+  expect(version()).toBe(STORAGE_VERSION);
+  disk.clear();
+  expect(fresh.migrateOnce()).toBe('current');
+  expect(version()).toBeUndefined(); // not run again
+  // Run by the root layout first: not again when the library loads.
+  vi.resetModules();
+  const again = await import('@/lib/migrations');
+  again.migrateStorage();
+  disk.clear();
+  again.migrateOnce();
+  expect(version()).toBeUndefined();
+});

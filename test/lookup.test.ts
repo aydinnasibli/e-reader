@@ -288,6 +288,14 @@ describe('looking up words', () => {
     expect(lowerWord('İstanbul', 'en')).toBe('istanbul');
   });
 
+  it('a character code beyond the last one (a damaged entry) is shown as written: the look-up doesn’t wait forever', async () => {
+    expect(stripHtml('a &#1114112; b &#x110000; c &#233;')).toBe('a &#1114112; b &#x110000; c é');
+    network();
+    TDK.damla = [{ madde: 'damla', anlamlarListe: [{ anlam: 'Sıvının yuvarlak parçası &#99999999;', ozelliklerListe: [{ tur: '3', tam_adi: 'isim' }] }] }];
+    const def = await Promise.race([defineWord('damla', 'tr'), new Promise((r) => setTimeout(() => r('still waiting'), 3000))]);
+    expect(def).toMatchObject({ word: 'damla', source: 'TDK', senses: [{ defs: [{ text: 'Sıvının yuvarlak parçası &#99999999;' }] }] });
+  });
+
   it('reads TDK’s answer, and its "not found"', () => {
     expect(parseTdk({ error: 'Sonuç bulunamadı' })).toBeNull();
     expect(parseTdk(TDK.gelmek)).toEqual({ word: 'gelmek', language: 'Turkish', source: 'TDK', senses: [{ pos: 'nesnesiz', defs: [{ text: 'Ulaşmak, varmak' }] }] });

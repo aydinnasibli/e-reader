@@ -89,7 +89,7 @@ export function NavigatorSheet({
         <AnnotationList
           items={ann.highlights}
           theme={theme}
-          empty="No highlights yet. Long-press a paragraph to highlight text or add a note."
+          empty="No highlights yet. Open the menu and tap Highlight, then tap or drag over the text."
           render={(h: Highlight) => (
             <>
               <View style={[styles.colorBar, { backgroundColor: highlightColor(h.color, theme.dark) }]} />

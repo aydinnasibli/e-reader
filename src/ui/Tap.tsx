@@ -3,7 +3,7 @@
 // every control; plain Pressable is for areas like the page itself.
 
 import * as Haptics from 'expo-haptics';
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { Animated, type GestureResponderEvent, Pressable, type PressableProps, type StyleProp, StyleSheet, type ViewStyle } from 'react-native';
 
 const AnimatedPressable = Animated.createAnimatedComponent(Pressable);
@@ -25,6 +25,15 @@ export function Tap({ style, feedback = 'scale', haptic, onPressIn, onPressOut, 
   const { opacity, scale } = PRESSED[feedback];
   // A button that is faded already (disabled) fades further from there.
   const base = Number(StyleSheet.flatten(style)?.opacity ?? 1);
+  // Made once, not on every redraw: once the button has been pressed, each new
+  // one would also be made (and the old one dropped) on the native side.
+  const pressed = useMemo(
+    () => ({
+      opacity: p.interpolate({ inputRange: [0, 1], outputRange: [base, base * opacity] }),
+      transform: scale === 1 ? undefined : [{ scale: p.interpolate({ inputRange: [0, 1], outputRange: [1, scale] }) }],
+    }),
+    [p, base, opacity, scale],
+  );
   return (
     <AnimatedPressable
       {...rest}
@@ -44,13 +53,7 @@ export function Tap({ style, feedback = 'scale', haptic, onPressIn, onPressOut, 
           onPress(e);
         })
       }
-      style={[
-        style,
-        {
-          opacity: p.interpolate({ inputRange: [0, 1], outputRange: [base, base * opacity] }),
-          transform: scale === 1 ? undefined : [{ scale: p.interpolate({ inputRange: [0, 1], outputRange: [1, scale] }) }],
-        },
-      ]}
+      style={[style, pressed]}
     />
   );
 }

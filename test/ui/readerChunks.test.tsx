@@ -211,13 +211,41 @@ it('a colour change restyles the page without laying it out again at another pla
   expect(page().shown().first).toEqual(shownBefore);
 }, 30000);
 
+it('the chunks shown are made at once; only those made ahead of the reader or measured on are made in pieces (a pause waits for the next frame)', async () => {
+  const html = require('@/reader/web/html');
+  const atOnce = jest.spyOn(html, 'chunkHtml');
+  const inPieces = jest.spyOn(html, 'chunkHtmlSliced');
+  const chunksOf = (calls: unknown[][]) => calls.map((call) => (call[1] as number) / PER_CHUNK);
+  try {
+    await open();
+    // The layout measured on chunks like most of the book: made in the background.
+    await waitFor(() => expect(sentOf('measure')).toBeGreaterThan(0), { timeout: 5000 });
+    const shown = page().last('content')!.chunks.map((ch) => ch.c);
+    expect(chunksOf(atOnce.mock.calls)).toEqual(expect.arrayContaining(shown));
+    expect(chunksOf(inPieces.mock.calls).filter((c) => shown.includes(c))).toEqual([]);
+    expect(page().last('measure')!.chunks.every((ch) => chunksOf(inPieces.mock.calls).includes(ch.c))).toBe(true);
+  } finally {
+    atOnce.mockRestore();
+    inPieces.mockRestore();
+  }
+}, 30000);
+
 it('a jump made while an earlier one is still being prepared wins: the earlier one never lands', async () => {
   await open();
-  // The chunk with the albatross is slow to read.
+  // The chunk with the albatross is slow to read: it comes when the test lets it.
   const read = BookData.prototype.loadChunk;
+  let letThrough!: () => void;
+  const gate = new Promise<void>((r) => (letThrough = r));
+  const reads: Promise<unknown>[] = [];
   const slow = jest.spyOn(BookData.prototype, 'loadChunk').mockImplementation(function (this: BookData, i: number) {
     const p = read.call(this, i);
-    return i === 4 ? p.then((b) => new Promise((r) => setTimeout(() => r(b), 300))) : p;
+    if (i !== 4) return p;
+    const late = p.then(async (b) => {
+      await gate;
+      return b;
+    });
+    reads.push(late);
+    return late;
   });
   await emit({ t: 'tap' });
   await fireEvent.press(screen.getByLabelText('Search'));
@@ -229,7 +257,12 @@ it('a jump made while an earlier one is still being prepared wins: the earlier o
   await emit({ t: 'tap' });
   await fireEvent.press(screen.getByLabelText('Next chapter'));
   await settle();
-  await act(async () => new Promise((r) => setTimeout(r, 500)));
+  // Now the slow chunk comes, and whatever was waiting for it has run.
+  await act(async () => {
+    letThrough();
+    await Promise.all(reads);
+    await new Promise((r) => setImmediate(r));
+  });
   await act(() => page().settled());
   expect(page().shown().c).toBe(1);
   expect(page().sent.filter((m) => m.t === 'content').every((m) => !m.chunks.some((c) => c.c === 4))).toBe(true);

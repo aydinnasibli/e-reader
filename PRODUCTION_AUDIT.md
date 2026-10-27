@@ -352,3 +352,50 @@ How it was done: six auditors (conversion engine, reading page, reader screen, d
 - Page numbers are estimates: rarely a number is skipped or repeated at the end of a chunk, and a chunk whose pages hold far more or less than its weight says (a long contents list at an extreme text size) gets its own numbers wrong, not the rest of the book's.
 - MOBI/AZW3: HUFF/CDIC compression, contents and links still unsupported (owner: low priority); AZW3 stylesheets aren't read (inline styles are).
 - Not run on a real phone: the installed release APK, 120 Hz page-turn smoothness, memory over many books, the real Android "Open with" intent and the Add picker (Expo Go can't receive intents).
+
+## 9. Fifth pass: device check, full review and fixes (2026-10-27/28)
+
+On `main`, left uncommitted for the owner. The owner asked for the app to be checked on both phones (Android emulator and iOS Simulator, one after the other, driven with mobile-mcp), for every problem found, including code-quality ones, to be checked against the code and fixed, and then for everything to be checked on the devices again. Four reviewers (conversion engine, data layer, reader and WebView, app shell and config) checked their findings against the code and fixed them in their own files. Every bug fix has a test that fails on the old code.
+
+### Owner decisions (this pass)
+
+| Question | Decision |
+|---|---|
+| Books already in the library | Converted again once (`ENGINE_VERSION` 3), annotations moved by their text as before. |
+| Highlighting over a highlight that has a note | Ask first ("Highlight over a note?"); Cancel adds nothing. |
+| iPhone status bar in Expo Go (clock shown twice) | Left as is. Expo Go's `UIViewControllerBasedStatusBarAppearance = false` means the app can't hide it from JS. |
+| `vertical-align: super/sub` in a book's CSS | Honoured (raised / lowered like `<sup>`/`<sub>`). |
+| Button role on every `Tap` | Still declined (P2-2). |
+
+### Fixed
+
+| Area | Problem | Fix |
+|---|---|---|
+| Reader | After **Done**, a quick tap still highlighted a word (and saved it). | RN ignores marker taps and drags while the tool is off. |
+| Reader | Highlighting across a noted highlight deleted the note silently. | Asks first (tap and drag). |
+| Reader | Rotation showed the old layout, half-width or cut off, for 3–26 s. | The page hides its text the moment its width changes, until the new layout is drawn; RN covers the page while the window and reader size disagree. On-screen chunks are no longer built in timer-paused slices (only prefetch is), and a measure for a layout about to be replaced is skipped. Emulator: new layout in 1.2 s (landscape) / 4.7 s (portrait), was 26 s / 23 s; iPhone 17 Simulator: under 1.6 s. |
+| Reader | A footnote mark could sit alone at the start of a line. | The space before a short note mark is drawn as a no-break space; a mark right after a word stays with its last letter (`nowrap`). |
+| Reader | Display panel kept the previous tab's scroll; dark swatches invisible on dark panels; menu info line cut off; chapter buttons, Go-to pill, colour dots and selection menu under 44 pt. | Tab resets scroll; swatches outlined; info line wraps; 44-point targets. |
+| Reader | Smaller: haptic repeated on selection re-reports, iOS page reload had no fallback, auto-turn bar restarted twice, discarded page views stayed active, empty-highlights hint out of date, tap guide labels wrapped, two renders per page turn, every mark re-sent per drag frame. | Fixed; `[id].tsx` split into hooks (`useReaderBook`, `useReadingPlace`, `useAutoRead`, `useDisplayDraft`, `useReaderSelection`). |
+| Engine | FB2: an unclosed inline element spread its style and link to the rest of the book; text inside `<style name>` vanished; picture names could collide. | Elements closed with an outer one are unwound; FB2 has no raw-text elements; collision-free names. |
+| Engine | EPUB: a chapter with an unclosed `<head>` came out empty; CSS class names with Turkish letters ignored; `vertical-align` ignored; translators listed as authors. | `<body>` ends the head; any-alphabet names and escapes; super/sub honoured; `aut` creators only when roles are given. |
+| Engine | Lookup tables indexed by book text (`&constructor;`, `encoding="constructor"` threw); a ZIP entry claiming a false size was read ~33,000 times. | `Map` / prototype-free records; reads stop at the real end of the file (same book out). Shared byte readers, link targets, picture probe, TXT heading match; `ingestTxt` split up. |
+| Data | A malformed backup (`sort: "constructor"`) could break the library screen on every start; Add / Open-with failures were all called "not enough free space"; a TDK answer could leave Look Up spinning; a failed library.json save was silent; backups silently left out books without a fingerprint; migrations could run after the library was loaded (Open with, cold start). | Own-key checks and read-back validation; a separate "something went wrong" result, logged; guarded parse; save failures retried and warned; skipped books listed; migrations run before the first load. |
+| Data | `library.ts` (1,300 lines) did everything; stores, `freeSpace`, `newId` and no-space checks were copied around; JSON reads were trusted. | Split into store / import / queue / swap modules behind `library.ts`; one `createStore`, `space.ts`, `ids.ts`; `readJson` takes a shape check. |
+| Shell | Screen readers read every text in a row (stray ", ", title twice); chips and menu ticks had no selected/checked state; first tap on a Highlights & notes result only closed the keyboard; a double tap opened two readers; covers split words mid-word; dialogs went blank while closing; whole library redrawn on every saved place while reading. | Explicit labels and hidden decoration; `accessibilityState`; `keyboardShouldPersistTaps`; `pushOnce`; break points after `-._` and shrink to fit; last content kept while closing; stable `renderItem`, memoised cells. |
+| Shell / config | Dead `file` scheme in the Open-with filter; no anchor or not-found route; 320-line library component. | Removed; `unstable_settings.anchor` and a themed "Nothing here" page; split into `src/ui/library/`. |
+| Tests | Wall-clock and sleep-based tests failed under load (CI gates the APK on them). | Counted work, best-of-N ratios, fake timers or settled signals; vitest `testTimeout` 30 s and `maxWorkers` 50 %. |
+| Packages | Expo SDK 58 patches behind. | `expo` 58.0.20, `expo-file-system` 58.0.12, `expo-router` 58.0.27 (`expo install --fix`). |
+
+### Verified
+
+- `tsc --noEmit` ✅ · `expo lint` ✅ · vitest 397/397 ✅ · jest 314/314 ✅ · `npm run test:page` all passed in Chromium and WebKit (360 checks) ✅ · `expo-doctor` 20/20 ✅.
+- **Android emulator** (Android 16, Expo Go 58.0.5): all 18 books converted again with every highlight and note kept; labels, checked and selected states; cover breaks; 44 dp targets; Display tab reset and swatch outlines; Done-then-tap highlights nothing; "Highlight over a note?" and Cancel keeps the note; footnote marks stay with their word; page numbers update on turns; a double tap opens one reader; "Nothing here" page; dialogs close without going blank; rotation as in the table; opening a book about 3.8 s (debug JS).
+- **iPhone 17 Simulator** (iOS 27.0, Expo Go 58.0.7): Files → Add of EPUB / FB2 / TXT, Turkish windows-1254 text and hyphenation, own selection menu with no system menu, Turkish Look Up (TDK + English), footnote opens, drag highlighting, Done-then-tap, Display tab reset, rotation under 1.6 s, one tap on a search result with the keyboard up opens it.
+
+### Known limits and not verified
+
+- `npm audit`: 3 high findings, all `zod` inside `@expo/cli` (a build tool, not in the app); npm's only fix is a downgrade to Expo 54.
+- The iPhone status bar stays visible while reading in Expo Go (owner: leave both clocks).
+- Notes search with a real on-screen keyboard was checked on the iPhone Simulator only (the emulator uses a hardware keyboard).
+- Not run on a real phone or a release build: speed (the emulator and simulator run debug JS, where every tap takes about a second), the real Android Open-with intent after the filter change, VoiceOver/TalkBack read-out.

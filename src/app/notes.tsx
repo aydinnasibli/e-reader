@@ -3,7 +3,7 @@
 
 import Ionicons from '@expo/vector-icons/Ionicons';
 import * as Clipboard from 'expo-clipboard';
-import { Stack, router } from 'expo-router';
+import { Stack } from 'expo-router';
 import { useMemo, useState } from 'react';
 import { SectionList, Share, StyleSheet, Text, TextInput, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -14,7 +14,9 @@ import { type BookEntry, useLibrary } from '@/lib/library';
 import { shareTextFile } from '@/lib/shareText';
 import { confirmDeleteHighlight, hasNote } from '@/ui/confirm';
 import { showActions } from '@/ui/dialogs';
+import { HeaderButton } from '@/ui/HeaderButton';
 import { useColumnPadding } from '@/ui/layout';
+import { pushOnce } from '@/ui/navigate';
 import { highlightColor, useAppColors } from '@/ui/theme';
 import { Tap } from '@/ui/Tap';
 
@@ -70,7 +72,7 @@ export default function NotesScreen() {
   }, [all, query, notesOnly]);
   const count = all.reduce((n, s) => n + s.data.length, 0);
 
-  const open = (book: BookEntry, h: Highlight) => router.push({ pathname: '/reader/[id]', params: { id: book.id, b: String(h.b), o: String(h.s) } });
+  const open = (book: BookEntry, h: Highlight) => pushOnce({ pathname: '/reader/[id]', params: { id: book.id, b: String(h.b), o: String(h.s) } });
   const menu = (book: BookEntry, h: Highlight) =>
     showActions(undefined, [
       { label: 'Open in book', icon: 'book-outline', onPress: () => open(book, h) },
@@ -88,13 +90,7 @@ export default function NotesScreen() {
           headerStyle: { backgroundColor: c.bg },
           headerTintColor: c.text,
           headerShadowVisible: false,
-          // A 44-point square: the header ignores taps outside its buttons' boxes.
-          headerRight: () =>
-            count ? (
-              <Tap onPress={exportAll} style={styles.headerButton} accessibilityLabel="Export highlights">
-                <Ionicons name="share-outline" size={24} color={c.accent} />
-              </Tap>
-            ) : null,
+          headerRight: () => (count ? <HeaderButton icon="share-outline" size={24} color={c.accent} label="Export highlights" onPress={exportAll} /> : null),
         }}
       />
       {count ? (
@@ -126,6 +122,10 @@ export default function NotesScreen() {
         sections={sections}
         keyExtractor={(h) => h.id}
         stickySectionHeadersEnabled={false}
+        // While searching, a tap on a highlight opens it (by default the first
+        // tap only put the keyboard away), and scrolling puts the keyboard away.
+        keyboardShouldPersistTaps="handled"
+        keyboardDismissMode="on-drag"
         contentContainerStyle={{ paddingBottom: insets.bottom + 40, ...column }}
         renderSectionHeader={({ section }) => (
           <View style={styles.sectionHead}>
@@ -145,28 +145,33 @@ export default function NotesScreen() {
             </Tap>
           </View>
         )}
-        renderItem={({ item: h, section }) => (
-          <Tap
-            feedback="card"
-            onPress={() => open(section.book, h)}
-            onLongPress={() => menu(section.book, h)}
-            style={[styles.row, { backgroundColor: c.card }]}>
-            <View style={[styles.swatch, { backgroundColor: highlightColor(h.color, c.dark) }]} />
-            <View style={{ flex: 1 }}>
-              <Text numberOfLines={4} style={[styles.quote, { color: c.text }]}>
-                {h.text}
-              </Text>
-              {h.note ? (
-                <Text style={[styles.note, { color: c.text, borderColor: c.border }]}>
-                  <Ionicons name="create-outline" size={13} color={c.secondary} /> {h.note}
+        renderItem={({ item: h, section }) => {
+          const where = [h.chapter, new Date(h.createdAt).toLocaleDateString()].filter(Boolean);
+          return (
+            <Tap
+              feedback="card"
+              onPress={() => open(section.book, h)}
+              onLongPress={() => menu(section.book, h)}
+              // Read out as the quote, its note and where it is (not the note's icon).
+              accessibilityLabel={[h.text, h.note ? `note: ${h.note}` : '', ...where].filter(Boolean).join(', ')}
+              style={[styles.row, { backgroundColor: c.card }]}>
+              <View style={[styles.swatch, { backgroundColor: highlightColor(h.color, c.dark) }]} />
+              <View style={{ flex: 1 }}>
+                <Text numberOfLines={4} style={[styles.quote, { color: c.text }]}>
+                  {h.text}
                 </Text>
-              ) : null}
-              <Text numberOfLines={1} style={{ color: c.secondary, fontSize: 12, marginTop: 6 }}>
-                {[h.chapter, new Date(h.createdAt).toLocaleDateString()].filter(Boolean).join(' · ')}
-              </Text>
-            </View>
-          </Tap>
-        )}
+                {h.note ? (
+                  <Text style={[styles.note, { color: c.text, borderColor: c.border }]}>
+                    <Ionicons name="create-outline" size={13} color={c.secondary} aria-hidden /> {h.note}
+                  </Text>
+                ) : null}
+                <Text numberOfLines={1} style={{ color: c.secondary, fontSize: 12, marginTop: 6 }}>
+                  {where.join(' · ')}
+                </Text>
+              </View>
+            </Tap>
+          );
+        }}
         ListEmptyComponent={
           <View style={styles.empty}>
             <Ionicons name={count ? 'search-outline' : 'color-wand-outline'} size={48} color={c.secondary} />
@@ -184,7 +189,6 @@ export default function NotesScreen() {
 }
 
 const styles = StyleSheet.create({
-  headerButton: { width: 44, height: 44, alignItems: 'center', justifyContent: 'center' },
   tools: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 16, paddingTop: 8, paddingBottom: 4 },
   search: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: 6, borderRadius: 10, paddingHorizontal: 10 },
   input: { flex: 1, fontSize: 15, paddingVertical: 8 },

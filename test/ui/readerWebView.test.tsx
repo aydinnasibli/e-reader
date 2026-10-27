@@ -179,14 +179,19 @@ describe("the book's language", () => {
   }, 30000);
 });
 
+// (On fake timers: "not laid out again" is checked once the time it would take has surely passed.)
+const later = (ms: number) => act(async () => void jest.advanceTimersByTime(ms));
+
 describe('the reading area', () => {
   it('the bars hiding as the book opens: laid out once, for the bars hidden', async () => {
+    jest.useFakeTimers({ doNotFake: ['setImmediate'] });
     await render(<ReaderScreen />);
     // The status and navigation bars go away a moment after the reader opens.
-    await act(async () => new Promise((r) => setTimeout(r, 50)));
+    await later(50);
     await act(async () => setInsets({ top: 0, bottom: 0 }));
     await waitFor(() => expect(page().shown()).toBeTruthy(), { timeout: 5000 });
-    await act(async () => new Promise((r) => setTimeout(r, 600)));
+    await later(600);
+    await act(() => page().settled());
     expect(setups()).toHaveLength(1);
     expect(setups()[0].setup.frame.height).toBe(require('react-native').Dimensions.get('window').height - 30 - 30);
   }, 30000);
@@ -194,31 +199,53 @@ describe('the reading area', () => {
   it('the menu brings the bars back: the book is not laid out again', async () => {
     mockInsets.now = { top: 0, bottom: 0, left: 0, right: 0 };
     await open();
+    jest.useFakeTimers({ doNotFake: ['setImmediate'] });
     const before = setups().length;
     await act(() => page().emit({ t: 'tap' }));
     await act(async () => setInsets({ top: 24, bottom: 48 }));
-    await act(async () => new Promise((r) => setTimeout(r, 600)));
+    await later(600);
     await act(() => page().emit({ t: 'tap' }));
     await act(async () => setInsets({ top: 0, bottom: 0 }));
-    await act(async () => new Promise((r) => setTimeout(r, 600)));
+    await later(600);
+    await act(() => page().settled());
     expect(setups()).toHaveLength(before);
   }, 30000);
 });
+
+it('the bars going away in steps as the menu closes (the status bar, then the navigation bar): the book is not laid out for the step between', async () => {
+  mockInsets.now = { top: 0, bottom: 0, left: 0, right: 0 };
+  await open();
+  jest.useFakeTimers({ doNotFake: ['setImmediate'] });
+  const before = setups().length;
+  await act(() => page().emit({ t: 'tap' }));
+  await act(async () => setInsets({ top: 24, bottom: 48 }));
+  await later(600);
+  // Closed: the status bar goes at once, the navigation bar half a second later.
+  await act(() => page().emit({ t: 'tap' }));
+  await act(async () => setInsets({ top: 0 }));
+  await later(500);
+  await act(async () => setInsets({ bottom: 0 }));
+  await later(1500);
+  await act(() => page().settled());
+  expect(setups()).toHaveLength(before);
+}, 30000);
 
 it('a phone on its side with the navigation bar at the side: the menu bringing it back does not lay the book out again', async () => {
   const landscape = { width: 800, height: 380, scale: 2, fontScale: 1 };
   Dimensions.set({ window: landscape, screen: landscape });
   mockInsets.now = { top: 0, bottom: 0, left: 0, right: 0 };
   await open();
-  await act(async () => new Promise((r) => setTimeout(r, 400)));
+  jest.useFakeTimers({ doNotFake: ['setImmediate'] });
+  await later(400);
+  await act(() => page().settled());
   const before = setups().length;
   // The menu: the navigation bar comes back, at the right-hand side; then it goes again.
   await act(() => page().emit({ t: 'tap' }));
   await act(async () => setInsets({ right: 48 }));
-  await act(async () => new Promise((r) => setTimeout(r, 400)));
+  await later(400);
   await act(() => page().emit({ t: 'tap' }));
   await act(async () => setInsets({ right: 0 }));
-  await act(async () => new Promise((r) => setTimeout(r, 400)));
+  await later(400);
   await act(() => page().settled());
   expect(setups()).toHaveLength(before);
   Dimensions.set({ window: window0, screen: window0 });

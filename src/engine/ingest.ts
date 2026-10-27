@@ -1,5 +1,6 @@
 // Entry point: figure out what kind of file this is and convert it.
 
+import { be32 } from './bytes';
 import { createDecoder, detectBom, sniffEncoding } from './decode';
 import { ingestEpub } from './epub';
 import { ingestFb2 } from './fb2';
@@ -99,10 +100,9 @@ function cutZipBook(src: ByteSource): 'epub' | 'fb2.zip' | null {
 function mobiVersion(src: ByteSource): number {
   const first = src.read(78, 4);
   if (first.length < 4) return 0;
-  const rec0 = ((first[0] << 24) >>> 0) + ((first[1] << 16) | (first[2] << 8) | first[3]);
-  const h = src.read(rec0 + 16, 24);
+  const h = src.read(be32(first, 0) + 16, 24);
   if (h.length < 24 || String.fromCharCode(h[0], h[1], h[2], h[3]) !== 'MOBI') return 0;
-  return ((h[20] << 24) >>> 0) + ((h[21] << 16) | (h[22] << 8) | h[23]);
+  return be32(h, 20);
 }
 
 // Text that would show as raw code: a tag, declaration or comment ("<html",

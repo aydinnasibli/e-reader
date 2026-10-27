@@ -36,10 +36,11 @@ const CLOSES_P = new Set([
 /** Elements an implied end never reaches past (a paragraph outside a table cell stays open inside it). */
 const SCOPE = new Set(['table', 'td', 'th', 'caption', 'button', 'object', 'marquee', 'applet', 'template', 'html']);
 const CELL_GAP = ' · ';
-const INLINE_STYLE: Record<string, number> = {
+// (Maps where the key comes from the book: an element or type called "constructor" is nothing special.)
+const INLINE_STYLE = new Map(Object.entries({
   b: BOLD, strong: BOLD, i: ITALIC, em: ITALIC, cite: ITALIC, var: ITALIC, dfn: ITALIC,
   code: MONO, tt: MONO, kbd: MONO, samp: MONO, sup: SUP, sub: SUB,
-};
+}));
 // Text that already numbers its list item ("1. Wash", "(a)", "iv)") or bullets it.
 const OWN_NUMBER = /^\s*\(?(\d{1,4}|[a-zA-Z]|[ivxlcdmIVXLCDM]{1,6})[.)]\s/;
 const OWN_BULLET = /^\s*[•·●▪◦‣∙*–—-]\s/;
@@ -140,7 +141,7 @@ function marker(n: number, type: string): string {
   }
 }
 
-const TYPE_ATTR: Record<string, string> = { '1': 'decimal', a: 'lower-alpha', A: 'upper-alpha', i: 'lower-roman', I: 'upper-roman' };
+const TYPE_ATTR = new Map(Object.entries({ '1': 'decimal', a: 'lower-alpha', A: 'upper-alpha', i: 'lower-roman', I: 'upper-roman' }));
 
 export class HtmlToBlocks implements MarkupHandler {
   private stack: El[] = [];
@@ -192,6 +193,8 @@ export class HtmlToBlocks implements MarkupHandler {
       const sheet = this.opts.stylesheet?.(attrs.href);
       if (sheet && !sheet.empty) this.sheets.push(sheet);
     }
+    // The body ends a head left open, as browsers end it: otherwise the whole chapter would be skipped with it.
+    if (name === 'body') this.skip = 0;
     if (this.skip) {
       if (SKIP.has(name)) this.skip++;
       return;
@@ -292,7 +295,7 @@ export class HtmlToBlocks implements MarkupHandler {
         this.ref = el.ref;
       }
     }
-    this.style = ((this.style | (INLINE_STYLE[name] ?? 0)) & ~decl.clear) | decl.set;
+    this.style = ((this.style | (INLINE_STYLE.get(name) ?? 0)) & ~decl.clear) | decl.set;
     if (block) {
       // Alignment is inherited by the blocks inside; left or justified undoes a centre.
       const own = name === 'center' ? 'c' : decl.align ?? alignAttr(attrs.align);
@@ -489,7 +492,7 @@ export class HtmlToBlocks implements MarkupHandler {
   private newList(name: string, attrs: Record<string, string>, decl: Declarations): List {
     const reversed = attrs.reversed !== undefined;
     const start = parseInt(attrs.start ?? '', 10);
-    const type = decl.list ?? (name === 'ol' ? (TYPE_ATTR[attrs.type ?? ''] ?? 'decimal') : 'disc');
+    const type = decl.list ?? (name === 'ol' ? (TYPE_ATTR.get(attrs.type ?? '') ?? 'decimal') : 'disc');
     return { ordered: name === 'ol', n: Number.isFinite(start) ? start : 1, step: reversed && Number.isFinite(start) ? -1 : 1, type };
   }
 

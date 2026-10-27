@@ -3,8 +3,12 @@
 // ways ('tr-TR', 'tur', 'Turkish'), and TXT files not at all, so it is also
 // guessed from the text.
 
-/** Three-letter (ISO 639-2) codes of the languages the app is likely to meet. */
-const THREE: Record<string, string> = {
+/**
+ * Three-letter (ISO 639-2) codes of the languages the app is likely to meet.
+ * (This and NAMES are Maps: the keys come from books, and a language called
+ * "constructor" is no language, not something every object has.)
+ */
+const THREE = new Map(Object.entries({
   eng: 'en',
   tur: 'tr',
   aze: 'az',
@@ -39,10 +43,10 @@ const THREE: Record<string, string> = {
   chi: 'zh',
   jpn: 'ja',
   kor: 'ko',
-};
+}));
 
 /** Language names, in English and in the language itself. */
-const NAMES: Record<string, string> = {
+const NAMES = new Map(Object.entries({
   english: 'en',
   turkish: 'tr',
   türkçe: 'tr',
@@ -67,7 +71,7 @@ const NAMES: Record<string, string> = {
   polski: 'pl',
   dutch: 'nl',
   nederlands: 'nl',
-};
+}));
 
 /**
  * The two-letter code for a language tag or name ('tr-TR', 'tur',
@@ -78,7 +82,7 @@ export function normaliseLanguage(tag?: string | null): string | undefined {
   if (!t) return undefined;
   const head = t.split(/[-_\s]/)[0];
   if (/^[a-z]{2}$/.test(head)) return head;
-  return THREE[head] ?? NAMES[head] ?? NAMES[t];
+  return THREE.get(head) ?? NAMES.get(head) ?? NAMES.get(t);
 }
 
 /** Common short words, which make up a large share of any running text. */

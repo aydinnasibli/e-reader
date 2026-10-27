@@ -46,6 +46,8 @@ export class FakePage {
   /** Chunks that go on from the one before on its last page (Chunk.joins). */
   private joins = new Set<number>();
   marks: PageMark[] = [];
+  /** The highlight tool's drag as it goes (drawn over the marks). */
+  stroke: PageMark[] = [];
   marking = false;
   /** The key of the layout and content the page has now (echoed in 'shown', as the page does). */
   key = '';
@@ -87,6 +89,14 @@ export class FakePage {
   receive(m: ToPage) {
     this.sent.push(m);
     this.queue = this.queue.then(() => this.handle(m)).catch((e) => console.error('fake page:', e));
+  }
+
+  /** The page busy (laying out, say): nothing sent from now on is answered until the function returned is called. */
+  hold(): () => void {
+    let go!: () => void;
+    const held = new Promise<void>((r) => (go = r));
+    this.queue = this.queue.then(() => held);
+    return go;
   }
 
   private handle(m: ToPage) {
@@ -142,6 +152,9 @@ export class FakePage {
         return;
       case 'marks':
         this.marks = m.marks;
+        return;
+      case 'stroke':
+        this.stroke = m.marks;
         return;
       case 'tool':
         this.marking = m.marking;
@@ -302,11 +315,10 @@ export class FakePage {
     const next = ps[this.at + showing];
     const lastC = Math.max(...this.chunks.keys());
     const lastPage = this.complete && p.c === lastC && lastC === this.count - 1 && !next;
-    this.reply({ t: 'shown', first: p.first, next: next?.first ?? null, chunk: p.c, turned, key: this.key, lastPage });
-    // Page numbers: page mode only.
-    if (this.mode !== 'page') return;
+    // Page numbers (page mode only), in the same message.
     const counts = [...this.chunks.keys()].map((c) => ({ c, pages: ps.filter((x) => x.c === c).length, chars: this.chunks.get(c)!.reduce((n, b) => n + b.len, 0) }));
-    this.reply({ t: 'pages', counts, chunk: p.c, page: ps.filter((x) => x.c === p.c).indexOf(p), span: showing as 1 | 2 });
+    const pages = this.mode === 'page' ? { counts, chunk: p.c, page: ps.filter((x) => x.c === p.c).indexOf(p), span: showing as 1 | 2 } : undefined;
+    this.reply({ t: 'shown', first: p.first, next: next?.first ?? null, chunk: p.c, turned, key: this.key, lastPage, pages });
   }
 
   /** The last message of a kind the screen sent. */

@@ -9,21 +9,17 @@
 // streamed the same way. DRM-protected and HUFF/CDIC-compressed books are
 // reported as unsupported.
 
+import { be16, be32 } from './bytes';
 import { createDecoder } from './decode';
 import { HtmlToBlocks } from './html';
 import { BookError, type ByteSource, CUT_SHORT, DRM_MESSAGE, type IngestContext } from './io';
 import { bookLanguage } from './language';
 import { MarkupTokenizer } from './markup';
 import { ENGINE_VERSION, type ImageRef, type Manifest } from './types';
-import { pictureSize } from './picture';
-import { BookWriter, cleanText, pictureLines } from './writer';
-
-const u16 = (b: Uint8Array, o: number) => (b[o] << 8) | b[o + 1];
-const u32 = (b: Uint8Array, o: number) => ((b[o] << 24) >>> 0) + ((b[o + 1] << 16) | (b[o + 2] << 8) | b[o + 3]);
+import { PictureProbe } from './picture';
+import { BookWriter, cleanText } from './writer';
 
 const NO_INDEX = 0xffffffff;
-/** Bytes of pictures read for their sizes between two pauses. */
-const PROBE_BUDGET = 64 * 1024;
 
 export class MobiError extends BookError {}
 
@@ -39,11 +35,11 @@ function readPdb(src: ByteSource): Pdb {
   if (head.length < 78) throw new MobiError(CUT_SHORT);
   const type = String.fromCharCode(...head.subarray(60, 64));
   const creator = String.fromCharCode(...head.subarray(64, 68));
-  const count = u16(head, 76);
+  const count = be16(head, 76);
   const list = src.read(78, count * 8);
   if (list.length < count * 8) throw new MobiError(CUT_SHORT);
   const offsets: number[] = [];
-  for (let i = 0; i < count; i++) offsets.push(u32(list, i * 8));
+  for (let i = 0; i < count; i++) offsets.push(be32(list, i * 8));
   offsets.push(src.size);
   return { offsets, type, creator };
 }
@@ -77,10 +73,10 @@ interface Header {
 function readHeader(src: ByteSource, pdb: Pdb, index: number): Header {
   const start = pdb.offsets[index];
   const rec = src.read(start, pdb.offsets[index + 1] - start);
-  const compression = u16(rec, 0);
-  const textLength = u32(rec, 4);
-  const textRecords = u16(rec, 8);
-  const encryption = u16(rec, 12);
+  const compression = be16(rec, 0);
+  const textLength = be32(rec, 4);
+  const textRecords = be16(rec, 8);
+  const encryption = be16(rec, 12);
   const h: Header = {
     base: index,
     compression,
@@ -96,25 +92,25 @@ function readHeader(src: ByteSource, pdb: Pdb, index: number): Header {
     exth: new Map(),
   };
   if (rec.length < 20 || String.fromCharCode(...rec.subarray(16, 20)) !== 'MOBI') return h; // plain PalmDOC
-  const headerLength = u32(rec, 20);
-  h.encoding = u32(rec, 28);
-  h.version = u32(rec, 36);
-  h.firstImage = u32(rec, 108);
-  if (headerLength >= 0xe4) h.extraFlags = u16(rec, 242);
-  if (h.version >= 8 && headerLength >= 0xb8) h.fdst = u32(rec, 192);
-  const nameOffset = u32(rec, 84);
-  const nameLength = u32(rec, 88);
+  const headerLength = be32(rec, 20);
+  h.encoding = be32(rec, 28);
+  h.version = be32(rec, 36);
+  h.firstImage = be32(rec, 108);
+  if (headerLength >= 0xe4) h.extraFlags = be16(rec, 242);
+  if (h.version >= 8 && headerLength >= 0xb8) h.fdst = be32(rec, 192);
+  const nameOffset = be32(rec, 84);
+  const nameLength = be32(rec, 88);
   const dec = createDecoder(h.encoding === 65001 ? 'utf-8' : 'windows-1252', false);
   if (nameOffset && nameOffset + nameLength <= rec.length) h.title = dec.decode(rec.subarray(nameOffset, nameOffset + nameLength)).trim();
   // EXTH block: metadata like author, language, cover.
-  if (u32(rec, 128) & 0x40) {
+  if (be32(rec, 128) & 0x40) {
     let p = 16 + headerLength;
     if (String.fromCharCode(...rec.subarray(p, p + 4)) === 'EXTH') {
-      const count = u32(rec, p + 8);
+      const count = be32(rec, p + 8);
       p += 12;
       for (let i = 0; i < count && p + 8 <= rec.length; i++) {
-        const type = u32(rec, p);
-        const len = u32(rec, p + 4);
+        const type = be32(rec, p);
+        const len = be32(rec, p + 4);
         if (len < 8) break;
         const data = rec.subarray(p + 8, p + len);
         const list = h.exth.get(type);
@@ -197,7 +193,7 @@ const exthString = (h: Header, type: number) => {
 
 const exthNumber = (h: Header, type: number): number | null => {
   const v = h.exth.get(type)?.[0];
-  return v && v.length >= 4 ? u32(v, 0) : null;
+  return v && v.length >= 4 ? be32(v, 0) : null;
 };
 
 export async function ingestMobi(ctx: IngestContext): Promise<Manifest> {
@@ -224,10 +220,9 @@ export async function ingestMobi(ctx: IngestContext): Promise<Manifest> {
   const images: Record<string, ImageRef> = {};
   const firstImage = h.firstImage !== NO_INDEX ? h.base + h.firstImage : -1;
 
-  // Each picture's page space, from the size the start of its record gives
-  // (a little more of a JPEG's, as long as not too much is read between pauses).
+  // Each picture's page space, from the size the start of its record gives.
   const imageSpace = new Map<string, number>();
-  let probeBudget = PROBE_BUDGET;
+  const probe = new PictureProbe();
   const imageRef = (recIndex: number): string | null => {
     if (firstImage < 0 || recIndex < firstImage || recIndex >= pdb.offsets.length - 1) return null;
     const key = `rec:${recIndex}`;
@@ -238,14 +233,8 @@ export async function ingestMobi(ctx: IngestContext): Promise<Manifest> {
       const ext = sniffImageExt(head);
       if (!ext) return null;
       images[key] = { pdb: [off, len], ext };
-      probeBudget -= head.length;
-      let size = pictureSize(head);
-      if (!size && ext === 'jpg' && len > head.length && probeBudget >= 16 * 1024) {
-        const more = src.read(off, Math.min(len, 16 * 1024));
-        probeBudget -= more.length;
-        size = pictureSize(more);
-      }
-      if (size) imageSpace.set(key, pictureLines(size[0], size[1]));
+      const lines = probe.lines(head, len, (n) => src.read(off, Math.min(len, n)));
+      if (lines !== undefined) imageSpace.set(key, lines);
     }
     return key;
   };
@@ -290,7 +279,7 @@ export async function ingestMobi(ctx: IngestContext): Promise<Manifest> {
     const fi = h.base + h.fdst;
     if (fi < pdb.offsets.length - 1) {
       const fdst = src.read(pdb.offsets[fi], Math.min(64, pdb.offsets[fi + 1] - pdb.offsets[fi]));
-      if (String.fromCharCode(...fdst.subarray(0, 4)) === 'FDST' && u32(fdst, 8) > 0) textEnd = u32(fdst, 16);
+      if (String.fromCharCode(...fdst.subarray(0, 4)) === 'FDST' && be32(fdst, 8) > 0) textEnd = be32(fdst, 16);
     }
   }
   let done = 0;
@@ -316,7 +305,7 @@ export async function ingestMobi(ctx: IngestContext): Promise<Manifest> {
     if (done >= textEnd) break;
     ctx.progress(i / count);
     await ctx.pause();
-    probeBudget = PROBE_BUDGET;
+    probe.reset();
   }
   feed(decoder.end());
   if (plain) tok.feed('</p>');

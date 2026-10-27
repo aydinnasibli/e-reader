@@ -113,10 +113,19 @@ export class FileSink implements BookSink {
 
 const sibling = (file: File, suffix: string) => new File(file.parentDirectory, file.name + suffix);
 
-function tryRead<T>(file: File): T | null {
+/**
+ * The copies writeJson() keeps beside a file: the previous version (.bak),
+ * a new one not yet in place (.tmp), and a damaged one kept aside (.unreadable).
+ */
+export function savedCopies(file: File): File[] {
+  return ['.bak', '.tmp', '.unreadable'].map((s) => sibling(file, s));
+}
+
+function tryRead<T>(file: File, valid?: (v: unknown) => boolean): T | null {
   try {
     if (!file.exists) return null;
-    return JSON.parse(file.textSync()) as T;
+    const v: unknown = JSON.parse(file.textSync());
+    return v !== null && (!valid || valid(v)) ? (v as T) : null;
   } catch {
     return null;
   }
@@ -130,17 +139,18 @@ const unreadable = new Set<string>();
  * file got damaged, fall back to the newest good copy: the new version
  * waiting in .tmp (moving it into place deletes the old file first, then
  * renames, so a save cut off between the two leaves only that), then the
- * previous version in .bak.
+ * previous version in .bak. `valid`: what the file must hold (an array, an
+ * object with these fields); JSON of another shape counts as damaged.
  */
-export function readJson<T>(file: File): T | null {
-  const main = tryRead<T>(file);
+export function readJson<T>(file: File, valid?: (v: unknown) => boolean): T | null {
+  const main = tryRead<T>(file, valid);
   if (main !== null) return main;
   try {
     if (file.exists) unreadable.add(file.uri);
   } catch {
     // can't tell; nothing to keep aside
   }
-  return tryRead<T>(sibling(file, '.tmp')) ?? tryRead<T>(sibling(file, '.bak'));
+  return tryRead<T>(sibling(file, '.tmp'), valid) ?? tryRead<T>(sibling(file, '.bak'), valid);
 }
 
 /**
@@ -169,7 +179,8 @@ export function writeJson(file: File, value: unknown) {
  * copies go first, so a delete cut short leaves the file as it was.
  */
 export function removeJson(file: File) {
-  for (const f of [sibling(file, '.bak'), sibling(file, '.tmp'), file]) {
+  unreadable.delete(file.uri);
+  for (const f of [...savedCopies(file), file]) {
     try {
       if (f.exists) f.delete();
     } catch {

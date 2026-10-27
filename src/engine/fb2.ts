@@ -5,17 +5,23 @@
 import { MarkupDecoder } from './decode';
 import { BookError, CUT_SHORT, type IngestContext, READ_SLICE } from './io';
 import { bookLanguage } from './language';
+import { LinkTargets } from './links';
 import { type MarkupHandler, MarkupTokenizer } from './markup';
-import { BOLD, type BlockKind, ENGINE_VERSION, ITALIC, MONO, type Position, SUB, SUP, type ImageRef, type Manifest, type TocEntry } from './types';
+import { BOLD, type BlockKind, ENGINE_VERSION, ITALIC, MONO, SUB, SUP, type ImageRef, type Manifest, type TocEntry, record } from './types';
 import { BookWriter, cleanText } from './writer';
 import type { ZipArchive, ZipEntry } from './zip';
 
-const INLINE: Record<string, number> = {
+// (A Map: an element called "constructor" is nothing special.)
+const INLINE = new Map(Object.entries({
   strong: BOLD, emphasis: ITALIC, code: MONO, sup: SUP, sub: SUB,
-};
+}));
 const QUOTE = new Set(['epigraph', 'cite', 'annotation', 'text-author']);
 const NOT_BASE64 = /[^A-Za-z0-9+/=]/;
 const NOT_BASE64_ALL = /[^A-Za-z0-9+/=]+/g;
+/** FB2 has no elements of raw text: its <style name="…"> holds text in a style of the book's own. */
+const NO_RAW_TEXT: ReadonlySet<string> = new Set();
+/** Longest picture file name, before its extension. */
+const MAX_NAME = 100;
 
 function hrefAttr(attrs: Record<string, string>): string {
   for (const k in attrs) if (k === 'href' || k.endsWith(':href')) return attrs[k];
@@ -28,7 +34,7 @@ class Fb2Handler implements MarkupHandler {
   lang = '';
   coverId = '';
   toc: TocEntry[] = [];
-  images: Record<string, ImageRef> = {};
+  images = record<ImageRef>();
 
   private path: string[] = [];
   private inDescription = false;
@@ -52,14 +58,16 @@ class Fb2Handler implements MarkupHandler {
   private link: string | undefined;
   /** Footnotes: link targets seen so far, and where linked ids (and everything in the notes body) start/end. */
   linkKeys = new Set<string>();
-  notes: Record<string, [number, number]> = {};
-  /** Where each id is (first time seen), for links to places before them; and its exact place when it's inside the text. */
-  idBlock = new Map<string, number>();
-  idPlace = new Map<string, Position>();
+  notes = record<[number, number]>();
+  /** Where each id is, for links to places before them. */
+  targets = new LinkTargets();
   /** Path depth -> id being tracked there. */
   private tracked = new Map<number, string>();
   /** A picture being read: its base64 text, cleaned of line breaks a piece at a time as it arrives. */
   private binary: { id: string; type: string; parts: string[] } | null = null;
+  /** Each picture's file name by its id, and the names given: no two pictures share a file. */
+  private files = new Map<string, string>();
+  private fileNames = new Set<string>();
 
   constructor(
     private w: BookWriter,
@@ -150,16 +158,12 @@ class Fb2Handler implements MarkupHandler {
           w.endBlock();
           this.quote++;
           this.applyKind();
-        } else if (INLINE[name] !== undefined) this.pushStyle(INLINE[name]);
+        } else if (INLINE.has(name)) this.pushStyle(INLINE.get(name)!);
     }
     // Ids are opened after the element's own block handling, so they point at its first block.
     if (id) {
       const key = '#' + id;
-      if (!this.idBlock.has(key)) {
-        this.idBlock.set(key, w.blockIndex);
-        const place = w.mark();
-        if (place) this.idPlace.set(key, place);
-      }
+      if (!this.targets.has(key)) this.targets.see(key, w.blockIndex, w.mark());
       // A note: linked to already, or in the notes body (linked to from before it or after).
       if ((this.linkKeys.has(key) || this.notesBody) && !this.notes[key]) {
         this.notes[key] = [w.blockIndex, w.blockIndex];
@@ -175,10 +179,16 @@ class Fb2Handler implements MarkupHandler {
 
   close(name: string) {
     if (name === 'fictionbook') this.closedRoot = true;
-    // Pop to the matching element; FB2 is XML so this is normally exact.
+    // Pop to the matching element. FB2 is XML, but some books are made by
+    // hand: elements left open inside it end with it, innermost first, so an
+    // <emphasis> or a note's <a> left open doesn't run on through the book.
     const i = this.path.lastIndexOf(name);
     if (i < 0) return;
-    this.path.length = i;
+    while (this.path.length > i) this.end(this.path.pop()!, this.path.length);
+  }
+
+  /** The element `name`, at index `i` in the path, ends. */
+  private end(name: string, i: number) {
     if (name === 'description') {
       this.inDescription = false;
       this.onDescription?.();
@@ -243,7 +253,7 @@ class Fb2Handler implements MarkupHandler {
           w.endBlock();
           this.quote--;
           this.applyKind();
-        } else if (INLINE[name] !== undefined) this.popStyle();
+        } else if (INLINE.has(name)) this.popStyle();
     }
     // End every tracked id at or below the closed element (index i => depth i + 1).
     for (const [depth, key] of this.tracked) {
@@ -312,6 +322,22 @@ class Fb2Handler implements MarkupHandler {
     this.w.setKind(kind, level);
   }
 
+  /**
+   * The file for picture `id`: 'b_' and the id with what a file name can't
+   * hold made '_', and a number when another picture already has that name
+   * ("обложка.jpg" and "рисунок.jpg" are both "b________.jpg" otherwise).
+   */
+  private fileFor(id: string, ext: string): string {
+    let file = this.files.get(id);
+    if (file) return file;
+    const base = 'b_' + id.replace(/[^A-Za-z0-9._-]/g, '_').slice(0, MAX_NAME);
+    file = `${base}.${ext}`;
+    for (let n = 2; this.fileNames.has(file); n++) file = `${base}-${n}.${ext}`;
+    this.files.set(id, file);
+    this.fileNames.add(file);
+    return file;
+  }
+
   private finishBinary() {
     const b = this.binary;
     this.binary = null;
@@ -319,7 +345,7 @@ class Fb2Handler implements MarkupHandler {
     const data = b.parts.join('');
     if (!data) return;
     const ext = b.type.includes('png') ? 'png' : b.type.includes('gif') ? 'gif' : 'jpg';
-    const file = 'b_' + b.id.replace(/[^A-Za-z0-9._-]/g, '_') + '.' + ext;
+    const file = this.fileFor(b.id, ext);
     try {
       this.sink.writeImageBase64(file, data);
       this.images[b.id] = { file };
@@ -335,7 +361,7 @@ export async function ingestFb2(ctx: IngestContext, zip?: ZipArchive, entry?: Zi
   const h: Fb2Handler = new Fb2Handler(w, ctx.sink, () =>
     ctx.meta?.({ title: h.title || undefined, author: h.authors.join(', ') || undefined }),
   );
-  const tok = new MarkupTokenizer(h);
+  const tok = new MarkupTokenizer(h, NO_RAW_TEXT);
   // The encoding: a BOM, the XML declaration (checked against the bytes) or a guess.
   const decoder = new MarkupDecoder();
   const feed = (bytes: Uint8Array) => tok.feed(decoder.decode(bytes));
@@ -365,19 +391,10 @@ export async function ingestFb2(ctx: IngestContext, zip?: ZipArchive, entry?: Zi
   let cover: string | undefined;
   if (h.coverId && images[h.coverId]) cover = h.coverId;
   // Notes that are linked to; other links (back to where a note was referenced) go to their place.
-  const notes: Record<string, [number, number]> = {};
-  const anchors: Record<string, number> = {};
-  const anchorOffsets: Record<string, number> = {};
+  const notes = record<[number, number]>();
   for (const key of h.linkKeys) {
     if (h.notes[key]) notes[key] = h.notes[key];
-    else {
-      const place = h.idPlace.get(key);
-      const b = place?.b ?? h.idBlock.get(key);
-      if (b !== undefined && b < w.totalBlocks) {
-        anchors[key] = b;
-        if (place?.o) anchorOffsets[key] = place.o;
-      }
-    }
+    else h.targets.anchorAtId(key, w.totalBlocks);
   }
 
   return {
@@ -395,7 +412,7 @@ export async function ingestFb2(ctx: IngestContext, zip?: ZipArchive, entry?: Zi
     images,
     cover,
     notes,
-    anchors,
-    anchorOffsets,
+    anchors: h.targets.anchors,
+    anchorOffsets: h.targets.anchorOffsets,
   };
 }

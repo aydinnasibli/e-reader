@@ -11,6 +11,8 @@ import { waitFor } from '@testing-library/react-native';
 jest.mock('expo-file-system', () => require('./memfs'));
 jest.unmock('@/lib/storage');
 jest.mock('expo-document-picker', () => ({ getDocumentAsync: jest.fn() }));
+// The share sheet: a backup handed to it is saved or sent as a file.
+jest.mock('expo-sharing', () => ({ isAvailableAsync: jest.fn(() => Promise.resolve(true)), shareAsync: jest.fn(() => Promise.resolve()) }));
 
 const para = (i: number) => `Paragraph ${i}. ` + 'The sea was calm and the sky was wide. '.repeat(3);
 const EPUB = zipSync({
@@ -306,7 +308,9 @@ it('restoring onto a full phone: says what couldn’t be kept instead of stoppin
   const old = require('./oldBook') as typeof import('./oldBook');
   const { fingerprintOf } = require('@/lib/fingerprint') as typeof import('@/lib/fingerprint');
   const fp = fingerprintOf({ size: old.EPUB.length, read: (o: number, n: number) => old.EPUB.slice(o, o + n) });
-  old.oldBook({ engine: 2, fp });
+  // (On today's converter: not converted again under the test.)
+  const { ENGINE_VERSION } = require('@/engine/types') as typeof import('@/engine/types');
+  old.oldBook({ engine: ENGINE_VERSION, fp });
   jest.resetModules();
   const a = app();
   await new Promise((r) => setTimeout(r, 50));
@@ -355,4 +359,105 @@ it('restoring onto a full phone: says what couldn’t be kept instead of stoppin
   }
   expect(alert.mock.calls[alert.mock.calls.length - 1][0]).toBe('Not everything was restored');
   a.library.flushLibrary();
+});
+
+// ---------- what a picked file can't do, and what the person is told ----------
+
+it('a backup can’t bring in a sort or a colour every object has ("constructor"): left out', () => {
+  memfs.resetDisk();
+  jest.resetModules();
+  const a = app();
+  const b = a.backup.parseBackup(
+    JSON.stringify({
+      kind: 'nec-reader-backup',
+      version: 1,
+      sort: 'constructor',
+      view: 'list',
+      books: [
+        {
+          fp: '1:a:b',
+          title: 'Ok',
+          annotations: {
+            highlights: [
+              { id: 'h1', b: 1, s: 0, e: 4, color: 'constructor', text: 'Call' },
+              { id: 'h2', b: 1, s: 0, e: 4, color: 'toString', text: 'Call' },
+              { id: 'h3', b: 1, s: 0, e: 4, color: 'pink', text: 'Call' },
+            ],
+          },
+        },
+      ],
+    }),
+  )!;
+  expect(b.sort).toBeUndefined();
+  expect(b.view).toBe('list');
+  expect(b.books[0].annotations.highlights.map((h) => h.id)).toEqual(['h3']);
+});
+
+it('shelves.json with a sort or view this version doesn’t have opens the library with the usual ones', () => {
+  memfs.resetDisk();
+  memfs.putFile('mem://doc/shelves.json', strToU8(JSON.stringify({ sort: 'constructor', view: 'sideways', collections: [{ id: 'c1', name: 'Sea' }, null, { id: 5 }] })));
+  jest.resetModules();
+  const { getShelves, sortBooks } = require('@/lib/collections') as typeof import('@/lib/collections');
+  expect(getShelves()).toEqual({ sort: 'recent', view: 'grid', collections: [{ id: 'c1', name: 'Sea' }] });
+  // A sort it doesn't know keeps the books in the order they are, rather than losing them.
+  const books = [{ id: 'x', title: 'X', author: '' }] as import('@/lib/library').BookEntry[];
+  expect(sortBooks(books, 'constructor' as never)).toEqual(books);
+});
+
+it('a book whose file is gone (and was never fingerprinted) isn’t silently left out of a backup: it says which', async () => {
+  const old = require('./oldBook') as typeof import('./oldBook');
+  const { ENGINE_VERSION } = require('@/engine/types') as typeof import('@/engine/types');
+  old.oldBook({ engine: ENGINE_VERSION });
+  memfs.disk.delete(`${old.dir}/source.epub`);
+  jest.resetModules();
+  const a = app();
+  const made = await a.backup.createBackupReport();
+  expect(made.skipped).toEqual(['The Sea']);
+  expect(made.backup.books).toEqual([]);
+  const sharing = require('expo-sharing') as { shareAsync: jest.Mock };
+  const alert = jest.spyOn(require('react-native').Alert, 'alert').mockImplementation(() => {});
+  try {
+    await (require('@/ui/backupDialogs') as typeof import('@/ui/backupDialogs')).backUp();
+    expect(sharing.shareAsync).toHaveBeenCalledTimes(1);
+    expect(alert).toHaveBeenCalledWith('1 book isn’t in the backup', expect.stringContaining('The Sea'));
+  } finally {
+    alert.mockRestore();
+    a.library.flushLibrary();
+  }
+});
+
+it('a backup is never sent as message text, and a backup that can’t be shared says so', async () => {
+  memfs.resetDisk();
+  jest.resetModules();
+  app();
+  const sharing = require('expo-sharing') as { isAvailableAsync: jest.Mock; shareAsync: jest.Mock };
+  const RN = require('react-native') as typeof import('react-native');
+  const share = jest.spyOn(RN.Share, 'share').mockResolvedValue({ action: 'sharedAction' } as never);
+  const alert = jest.spyOn(RN.Alert, 'alert').mockImplementation(() => {});
+  try {
+    const dialogs = require('@/ui/backupDialogs') as typeof import('@/ui/backupDialogs');
+    sharing.shareAsync.mockRejectedValueOnce(new Error('No Activity found to handle Intent'));
+    await expect(dialogs.backUp()).resolves.toBeUndefined();
+    sharing.isAvailableAsync.mockResolvedValueOnce(false);
+    await dialogs.backUp();
+    expect(share).not.toHaveBeenCalled();
+    expect(alert.mock.calls.map((c) => c[0])).toEqual(['Couldn’t make the backup', 'Couldn’t make the backup']);
+  } finally {
+    share.mockRestore();
+    alert.mockRestore();
+  }
+});
+
+it('a file picker that fails to open says so instead of failing silently', async () => {
+  memfs.resetDisk();
+  jest.resetModules();
+  app();
+  (require('expo-document-picker').getDocumentAsync as jest.Mock).mockRejectedValueOnce(new Error('Different document picking in progress'));
+  const alert = jest.spyOn(require('react-native').Alert, 'alert').mockImplementation(() => {});
+  try {
+    await expect((require('@/ui/backupDialogs') as typeof import('@/ui/backupDialogs')).restoreFromFile()).resolves.toBeUndefined();
+    expect(alert).toHaveBeenCalledWith('Couldn’t open the file picker', expect.any(String));
+  } finally {
+    alert.mockRestore();
+  }
 });

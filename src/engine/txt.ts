@@ -35,6 +35,24 @@ const NUMBERED_RE = /^[\s.:—–-]*(\d+|[IVXLCDM]+)(?=$|[\s.:,—–-])/i;
 const ORDINAL_TITLE = /^\s*[A-Za-z\u00c0-\u024f\u0400-\u04ff]{1,12}\s*[—–:.]\s*\S/;
 
 /**
+ * The heading word or ordinal a line starts with ("Chapter", "Birinci Bölüm",
+ * "6. BÖLÜM"), matched folded: capitals, accents and the Turkish dotted and
+ * dotless i make no difference. Its length in the line (folding keeps the
+ * length, and the longest heading word or ordinal fits in the first 32
+ * characters) and its kind ('chapter', 'part', 'bolum'...); null if none.
+ */
+function headingStart(t: string): { length: number; kind: string } | null {
+  const start = t.slice(0, 32);
+  const f = ASCII.test(start) ? start.toLowerCase() : fold(start);
+  const tr = TR_ORDINAL.exec(f);
+  if (tr) return { length: tr[0].length, kind: tr[4] };
+  const n = TR_NUMBERED.exec(f);
+  if (n) return { length: n[0].length, kind: n[2] };
+  const h = HEADING_RE.exec(f);
+  return h ? { length: h[0].length, kind: h[1] } : null;
+}
+
+/**
  * A chapter heading: "Prologue", "Chapter 12", "Part II: The Return",
  * "Глава первая", "Birinci Bölüm", "6. BÖLÜM", "ÖNSÖZ". Not a sentence that
  * happens to start with such a word ("Part of me wanted to stay.").
@@ -46,14 +64,9 @@ export function isHeadingLine(t: string): boolean {
   if (ROMAN_RE.test(t)) return true;
   // The end of something in brackets ("Chapter I.]" closing a caption).
   if (/[\])]$/.test(t) && !/[[(]/.test(t)) return false;
-  // Matched folded: capitals, accents and the Turkish dotted and dotless i make no difference.
-  // (Folding keeps the length, so offsets in it are offsets in the line; the
-  // longest heading word or ordinal fits in the first 32 characters.)
-  const start = t.slice(0, 32);
-  const f = ASCII.test(start) ? start.toLowerCase() : fold(start);
-  const m = TR_ORDINAL.exec(f) ?? TR_NUMBERED.exec(f) ?? HEADING_RE.exec(f);
+  const m = headingStart(t);
   if (!m) return false;
-  const rest = t.slice(m[0].length);
+  const rest = t.slice(m.length);
   if (/^[\s.:—–…-]*$/.test(rest)) return true;
   if (NUMBERED_RE.test(rest)) return true;
   // A word naming which one, then its title: "BOOK FOURTH—SUCCOR FROM BELOW…", "Chapter One: The Start".
@@ -64,11 +77,7 @@ export function isHeadingLine(t: string): boolean {
 /** What a heading line is a heading of, folded ('chapter', 'part', 'bolum'...; 'roman' for "XII"). */
 function headingKind(t: string): string {
   if (ROMAN_RE.test(t)) return 'roman';
-  const start = t.slice(0, 32);
-  const f = ASCII.test(start) ? start.toLowerCase() : fold(start);
-  const tr = TR_ORDINAL.exec(f);
-  if (tr) return tr[4];
-  return TR_NUMBERED.exec(f)?.[2] ?? HEADING_RE.exec(f)?.[1] ?? '';
+  return headingStart(t)?.kind ?? '';
 }
 
 /**
@@ -80,11 +89,9 @@ function headingKind(t: string): string {
 function wrapsAsHeading(first: string, second: string): boolean {
   const t = first + ' ' + second;
   if (t.length > 160) return false;
-  const start = t.slice(0, 32);
-  const f = ASCII.test(start) ? start.toLowerCase() : fold(start);
-  const m = TR_ORDINAL.exec(f) ?? TR_NUMBERED.exec(f) ?? HEADING_RE.exec(f);
+  const m = headingStart(t);
   if (!m) return false;
-  const rest = t.slice(m[0].length);
+  const rest = t.slice(m.length);
   const p = rest.search(/[.:—–-]/);
   return p >= 0 && p <= 12 && !/\b[a-zçğıöşü]{3,}/.test(rest.slice(0, p));
 }
@@ -247,84 +254,82 @@ const WINDOW = 16 * 1024;
 /** How a line joins the one before it: the rest of a wrapped line, a line break kept, or a new paragraph. */
 type Break = 'wrap' | 'line' | 'para';
 
-export async function ingestTxt(ctx: IngestContext): Promise<Manifest> {
-  const { src } = ctx;
-  const head = src.read(0, Math.min(src.size, HEAD));
-  const bom = detectBom(head);
-  // Samples from further in too: a file can open with pages of plain ASCII
-  // (a licence, a preface) or with a layout of its own.
-  const windows = sampleWindows(src, head.length, WINDOWS, WINDOW);
-  const enc = sniffEncoding(head, windows);
-  await ctx.pause();
-  const layout = detectLayout([linesOf(head.subarray(bom?.skip ?? 0), enc, false), ...windows.map((w) => linesOf(w, enc, true))]);
-  await ctx.pause();
-  // Inside a paragraph, a line break kept on purpose shows in wrapped text and verse; otherwise lines run on.
-  const keepBreaks = !!layout.wrap || layout.verse;
+/** Lines of one block, each joined to the one before as `how` says; a kept break only where `keepBreaks`. */
+function writeLines(w: BookWriter, lines: string[], how: Break[], keepBreaks: boolean) {
+  lines.forEach((t, i) => {
+    if (i && how[i - 1] === 'line' && keepBreaks) w.lineBreak();
+    else if (i) w.text(' ');
+    w.text(t);
+  });
+}
 
-  // Text from a one-byte encoding has no combining marks to compose.
-  const w = new BookWriter(ctx.sink, enc !== 'utf-8' && enc !== 'utf-16le' && enc !== 'utf-16be');
-  // The paragraph being built. Its first lines are held back while they could
-  // still be a heading (one or two heading lines) or a scene break; after
-  // that it streams.
-  let held: string[] = [];
-  /** How each held line after the first joins the one before it. */
-  let joins: Break[] = [];
-  let streaming = false;
-  /** The last line of the open paragraph (null: none open), and its length in the file. */
-  let last: string | null = null;
-  let lastLen = 0;
-  // Headings not written yet. A run of them with no text between is a list
-  // of contents when one kind comes twice ("Chapter I.", "Chapter II.") or
-  // there are many: not chapters each starting a new page (the last of them
-  // is a chapter's start if it repeats one listed). "PART I", "Book I",
-  // "Chapter I." in a row are headings.
-  let queue: { lines: string[]; how: Break[]; kind: string }[] = [];
-  let run = 0;
+/** A heading as folded words ("chapter i"), and whether two are the same one (one may go on longer). */
+const keyOf = (lines: string[]) => fold(lines.join(' ')).replace(/[^a-z0-9\u00c0-\u1fff]+/g, ' ').trim();
+const sameHeading = (a: string, b: string) => !!a && !!b && (a === b || a.startsWith(b + ' ') || b.startsWith(a + ' '));
+
+/**
+ * Headings not written yet. A run of them with no text between is a list
+ * of contents when one kind comes twice ("Chapter I.", "Chapter II.") or
+ * there are many: not chapters each starting a new page (the last of them
+ * is a chapter's start if it repeats one listed). "PART I", "Book I",
+ * "Chapter I." in a row are headings.
+ */
+class HeadingQueue {
+  private queue: { lines: string[]; how: Break[]; kind: string }[] = [];
+  private run = 0;
   /** The kinds of heading in the run ('chapter', 'part'…), and whether one came twice. */
-  let runKinds = new Set<string>();
-  let repeated = false;
+  private runKinds = new Set<string>();
+  private repeated = false;
   /**
    * The first heading of each kind written so far, as folded words ("chapter
    * i"): a list of contents ending in "BOOK ONE", "CHAPTER I" again ends with
    * the text's own headings.
    */
-  const firstOfKind = new Map<string, string>();
-  const keyOf = (lines: string[]) => fold(lines.join(' ')).replace(/[^a-z0-9\u00c0-\u1fff]+/g, ' ').trim();
-  const sameHeading = (a: string, b: string) => !!a && !!b && (a === b || a.startsWith(b + ' ') || b.startsWith(a + ' '));
-  // A blank line after verse: a gap between stanzas.
-  let gap = false;
-  // The book's first words: its title when the file came without a name.
-  let opening: string | null = null;
+  private firstOfKind = new Map<string, string>();
 
-  const writeLines = (lines: string[], how: Break[]) =>
-    lines.forEach((t, i) => {
-      if (i && how[i - 1] === 'line' && keepBreaks) w.lineBreak();
-      else if (i) w.text(' ');
-      w.text(t);
-    });
+  constructor(
+    private w: BookWriter,
+    private keepBreaks: boolean,
+  ) {}
+
+  /** A heading of one line, or two (`how` joins them). */
+  add(lines: string[], how: Break[]) {
+    const kind = headingKind(lines[0]);
+    this.queue.push({ lines, how, kind });
+    this.run++;
+    if (this.runKinds.has(kind)) this.repeated = true;
+    this.runKinds.add(kind);
+    if (this.queue.length >= 64) this.flush(true);
+  }
 
   /**
    * Write the queued headings. `more`: the run goes on (the queue is long);
    * its last few stay queued, as the text's own headings may be among them.
    */
-  const flushQueue = (more: boolean) => {
-    const list = run >= 3 && (repeated || run >= 6);
+  flush(more: boolean) {
+    const { w, queue } = this;
+    const list = this.run >= 3 && (this.repeated || this.run >= 6);
     // At the end of a list of contents, the headings that repeat the first
     // listed of their kind ("BOOK ONE", "CHAPTER I" again) start the text.
     let starts = queue.length;
     if (list && !more) {
-      const firsts = new Map(firstOfKind);
+      const firsts = new Map(this.firstOfKind);
       const keys = queue.map((q) => keyOf(q.lines));
-      const own = queue.map((q, i) => !firsts.has(q.kind) && !!firsts.set(q.kind, keys[i]));
+      // The first of its kind (written before, or else the first in the list) is the list's own, not a repeat.
+      const own = queue.map((q, i) => {
+        if (firsts.has(q.kind)) return false;
+        firsts.set(q.kind, keys[i]);
+        return true;
+      });
       while (starts > 0 && !own[starts - 1] && sameHeading(firsts.get(queue[starts - 1].kind)!, keys[starts - 1])) starts--;
     }
     const keep = more ? 8 : 0;
     for (let i = 0; queue.length > keep; i++) {
       const { lines, how, kind } = queue.shift()!;
-      if (!firstOfKind.has(kind)) firstOfKind.set(kind, keyOf(lines));
+      if (!this.firstOfKind.has(kind)) this.firstOfKind.set(kind, keyOf(lines));
       // (A list's own title, "Contents", is a heading.)
       if (list && i < starts && kind !== 'contents' && kind !== 'icindekiler') {
-        writeLines(lines, how);
+        writeLines(w, lines, how, this.keepBreaks);
         w.endBlock();
         continue;
       }
@@ -339,86 +344,153 @@ export async function ingestTxt(ctx: IngestContext): Promise<Manifest> {
       w.endBlock();
       w.setKind('p');
     }
-    if (!more && run) {
-      run = 0;
-      runKinds = new Set();
-      repeated = false;
+    if (!more && this.run) {
+      this.run = 0;
+      this.runKinds = new Set();
+      this.repeated = false;
     }
-  };
+  }
+}
+
+/**
+ * A TXT file's text as blocks, from its lines one at a time: which lines make
+ * a paragraph, which are headings, scene breaks or verse, as `layout` says.
+ */
+class TxtParagraphs {
+  /** The book's first words: its title when the file came without a name. */
+  opening: string | null = null;
+  /** A very long line is being written in fragments, and some has been. */
+  inLine = false;
+
+  /** Inside a paragraph, a line break kept on purpose shows in wrapped text and verse; otherwise lines run on. */
+  private keepBreaks: boolean;
+  private headings: HeadingQueue;
+  // The paragraph being built. Its first lines are held back while they could
+  // still be a heading (one or two heading lines) or a scene break; after
+  // that it streams.
+  private held: string[] = [];
+  /** How each held line after the first joins the one before it. */
+  private joins: Break[] = [];
+  private streaming = false;
+  /** The last line of the open paragraph (null: none open), and its length in the file. */
+  private last: string | null = null;
+  private lastLen = 0;
+  /** A blank line after verse: a gap between stanzas. */
+  private gap = false;
+
+  constructor(
+    private w: BookWriter,
+    private layout: TxtLayout,
+  ) {
+    this.keepBreaks = !!layout.wrap || layout.verse;
+    this.headings = new HeadingQueue(w, this.keepBreaks);
+  }
+
+  /** A whole line, or the end of a very long one whose start came as fragments. */
+  line(rest: string) {
+    if (this.inLine) {
+      this.w.text(rest);
+      this.inLine = false;
+      // Too long to be anything but a paragraph of its own.
+      this.endPara();
+    } else {
+      this.addLine(rest);
+    }
+  }
+
+  /** A piece of a very long line, cut at a space. */
+  fragment(frag: string) {
+    this.opening ??= frag.trim() || null;
+    if (!this.inLine) {
+      if (this.last !== null && this.breakBefore(frag.trim(), frag, false) === 'para') this.endPara();
+      if (!this.streaming) this.releaseHeld();
+      // (A space only between this and text before it in the paragraph.)
+      this.w.text(' ');
+      this.last = '';
+      this.inLine = true;
+    }
+    this.w.text(frag);
+  }
+
+  /** The end of the file. */
+  finish() {
+    this.endPara();
+    this.headings.flush(false);
+  }
 
   /** The held lines turn out to be text. */
-  const releaseHeld = () => {
-    beginText();
-    writeLines(held, joins);
-    held = [];
-    joins = [];
-    streaming = true;
-  };
+  private releaseHeld() {
+    this.beginText();
+    writeLines(this.w, this.held, this.joins, this.keepBreaks);
+    this.held = [];
+    this.joins = [];
+    this.streaming = true;
+  }
 
   /** Before a paragraph's first text: what comes before it, and its kind. */
-  const beginText = () => {
-    flushQueue(false);
-    if (gap) {
-      w.emptyLine();
-      gap = false;
+  private beginText() {
+    this.headings.flush(false);
+    if (this.gap) {
+      this.w.emptyLine();
+      this.gap = false;
     }
-    if (layout.verse) w.setKind('v');
-  };
+    if (this.layout.verse) this.w.setKind('v');
+  }
 
-  const endPara = () => {
-    if (!streaming && held.length) {
-      if (held.length === 1 && SCENE_BREAK_RE.test(held[0])) {
-        flushQueue(false);
+  private endPara() {
+    const { w } = this;
+    if (!this.streaming && this.held.length) {
+      if (this.held.length === 1 && SCENE_BREAK_RE.test(this.held[0])) {
+        this.headings.flush(false);
         w.separator();
       } else {
-        const kind = headingKind(held[0]);
-        queue.push({ lines: held, how: joins, kind });
-        run++;
-        if (runKinds.has(kind)) repeated = true;
-        runKinds.add(kind);
-        gap = false;
-        if (queue.length >= 64) flushQueue(true);
+        this.headings.add(this.held, this.joins);
+        this.gap = false;
       }
     }
-    if (held.length) held = [];
-    if (joins.length) joins = [];
+    if (this.held.length) this.held = [];
+    if (this.joins.length) this.joins = [];
     w.endBlock();
     w.setKind('p');
-    streaming = false;
-    last = null;
-  };
+    this.streaming = false;
+    this.last = null;
+  }
 
-  const breakBefore = (t: string, raw: string, heading: boolean): Break => {
+  private breakBefore(t: string, raw: string, heading: boolean): Break {
+    const { layout } = this;
     if (layout.indent && startsIndented(raw)) return 'para';
     if (layout.wrap) {
       // A line the next word would have fitted on was broken on purpose;
       // a heading line after it, or after the end of a sentence, starts afresh.
-      if (lastLen + 1 + firstWord(t) > layout.wrap) return heading && endsSentence(last!) ? 'para' : 'wrap';
+      if (this.lastLen + 1 + firstWord(t) > layout.wrap) return heading && endsSentence(this.last!) ? 'para' : 'wrap';
       if (heading) return 'para';
-      return !layout.blank && endsSentence(last!) ? 'para' : 'line';
+      return !layout.blank && endsSentence(this.last!) ? 'para' : 'line';
     }
     // (A heading starts afresh even unindented, among paragraphs that start with an indent.)
     if (layout.indent) return heading ? 'para' : 'wrap';
     return layout.blank ? 'line' : 'para';
-  };
+  }
 
-  const addLine = (raw: string) => {
+  private addLine(raw: string) {
+    const { w, layout } = this;
     const t = raw.trim();
     if (!t) {
-      if (last !== null) {
-        const verse = streaming && layout.verse;
-        endPara();
-        if (verse) gap = true;
+      if (this.last !== null) {
+        const verse = this.streaming && layout.verse;
+        this.endPara();
+        if (verse) this.gap = true;
       }
       return;
     }
-    opening ??= t;
+    this.opening ??= t;
     const heading = isHeadingLine(t);
-    let how: Break | null = last === null ? null : breakBefore(t, raw, heading);
-    if (how && how !== 'para' && !streaming) {
+    let how: Break | null = this.last === null ? null : this.breakBefore(t, raw, heading);
+    if (how && how !== 'para' && !this.streaming) {
       // Held back so far: a heading line or two (or one wrapped onto a second line), or a scene break.
+      const { held, joins } = this;
       const scene = held.length === 1 && SCENE_BREAK_RE.test(held[0]);
-      const headings = !scene && joins.every((j) => j === 'line') && held.every(isHeadingLine);
+      // (`: boolean`: as an inferred type guard it would narrow `joins` to 'line' below, where 'wrap' is pushed.)
+      const headings = !scene && joins.every((j): boolean => j === 'line') && held.every(isHeadingLine);
       if (how === 'line' && headings && held.length < 2 && heading) {
         held.push(t);
         joins.push(how);
@@ -432,53 +504,43 @@ export async function ingestTxt(ctx: IngestContext): Promise<Manifest> {
         (!headings && how === 'line' && !heading)
       ) {
         how = 'para';
-      } else releaseHeld(); // not a heading after all (a list of them, or a paragraph starting like one)
+      } else this.releaseHeld(); // not a heading after all (a list of them, or a paragraph starting like one)
     }
     if (how === 'para' || how === null) {
-      if (how) endPara();
+      if (how) this.endPara();
       if (heading || SCENE_BREAK_RE.test(t)) {
-        held = [t];
-        joins = [];
+        this.held = [t];
+        this.joins = [];
       } else {
-        beginText();
+        this.beginText();
         w.text(t);
-        streaming = true;
+        this.streaming = true;
       }
-    } else if (streaming) {
-      if (how === 'line' && keepBreaks) w.lineBreak();
+    } else if (this.streaming) {
+      if (how === 'line' && this.keepBreaks) w.lineBreak();
       else w.text(' ');
       w.text(t);
     }
-    last = t;
-    lastLen = visualLength(raw);
-  };
+    this.last = t;
+    this.lastLen = visualLength(raw);
+  }
+}
 
-  // Very long lines arrive in fragments. `inLine` means a fragment of the
-  // current line has already been written.
-  let inLine = false;
-  const addFragment = (frag: string) => {
-    opening ??= frag.trim() || null;
-    if (!inLine) {
-      if (last !== null && breakBefore(frag.trim(), frag, false) === 'para') endPara();
-      if (!streaming) releaseHeld();
-      // (A space only between this and text before it in the paragraph.)
-      w.text(' ');
-      last = '';
-      inLine = true;
-    }
-    w.text(frag);
-  };
-  const endLine = (rest: string) => {
-    if (inLine) {
-      w.text(rest);
-      inLine = false;
-      // Too long to be anything but a paragraph of its own.
-      endPara();
-    } else {
-      addLine(rest);
-    }
-  };
+export async function ingestTxt(ctx: IngestContext): Promise<Manifest> {
+  const { src } = ctx;
+  const head = src.read(0, Math.min(src.size, HEAD));
+  const bom = detectBom(head);
+  // Samples from further in too: a file can open with pages of plain ASCII
+  // (a licence, a preface) or with a layout of its own.
+  const windows = sampleWindows(src, head.length, WINDOWS, WINDOW);
+  const enc = sniffEncoding(head, windows);
+  await ctx.pause();
+  const layout = detectLayout([linesOf(head.subarray(bom?.skip ?? 0), enc, false), ...windows.map((w) => linesOf(w, enc, true))]);
+  await ctx.pause();
 
+  // Text from a one-byte encoding has no combining marks to compose.
+  const w = new BookWriter(ctx.sink, enc !== 'utf-8' && enc !== 'utf-16le' && enc !== 'utf-16be');
+  const paras = new TxtParagraphs(w, layout);
   const decoder = createDecoder(enc);
   let carry = '';
   let skipLF = false;
@@ -491,28 +553,27 @@ export async function ingestTxt(ctx: IngestContext): Promise<Manifest> {
     skipLF = text.endsWith('\r');
     const lines = text.split(/\r\n|\n|\r/);
     carry = lines.pop() ?? '';
-    for (const line of lines) endLine(line);
+    for (const line of lines) paras.line(line);
     if (carry.length > LONG_LINE) {
-      // Cut at a space so words stay whole.
+      // Very long lines are written in fragments, cut at a space so words stay whole.
       let cut = carry.lastIndexOf(' ');
       if (cut < carry.length / 2) cut = carry.length;
-      addFragment(carry.slice(0, cut));
+      paras.fragment(carry.slice(0, cut));
       carry = carry.slice(cut);
     }
     ctx.progress(pos / src.size);
     await ctx.pause();
   }
   carry += decoder.end();
-  if (carry || inLine) endLine(carry);
-  endPara();
-  flushQueue(false);
+  if (carry || paras.inLine) paras.line(carry);
+  paras.finish();
   w.finish();
   await ctx.pause();
 
   return {
     v: ENGINE_VERSION,
     format: 'txt',
-    title: ctx.fallbackTitle === UNTITLED && opening ? shortTitle(cleanText(opening)) : ctx.fallbackTitle,
+    title: ctx.fallbackTitle === UNTITLED && paras.opening ? shortTitle(cleanText(paras.opening)) : ctx.fallbackTitle,
     author: '',
     lang: guessLanguage(w.textSample()),
     totalBlocks: w.totalBlocks,

@@ -5,8 +5,9 @@
 import Constants, { ExecutionEnvironment } from 'expo-constants';
 import { Directory, File, Paths } from 'expo-file-system';
 import * as IntentLauncher from 'expo-intent-launcher';
-import { useSyncExternalStore } from 'react';
 import { Platform } from 'react-native';
+import { freeSpace, isNoSpace } from './space';
+import { createStore } from './store';
 
 export const CURRENT_BUILD: number = Number(Constants.expoConfig?.extra?.buildNumber ?? 0);
 const REPO: string = Constants.expoConfig?.extra?.updateRepo ?? 'aydinnasibli/e-reader';
@@ -47,21 +48,15 @@ let state: UpdateState = { kind: 'idle' };
 let lastCheck = 0;
 /** "Not now" on this build: not offered again by the automatic checks until the app restarts or a newer one comes. */
 let snoozed = 0;
-const listeners = new Set<() => void>();
+const store = createStore();
 
 function set(s: UpdateState) {
   state = s;
-  listeners.forEach((l) => l());
+  store.notify();
 }
 
 export function useUpdateState(): UpdateState {
-  return useSyncExternalStore(
-    (l) => {
-      listeners.add(l);
-      return () => listeners.delete(l);
-    },
-    () => state,
-  );
+  return store.useValue(() => state);
 }
 
 async function fetchLatest(): Promise<AvailableUpdate | null> {
@@ -107,25 +102,13 @@ const MESSAGES: Record<Problem, string> = {
   damaged: 'The download came out damaged. Please try again.',
 };
 
-const NO_SPACE = /ENOSPC|no space left|not enough (free )?space|disk full|storage full/i;
-
 /** What to tell the person about a failed check or download. */
 export function updateErrorMessage(e: unknown, during: 'check' | 'download' | 'install'): string {
   if (e instanceof UpdateError) return MESSAGES[e.problem];
-  if (NO_SPACE.test(String(e))) return MESSAGES.space;
+  if (isNoSpace(e)) return MESSAGES.space;
   if (during === 'install') return MESSAGES.installer;
   // fetch and downloads fail with a TypeError or a native error when there's no connection.
   return MESSAGES.offline;
-}
-
-/** Free space on the phone in bytes (Infinity when it can't be told). */
-function freeSpace(): number {
-  try {
-    const n = Paths.availableDiskSpace;
-    return typeof n === 'number' && Number.isFinite(n) ? n : Infinity;
-  } catch {
-    return Infinity;
-  }
 }
 
 const busy = () => state.kind === 'downloading' || state.kind === 'installing';

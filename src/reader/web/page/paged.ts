@@ -73,16 +73,29 @@ export class Paged {
   /** The place arrived at (opened, jumped to, turned to): kept when the page lays itself out again. */
   private arrived: DrawnPoint | null = null;
   private watched = new WeakSet<HTMLImageElement>();
+  /** Replaced by another view (the mode changed): a picture loading late or a timer says nothing more. */
+  private disposed = false;
 
   constructor(private viewport: HTMLElement) {
     this.strip = document.createElement('div');
     this.strip.id = 'strip';
     viewport.appendChild(this.strip);
     // A selection dragged to the edge must not scroll the page sideways.
-    viewport.addEventListener('scroll', () => {
-      viewport.scrollLeft = 0;
-      viewport.scrollTop = 0;
-    });
+    viewport.addEventListener('scroll', this.pinned);
+  }
+
+  private pinned = () => {
+    this.viewport.scrollLeft = 0;
+    this.viewport.scrollTop = 0;
+  };
+
+  /** The view is done with: what's still to come (a picture's load, a layout timer, a turn landing) does nothing. */
+  dispose() {
+    this.disposed = true;
+    this.viewport.removeEventListener('scroll', this.pinned);
+    if (this.relayoutTimer) clearTimeout(this.relayoutTimer);
+    this.relayoutTimer = null;
+    this.finish?.();
   }
 
   /**
@@ -185,12 +198,17 @@ export class Paged {
    * How many pages chunks take in this layout, each on its own (for page
    * numbers: chunks of the book's body, wherever it was opened). Laid out on
    * the strip as they would be and taken off again before anything is drawn:
-   * the pages shown, a selection and marks stay as they are.
+   * the pages shown, a selection and marks stay as they are. `superseded`: a
+   * new layout is waiting (then nothing is answered).
    */
-  measureChunks(key: string, chunks: Chunk[]) {
+  async measureChunks(key: string, chunks: Chunk[], superseded: () => boolean) {
     if (key !== this.key || !this.frame) return;
     const counts: { c: number; pages: number }[] = [];
     for (const ch of chunks) {
+      // A chunk at a time, letting messages come in between: a layout on its way makes this one's
+      // measure out of date, and it's left (the screen asks again for the new one).
+      if (counts.length) await new Promise((r) => setTimeout(r, 0));
+      if (superseded() || key !== this.key || this.disposed) return;
       const el = document.createElement('section');
       el.className = 'chunk';
       const u: Unit = { parts: [{ c: ch.c, html: ch.html, chars: ch.chars, joins: false, first: firstBlock(ch.html), live: false }], el, partial: false, cols: 1, screens: 1, offset: 0, starts: [0] };
@@ -653,6 +671,7 @@ export class Paged {
 
   /** Tell the screen what's shown. */
   report(turned: boolean) {
+    if (this.disposed) return;
     const a = this.at(this.screen);
     if (!a) return;
     const w = this.screenWidth;
@@ -661,7 +680,6 @@ export class Paged {
     if (turned || !this.arrived) this.arrived = first;
     const lastUnit = this.units[this.units.length - 1];
     const lastPage = this.complete && a.u === lastUnit && lastUnit.parts[lastUnit.parts.length - 1].c === this.count - 1 && this.screen === a.u.offset + a.u.screens - 1;
-    send({ t: 'shown', first, next, chunk: a.part.c, turned, key: this.key, lastPage });
     const counts: { c: number; pages: number; chars: number }[] = [];
     for (const u of this.units) {
       if (u.partial) continue;
@@ -670,7 +688,8 @@ export class Paged {
       });
     }
     const span = this.perScreen === 2 && a.col + 1 < a.u.cols ? 2 : 1;
-    send({ t: 'pages', counts, chunk: a.part.c, page: a.col - a.u.starts[a.k], span });
+    const pages = { counts, chunk: a.part.c, page: a.col - a.u.starts[a.k], span } as const;
+    send({ t: 'shown', first, next, chunk: a.part.c, turned, key: this.key, lastPage, pages });
   }
 
   private relayoutTimer: ReturnType<typeof setTimeout> | null = null;
@@ -679,6 +698,7 @@ export class Paged {
    * arrived at (what the screen shows now may already have moved).
    */
   relayoutSoon() {
+    if (this.disposed) return;
     if (this.relayoutTimer) clearTimeout(this.relayoutTimer);
     this.relayoutTimer = setTimeout(() => {
       if (!this.at(this.screen)) return;

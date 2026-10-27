@@ -56,19 +56,24 @@ export class Scrolled {
     this.end.className = 'end';
     root.appendChild(this.flow);
     root.appendChild(this.end);
-    let pending = false;
-    window.addEventListener(
-      'scroll',
-      () => {
-        if (pending) return;
-        pending = true;
-        requestAnimationFrame(() => {
-          pending = false;
-          this.onScroll();
-        });
-      },
-      { passive: true },
-    );
+    window.addEventListener('scroll', this.scrolled, { passive: true });
+  }
+
+  private pending = false;
+  private scrolled = () => {
+    if (this.pending) return;
+    this.pending = true;
+    requestAnimationFrame(() => {
+      this.pending = false;
+      this.onScroll();
+    });
+  };
+
+  /** The view is done with (the mode changed): it no longer hears the window scroll, nor watches sizes. */
+  dispose() {
+    window.removeEventListener('scroll', this.scrolled);
+    this.resized.disconnect();
+    this.autoSpeed = 0;
   }
 
   configure(setup: PageSetup, key: string, target: Target) {

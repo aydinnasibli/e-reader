@@ -29,6 +29,7 @@ jest.mock('@/lib/storage', () => {
     readJson: (f: { uri: string }) => (mockDisk.has(f.uri) ? JSON.parse(mockDisk.get(f.uri)!) : null),
     writeJson: () => {},
     saveJson: (f: { uri: string }, v: unknown) => mockDisk.set(f.uri, JSON.stringify(v)),
+    removeJson: () => {},
     bookDir: (id: string) => new Directory(`doc/books/${id}`),
     nextDir: (id: string) => new Directory(`doc/books/${id}/next`),
     booksDir: () => ({ list: () => [] }),
