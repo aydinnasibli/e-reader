@@ -63,6 +63,10 @@ it('text selected, nothing moving: no redraws; the same selection told again cha
   await act(() => fireEvent(menu, 'layout', { nativeEvent: { layout: { x: 0, y: 0, width: 260, height: 38 } } }));
   await wait(100);
   await wait(100);
+  // The clock and battery redraw as each minute starts (as they should): let
+  // a minute about to start do so before the quiet seconds below, not in them.
+  const toMinute = 60_000 - (Date.now() % 60_000);
+  if (toMinute < 5000) await wait(toMinute + 500);
   commits = 0;
   // Two seconds with nothing happening: nothing drawn again (a loop would draw every frame).
   await wait(2000);
