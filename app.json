@@ -9,7 +9,11 @@
     "scheme": "necreader",
     "userInterfaceStyle": "automatic",
     "ios": {
-      "icon": "./assets/images/icon.png",
+      "icon": {
+        "light": "./assets/images/icon.png",
+        "dark": "./assets/images/icon-dark.png",
+        "tinted": "./assets/images/icon-tinted.png"
+      },
       "bundleIdentifier": "com.aydinnasibli.nec",
       "supportsTablet": true,
       "infoPlist": {

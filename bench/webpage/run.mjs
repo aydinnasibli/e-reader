@@ -3,7 +3,7 @@
 // the app's own code. Checks what the screen relies on: page continuity (every
 // page starts where the last ended, and that text is really on screen), jumps,
 // reopening at a page's start, staying on the place after a text size change,
-// a web font that loads late or a picture that changes shape, selection,
+// a web font that loads late or a picture that changes shape, selection (the page's own: long presses, handles),
 // marks, touches, the highlight tool, spreads, scroll mode. And what was
 // fixed since: turns racing chunks coming and going, chunks laid out on from
 // the one before, auto-scroll, pictures' shapes, long paragraphs in parts, lone
@@ -166,12 +166,79 @@ const charAt = (page, b, i) =>
         r.setStart(n, left);
         r.setEnd(n, left + 1);
         const box = r.getBoundingClientRect();
-        return { x: box.left + box.width / 2, y: box.top + box.height / 2 };
+        return { x: box.left + box.width / 2, y: box.top + box.height / 2, left: box.left, right: box.right };
       }
       left -= n.data.length;
     }
     return null;
   }, { b, i });
+
+/**
+ * A finger on the page: an event with a touch's fields (WebKit can't make
+ * Touch objects), on what's under it. Whether the page kept the browser from
+ * acting on it (scrolling).
+ */
+const finger = (page, type, x, y) =>
+  page.evaluate(
+    ({ type, x, y }) => {
+      const target = document.elementFromPoint(x, y) ?? document.body;
+      const t = { identifier: 1, target, clientX: x, clientY: y, pageX: x + scrollX, pageY: y + scrollY };
+      const e = new Event(type, { bubbles: true, cancelable: true });
+      Object.defineProperty(e, 'touches', { value: type === 'touchend' ? [] : [t] });
+      Object.defineProperty(e, 'changedTouches', { value: [t] });
+      target.dispatchEvent(e);
+      return e.defaultPrevented;
+    },
+    { type, x, y },
+  );
+
+/** A long press: a finger held still (until something is selected, or a while), then lifted. */
+async function longPress(page, x, y) {
+  await finger(page, 'touchstart', x, y);
+  await page.waitForTimeout(500);
+  await page.waitForFunction(() => document.getElementById('sel'), null, { timeout: 2000 }).catch(() => {});
+  await finger(page, 'touchend', x, y);
+}
+
+/** A finger moved from one point to another, then lifted. Whether the page kept the browser from scrolling all the way. */
+async function drag(page, from, to, steps = 6) {
+  await finger(page, 'touchstart', from.x, from.y);
+  let kept = true;
+  for (let k = 1; k <= steps; k++) kept = (await finger(page, 'touchmove', from.x + ((to.x - from.x) * k) / steps, from.y + ((to.y - from.y) * k) / steps)) && kept;
+  await finger(page, 'touchend', to.x, to.y);
+  return kept;
+}
+
+/**
+ * A handle of the selection reported last (`sel`) dragged by its knob (above
+ * the start, below the end) so that its end lands at a point on screen. The
+ * selection reported then.
+ */
+async function dragHandle(page, take, sel, h, to) {
+  const c = h === 'start' ? sel.startCaret : sel.endCaret;
+  // The knob is taken a little off the line; the end lands as far from the finger as the line's middle was.
+  const knob = { x: c.x, y: h === 'start' ? c.y - 6 : c.y + c.h + 6 };
+  const dy = c.y + c.h / 2 - knob.y;
+  await drag(page, knob, { x: to.x, y: to.y - dy });
+  return lastOf(await take(200), 'selection') ?? sel;
+}
+
+/**
+ * Text from drawn point `s` to `e` (exclusive) selected with the page's own
+ * touches: a long press on the character at `s` (its word selected), then the
+ * start handle dragged to that character's left edge and the end handle to
+ * the right edge of the character before `e`. The selection reported last.
+ */
+async function selectByTouch(page, take, s, e) {
+  const a = await charAt(page, s.b, s.i);
+  await longPress(page, a.x, a.y);
+  let sel = lastOf(await take(200), 'selection');
+  if (!sel) return null;
+  sel = await dragHandle(page, take, sel, 'start', { x: a.left + 1, y: a.y });
+  const z = await charAt(page, e.b, e.i - 1);
+  return dragHandle(page, take, sel, 'end', { x: z.right - 1, y: z.y });
+}
+const noBrowserSelection = (page) => page.evaluate(() => !getSelection() || getSelection().rangeCount === 0 || getSelection().isCollapsed);
 
 // What the page really shows: is a drawn point's character inside the screen
 // (page mode: inside the part of it pages are drawn in, between the side insets)?
@@ -336,32 +403,48 @@ async function pagedTest(screen, label) {
   ok(flashed && !(await page.evaluate(() => document.querySelector('.flash'))), 'a page turned: the mark goes at once');
   const anchor = { b: 120, i: 50 };
 
-  // Selection: the browser's, reported in drawn offsets with carets on screen (text on the page shown).
+  // Selection: the page's own. A long press selects the word under the finger, reported in drawn
+  // offsets with carets on screen; the browser selects nothing itself (so the phone puts no menu over it).
   await send({ t: 'go', target: { at: anchor } });
   const sNow = lastOf(await take(50), 'shown');
   const selB = sNow.first.b + 1;
-  await page.evaluate((selB) => {
-    const el = document.querySelector(`[data-b="${selB}"]`);
-    const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
-    const n = walker.nextNode();
-    const r = document.createRange();
-    r.setStart(n, 10);
-    r.setEnd(n, 25);
-    getSelection().removeAllRanges();
-    getSelection().addRange(r);
-  }, selB);
-  msgs = await take(250);
+  const selText = await page.evaluate((b) => document.querySelector(`[data-b="${b}"]`).textContent, selB);
+  const ws = selText.search(/ [a-z]{4,} /) + 1;
+  const we = selText.indexOf(' ', ws);
+  const wordAt = await charAt(page, selB, ws + 1);
+  await longPress(page, wordAt.x, wordAt.y);
+  msgs = await take(150);
   const sel = lastOf(msgs, 'selection');
-  ok(sel && same(sel.start, { b: selB, i: 10 }) && same(sel.end, { b: selB, i: 25 }), `selection reported as drawn offsets: ${JSON.stringify(sel?.start)}..${JSON.stringify(sel?.end)}`);
+  ok(sel && same(sel.start, { b: selB, i: ws }) && same(sel.end, { b: selB, i: we }), `a long press selects the word under the finger: ${JSON.stringify(sel?.start)}..${JSON.stringify(sel?.end)} (${ws}..${we})`);
   ok(sel && sel.startCaret.x >= 0 && sel.endCaret.x <= win.width && sel.startCaret.h > 10, `selection ends on screen: ${JSON.stringify(sel?.startCaret)} ${JSON.stringify(sel?.endCaret)}`);
+  ok(await noBrowserSelection(page), "the browser doesn't select: the phone has nothing to put its menu over");
+  ok(await page.evaluate(() => document.querySelectorAll('#sel .box').length > 0 && document.querySelectorAll('#sel .knob').length === 2), 'the selection is drawn, a handle at each end');
+  ok(!msgs.some((m) => m.t === 'tap' || (m.t === 'shown' && m.turned)), 'a long press is no tap: no menu, no turn');
+  // Its end handle dragged on, its start handle back: the selection ends where they're let go.
+  const further = await charAt(page, selB, we + 8);
+  let moved = await dragHandle(page, take, sel, 'end', { x: further.right - 1, y: further.y });
+  ok(moved && same(moved.start, sel.start) && same(moved.end, { b: selB, i: we + 9 }), `the end handle dragged: ${JSON.stringify(moved?.start)}..${JSON.stringify(moved?.end)} (to ${we + 9})`);
+  const back = await charAt(page, selB, ws - 3);
+  moved = await dragHandle(page, take, moved, 'start', { x: back.left + 1, y: back.y });
+  ok(moved && same(moved.start, { b: selB, i: ws - 3 }) && same(moved.end, { b: selB, i: we + 9 }), `the start handle dragged: ${JSON.stringify(moved?.start)}..${JSON.stringify(moved?.end)} (from ${ws - 3})`);
+  // An end dragged past the other stops at it: never an empty selection.
+  const past = await charAt(page, selB, ws - 8);
+  const stopped = await dragHandle(page, take, moved, 'end', { x: past.left + 1, y: past.y });
+  ok(stopped && (stopped.start.b < stopped.end.b || stopped.start.i < stopped.end.i), `an end dragged past the other: ${JSON.stringify(stopped?.start)}..${JSON.stringify(stopped?.end)}`);
+  // A tap with text selected ends it, and does nothing else.
+  await finger(page, 'touchstart', win.width / 2, win.height - 120);
+  await finger(page, 'touchend', win.width / 2, win.height - 120);
+  msgs = await take(150);
+  ok(msgs.some((m) => m.t === 'noSelection') && !msgs.some((m) => m.t === 'tap' || (m.t === 'shown' && m.turned)) && !(await page.evaluate(() => document.getElementById('sel'))), 'with text selected, a tap only ends the selection');
+  await longPress(page, wordAt.x, wordAt.y);
+  await take(150);
   await send({ t: 'clearSelection' });
   msgs = await take(250);
-  ok(msgs.some((m) => m.t === 'noSelection'), 'ending the selection from the screen is reported back');
+  ok(msgs.some((m) => m.t === 'noSelection') && !(await page.evaluate(() => document.getElementById('sel'))), 'ending the selection from the screen is reported back');
 
   // Marks: drawn behind exactly the text asked for.
   await send({ t: 'marks', marks: [{ b: 121, s: 5, e: 30, color: '#ffeb3b88' }, { b: 122, s: 0, e: 12, color: '#81c78488' }] });
   const marked = await page.evaluate(() => {
-    if (globalThis.CSS?.highlights) return [...CSS.highlights.values()].flatMap((h) => [...h]).map((r) => r.toString());
     return [...document.querySelectorAll('span[data-mark]')].map((s) => s.textContent);
   });
   const t121 = await page.evaluate(() => document.querySelector('[data-b="121"]').textContent);
@@ -1059,9 +1142,9 @@ async function bookStylesTest(screen) {
   await browser.close();
 }
 
-// A selection reaching between two blocks (a paragraph selected to its edge)
-// is reported, with its ends at those blocks' edges. And a NUL in a block
-// takes one character on the page, so offsets after it hold.
+// A handle dragged past a paragraph's end, or before its start, ends the
+// selection at that edge of the paragraph. And a NUL in a block takes one
+// character on the page, so offsets after it hold.
 async function selectionEdgesTest(screen) {
   const settings = gen.sanitizeSettings({ hyphenate: true, indent: true });
   const f = frameOf('page', settings, screen);
@@ -1072,47 +1155,56 @@ async function selectionEdgesTest(screen) {
   await send({ t: 'bounds', count: 1, complete: true });
   await send({ t: 'content', chunks: [{ c: 0, html: gen.chunkHtml(blocks, 0, settings, 'en', new Map()), chars: 1 }], target: { at: { b: 5, i: 0 } }, key: 'e' });
   await take(100);
-  const select = async (fn, arg) => {
-    await page.evaluate(fn, arg);
-    return lastOf(await take(300), 'selection');
-  };
-  const end = await select(() => {
-    const el = document.querySelector('[data-b="6"]');
-    const r = document.createRange();
-    r.setStart(el.firstChild, 3);
-    r.setEnd(el.parentNode, [...el.parentNode.childNodes].indexOf(el) + 1);
-    getSelection().removeAllRanges();
-    getSelection().addRange(r);
-  });
+  const textRight = f.width - f.right - (f.inset?.right ?? 0) - 1;
+  // A word near the end of paragraph 6, its end handle dragged off the paragraph's last line.
   const len6 = await page.evaluate(() => document.querySelector('[data-b="6"]').textContent.length);
-  ok(end && same(end.start, { b: 6, i: 3 }) && same(end.end, { b: 6, i: len6 }), `ending after a paragraph: ${JSON.stringify([end?.start, end?.end])}`);
-  const start = await select(() => {
-    const el = document.querySelector('[data-b="7"]');
+  // (On the page shown: a finger selects only what it can touch.)
+  await send({ t: 'go', target: { at: { b: 6, i: len6 - 3 } } });
+  await take(50);
+  const near6 = await charAt(page, 6, len6 - 3);
+  await longPress(page, near6.x, near6.y);
+  let sel = lastOf(await take(200), 'selection');
+  const lastChar = await charAt(page, 6, len6 - 1);
+  const end = sel && (await dragHandle(page, take, sel, 'end', { x: Math.min(lastChar.right + 30, textRight), y: lastChar.y }));
+  ok(end && end.start.b === 6 && same(end.end, { b: 6, i: len6 }), `ending after a paragraph: ${JSON.stringify([end?.start, end?.end])} (${len6})`);
+  await send({ t: 'clearSelection' });
+  await take(100);
+  // A word in paragraph 7, its start handle dragged off the left of its first line.
+  await send({ t: 'go', target: { at: { b: 7, i: 0 } } });
+  await take(50);
+  const in7 = await charAt(page, 7, 12);
+  await longPress(page, in7.x, in7.y);
+  sel = lastOf(await take(200), 'selection');
+  const first7 = await page.evaluate(() => {
     const r = document.createRange();
-    r.setStart(el.parentNode, [...el.parentNode.childNodes].indexOf(el));
-    r.setEnd(el.firstChild, 12);
-    getSelection().removeAllRanges();
-    getSelection().addRange(r);
+    r.selectNodeContents(document.querySelector('[data-b="7"]'));
+    const q = [...r.getClientRects()].find((x) => x.width > 0);
+    return { left: q.left, y: q.top + q.height / 2 };
   });
-  ok(start && same(start.start, { b: 7, i: 0 }) && same(start.end, { b: 7, i: 12 }), `starting before a paragraph: ${JSON.stringify([start?.start, start?.end])}`);
+  const start = sel && (await dragHandle(page, take, sel, 'start', { x: first7.left - 3, y: first7.y }));
+  // (At its start, or among the spaces of its indent: WebKit puts the place there between them.)
+  const text7 = await page.evaluate(() => document.querySelector('[data-b="7"]').textContent);
+  ok(start && start.start.b === 7 && !text7.slice(0, start.start.i).trim() && start.end.b === 7, `starting before a paragraph: ${JSON.stringify([start?.start, start?.end])}`);
+  // Further into the margin, where the page before is nearer than the text: the handle stays on the page shown.
+  const far = start && (await dragHandle(page, take, start, 'start', { x: 1, y: first7.y }));
+  ok(far && far.start.b === 7, `a handle dragged into the margin doesn't reach the page before: ${JSON.stringify(far?.start)}`);
+  await send({ t: 'clearSelection' });
+  await take(100);
   const drawn9 = gen.drawn(blocks[9], gen.lookOf(blocks[9], settings, 'en')).text;
   const k = drawn9.indexOf('words');
-  const nul = await select((k) => {
-    const t = document.querySelector('[data-b="9"]').firstChild;
-    const r = document.createRange();
-    r.setStart(t, k);
-    r.setEnd(t, k + 5);
-    getSelection().removeAllRanges();
-    getSelection().addRange(r);
-    return t.data.length;
-  }, k);
-  ok(nul && same(nul.start, { b: 9, i: k }) && (await page.evaluate(() => document.querySelector('[data-b="9"]').textContent.length)) === drawn9.length, `after a NUL, a selection is where it is in the book: ${JSON.stringify(nul?.start)} (${k})`);
+  await send({ t: 'go', target: { at: { b: 9, i: 0 } } });
+  await take(50);
+  const w9 = await charAt(page, 9, k + 2);
+  await longPress(page, w9.x, w9.y);
+  const nul = lastOf(await take(200), 'selection');
+  ok(nul && same(nul.start, { b: 9, i: k }) && same(nul.end, { b: 9, i: k + 5 }) && (await page.evaluate(() => document.querySelector('[data-b="9"]').textContent.length)) === drawn9.length, `after a NUL, a selection is where it is in the book: ${JSON.stringify([nul?.start, nul?.end])} (${k})`);
   await send({ t: 'clearSelection' });
   await browser.close();
 }
 
-// Touches (Chromium's touch events): a long press then a drag is selecting,
-// not turning; two fingers (a pinch, a resting thumb) neither turn nor tap.
+// Touches (Chromium's touch events): a long press then a drag is selecting
+// (whole words, from the one pressed), not turning; two fingers (a pinch, a
+// resting thumb) neither turn nor tap.
 async function touchTest(screen) {
   if (ENGINE !== 'chromium') return;
   const settings = gen.sanitizeSettings({});
@@ -1135,6 +1227,11 @@ async function touchTest(screen) {
   await tp('touchEnd', []);
   let msgs = await take(400);
   ok(!msgs.some((m) => m.t === 'shown' && m.turned), 'a long press, then a drag sideways (selecting): the page stays');
+  const words = lastOf(msgs, 'selection');
+  const wordsText = words && (await page.evaluate(({ a, z }) => (a.b === z.b ? document.querySelector(`[data-b="${a.b}"]`).textContent.slice(a.i, z.i) : ''), { a: words.start, z: words.end }));
+  ok(words && /^\S.*\S$/.test(wordsText) && wordsText.includes(' '), `and it selected whole words back from the one pressed: ${JSON.stringify(wordsText)}`);
+  await send({ t: 'clearSelection' });
+  await take(50);
   await tp('touchStart', [{ x: 150, y: 300, id: 1 }]);
   await tp('touchStart', [{ x: 150, y: 300, id: 1 }, { x: 250, y: 500, id: 2 }]);
   for (let k = 1; k <= 6; k++) {
@@ -1293,19 +1390,17 @@ async function selfMovedTest(screen) {
   await page.evaluate(() => scrollBy(0, 400));
   msgs = await take(300);
   ok(msgs.some((m) => m.t === 'shown' && m.turned), 'the reader scrolling on: reading on');
-  // A selection, then the text scrolled under it.
-  await page.evaluate(() => {
-    const el = [...document.querySelectorAll('p[data-b]')].find((x) => x.getBoundingClientRect().top > 300);
-    const r = document.createRange();
-    r.setStart(el.firstChild, 4);
-    r.setEnd(el.firstChild, 12);
-    getSelection().removeAllRanges();
-    getSelection().addRange(r);
-  });
+  // A selection, then the text scrolled under it: drawn with the text, told again where it is.
+  const selB = await page.evaluate(() => Number([...document.querySelectorAll('p[data-b]')].find((x) => x.getBoundingClientRect().top > 300).dataset.b));
+  const at = await charAt(page, selB, 6);
+  await longPress(page, at.x, at.y);
   const sel1 = lastOf(await take(300), 'selection');
+  const tint = () => page.evaluate(() => document.querySelector('#sel .box')?.getBoundingClientRect().top);
+  const tint1 = await tint();
   await page.evaluate(() => scrollBy(0, 120));
   const sel2 = lastOf(await take(400), 'selection');
   ok(sel1 && sel2 && same(sel1.start, sel2.start) && Math.abs(sel1.startCaret.y - sel2.startCaret.y - 120) < 2, `a selection scrolled under is told again where it is: ${sel1?.startCaret.y.toFixed(0)} -> ${sel2?.startCaret.y.toFixed(0)}`);
+  ok(tint1 !== undefined && Math.abs(tint1 - (await tint()) - 120) < 2, 'and drawn where the text went');
   await send({ t: 'clearSelection' });
   await take(300);
   // Another theme only: nothing moves.
@@ -1344,16 +1439,10 @@ async function measureChunksTest(screen, label) {
   await send({ t: 'content', chunks: [0, 1, 2].map((c) => bookChunk(c, settings)), target: { at: { b: 100, i: 0 } }, key: 'm1' });
   const strip = lastOf(await take(200), 'pages').counts;
   // A selection and a mark on the page shown.
-  const state = () => page.evaluate(() => ({ transform: document.getElementById('strip').style.transform, selected: getSelection().toString(), marks: globalThis.CSS?.highlights ? [...CSS.highlights.values()].reduce((n, h) => n + h.size, 0) : document.querySelectorAll('span[data-mark]').length, sections: document.querySelectorAll('#strip > .chunk').length }));
-  const sel = await page.evaluate(() => {
-    const el = [...document.querySelectorAll('[data-b]')].find((x) => x.getBoundingClientRect().left >= 0 && x.textContent.length > 20);
-    const r = document.createRange();
-    r.setStart(el.firstChild, 2);
-    r.setEnd(el.firstChild, 12);
-    getSelection().removeAllRanges();
-    getSelection().addRange(r);
-    return Number(el.dataset.b);
-  });
+  const state = () => page.evaluate(() => ({ transform: document.getElementById('strip').style.transform, selected: document.getElementById('sel')?.innerHTML ?? '', marks: document.querySelectorAll('span[data-mark]').length, sections: document.querySelectorAll('#strip > .chunk').length }));
+  const sel = await page.evaluate(() => Number([...document.querySelectorAll('[data-b]')].find((x) => x.getBoundingClientRect().left >= 0 && x.textContent.length > 20).dataset.b));
+  const pressAt = await charAt(page, sel, 12);
+  await longPress(page, pressAt.x, pressAt.y);
   await send({ t: 'marks', marks: [{ b: sel, s: 0, e: 8, color: '#ffeb3b88' }] });
   await take(300);
   const before = await state();
@@ -1361,7 +1450,7 @@ async function measureChunksTest(screen, label) {
   let msgs = await take(300);
   const measured = lastOf(msgs, 'measured');
   ok(measured && measured.key === 'm1' && [0, 1, 2].every((c) => measured.counts.find((x) => x.c === c)?.pages === strip.find((x) => x.c === c).pages), `each chunk measured as many pages as it has on the strip: ${JSON.stringify(measured?.counts.map((x) => x.pages))} vs ${JSON.stringify(strip.map((x) => x.pages))}`);
-  ok(JSON.stringify(await state()) === JSON.stringify(before) && !msgs.some((m) => m.t === 'shown' || m.t === 'noSelection'), `the page shown, the selection and the marks stay as they were: ${JSON.stringify(before)}`);
+  ok(before.selected && JSON.stringify(await state()) === JSON.stringify(before) && !msgs.some((m) => m.t === 'shown' || m.t === 'noSelection'), `the page shown, the selection and the marks stay as they were: ${JSON.stringify({ ...before, selected: before.selected.length })}`);
   // Chunk 3, measured before it was on the strip: the same once it is.
   await send({ t: 'add', chunks: [bookChunk(3, settings)] });
   const added = lastOf(await take(200), 'pages').counts.find((x) => x.c === 3);
@@ -1425,15 +1514,7 @@ async function lineBreaksTest(screen) {
   const k = text.indexOf('\n');
   await send({ t: 'go', target: { at: { b: last, i: 0 } } });
   await take(30);
-  await page.evaluate(({ b, s, e }) => {
-    const t = document.querySelector(`[data-b="${b}"]`).firstChild;
-    const r = document.createRange();
-    r.setStart(t, s);
-    r.setEnd(t, e);
-    getSelection().removeAllRanges();
-    getSelection().addRange(r);
-  }, { b: last, s: k - 4, e: k + 6 });
-  const sel = lastOf(await take(300), 'selection');
+  const sel = await selectByTouch(page, take, { b: last, i: k - 4 }, { b: last, i: k + 6 });
   ok(sel && same(sel.start, { b: last, i: k - 4 }) && same(sel.end, { b: last, i: k + 6 }), `a selection across a kept line break: ${JSON.stringify([sel?.start, sel?.end])} (${k - 4}..${k + 6})`);
   await browser.close();
 }
@@ -1584,20 +1665,12 @@ async function placeThenJoinedTest(screen) {
   const s2 = lastOf(await take(150), 'shown');
   const parts = await page.evaluate(() => document.querySelectorAll('[data-b="59"]').length);
   ok(s1 && s2 && same(s1.first, s2.first) && parts === 1 && (await visible(page, deep)) === true, `the page shown stays where it was (${JSON.stringify(s1?.first)} -> ${JSON.stringify(s2?.first)}), the place on it`);
-  await page.evaluate((k) => {
-    const t = document.querySelector('[data-b="59"]').firstChild;
-    const r = document.createRange();
-    r.setStart(t, k);
-    r.setEnd(t, k + 10);
-    getSelection().removeAllRanges();
-    getSelection().addRange(r);
-  }, deep.i);
-  const selMsg = lastOf(await take(300), 'selection');
+  const selMsg = await selectByTouch(page, take, deep, { b: 59, i: deep.i + 10 });
   ok(selMsg && same(selMsg.start, deep) && same(selMsg.end, { b: 59, i: deep.i + 10 }), `a selection there is at its place in the block: ${JSON.stringify([selMsg?.start, selMsg?.end])}`);
   await send({ t: 'clearSelection' });
   await take(200);
   await send({ t: 'marks', marks: [{ b: 59, s: deep.i, e: deep.i + 12, color: '#ffeb3b88' }] });
-  const marked = await page.evaluate(() => (globalThis.CSS?.highlights ? [...CSS.highlights.values()].flatMap((h) => [...h]).map((r) => r.toString()).join('|') : [...document.querySelectorAll('span[data-mark]')].map((x) => x.textContent).join('|')));
+  const marked = await page.evaluate(() => [...document.querySelectorAll('span[data-mark]')].map((x) => x.textContent).join('|'));
   ok(marked === full.slice(deep.i, deep.i + 12), `a mark there covers its text: ${JSON.stringify(marked)}`);
   await send({ t: 'marks', marks: [] });
   await browser.close();
@@ -1669,7 +1742,7 @@ async function marksAfterRelayoutTest(screen) {
   await send(marks);
   await send(setupMsg('page', S(21), screen, { at: T, top: true }, 'k3'));
   await take(150);
-  const drawn = await page.evaluate(() => (globalThis.CSS?.highlights ? [...CSS.highlights.values()].reduce((n, h) => n + [...h].filter((r) => !r.collapsed && r.startContainer.isConnected).length, 0) : document.querySelectorAll('span[data-mark]').length));
+  const drawn = await page.evaluate(() => document.querySelectorAll('span[data-mark]').length);
   const spot = await charAt(page, T.b, T.i + 3);
   ok(drawn >= 2 && yellowish(await pixel(page, spot.x, spot.y)), `the highlights are drawn after the second change (${drawn} of 2 ranges, the first painted)`);
   await browser.close();

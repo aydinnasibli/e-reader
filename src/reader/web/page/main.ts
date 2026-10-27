@@ -4,10 +4,10 @@
 
 import type { ToPage } from '../protocol';
 import { listen, send } from './bridge';
-import { setMarking, setMarks } from './marks';
+import { setMarks } from './marks';
 import { Paged } from './paged';
 import { Scrolled } from './scrolled';
-import { clearSelection, watchSelection } from './selection';
+import { clearSelection, refreshSelection, watchSelection } from './selection';
 import { type TouchTarget, handleTouches } from './touch';
 
 const viewport = document.getElementById('viewport')!;
@@ -56,6 +56,8 @@ async function handle(m: ToPage) {
   if (view instanceof Paged && (m.t === 'setup' || m.t === 'content' || m.t === 'add' || m.t === 'drop' || m.t === 'go' || m.t === 'measure')) await view.idle();
   switch (m.t) {
     case 'setup': {
+      // Laid out again, or a new place shown: a selection ends.
+      clearSelection();
       const s = m.setup;
       tapForward = s.tapForward;
       // The book's language: the browser's own rules for it (Turkish i in ligatures, base.css).
@@ -75,6 +77,7 @@ async function handle(m: ToPage) {
       return;
     }
     case 'content':
+      clearSelection();
       await fontsLoaded();
       if (view instanceof Paged) await view.idle();
       view?.setContent(m.chunks, m.target, m.key);
@@ -83,22 +86,24 @@ async function handle(m: ToPage) {
       await fontsLoaded();
       if (view instanceof Paged) await view.idle();
       view?.add(m.chunks);
-      return;
+      // Chunks came or went: the text can move (scroll mode), and a selection with it.
+      return refreshSelection();
     case 'drop':
-      return view?.drop(m.chunks);
+      view?.drop(m.chunks);
+      return refreshSelection();
     case 'bounds':
       return view?.bounds(m.count, m.complete);
     case 'go':
+      clearSelection();
       return view?.go(m.target);
     case 'turn':
+      clearSelection();
       return view instanceof Paged ? view.turn(m.dir) : undefined;
     case 'marks':
       return setMarks(m.marks);
     case 'tool':
       marking = m.marking;
-      document.documentElement.classList.toggle('marking', marking);
       if (marking) clearSelection();
-      setMarking(marking);
       return;
     case 'clearSelection':
       return clearSelection();

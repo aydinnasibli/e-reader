@@ -98,7 +98,7 @@ while. It builds the release version, with the JavaScript inside: the phone
 doesn't need the computer afterwards.
 
 - If it stops because nothing can sign the app: run `xed ios`, select the
-  **Necebookreader** target → **Signing & Capabilities**, tick *Automatically
+  **NecReader** target → **Signing & Capabilities**, tick *Automatically
   manage signing*, choose your Personal Team, press ▶ once with the iPhone
   selected, then run `npm run ios:device` again.
 - If Xcode says the bundle identifier isn't available, change

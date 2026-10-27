@@ -39,9 +39,8 @@ export function bookCss(settings: ReaderSettings, theme: Theme, frame: PageFrame
   let css = fontFaces(font, weight);
   css += `html,body{background:${theme.bg};color:${theme.text};}`;
   css += `body{font-family:${font.family};font-weight:${weight};}`;
-  css += `::selection{background:${theme.accent}55;}`;
-  // The line read, marked for a moment after the layout changed (page/flash.ts).
-  css += `:root{--flash:${theme.accent}33;}`;
+  // Text selected and its handles (page/selection.ts); the line read, marked for a moment after the layout changed (page/flash.ts).
+  css += `:root{--sel:${theme.accent}55;--knob:${theme.accent};--flash:${theme.accent}33;}`;
   const lh = lineHeightOf(settings);
   const gap = lookOf({ k: 'p', r: [''] }, settings).marginTop;
   for (const b of KINDS) {

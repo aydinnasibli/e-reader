@@ -1,8 +1,9 @@
 // The reader: the book drawn as HTML in a WebView (page or scroll mode; see
 // src/reader/web/page), with the page header and footer drawn natively around
-// it. The browser lays out the text, turns the pages and selects text with
-// its own handles, so selection is exact on every phone. Only the chunks
-// around the place read are ever in the page.
+// it. The browser lays out the text and turns the pages; the page selects
+// text itself, with its own handles (page/selection.ts), so the phone never
+// puts a menu of its own over a selection. Only the chunks around the place
+// read are ever in the page.
 
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { File, Paths } from 'expo-file-system';
@@ -102,7 +103,7 @@ interface Props {
   marking?: boolean;
   onMarkTap?(at: TextPoint | null): void;
   onMarkDrag?(from: TextPoint | null, to: TextPoint | null, done: boolean): void;
-  /** Text selected on the page (the browser's own selection), or null when it ends. */
+  /** Text selected on the page (a long press, then its handles), or null when it ends. */
   onSelection?(sel: PageSelection | null): void;
   /** Whether a selection is shown (false ends one the page still has). */
   selected?: boolean;
@@ -837,8 +838,6 @@ export const WebReader = memo(function WebReader(props: Props) {
       onShouldStartLoadWithRequest={(r: { url: string }) => r.url.startsWith('file:') || r.url.startsWith('about:')}
       onContentProcessDidTerminate={reloadPage}
       onRenderProcessGone={rendererGone}
-      // No system menu over a selection: the screen shows its own (copy, look up, translate, share).
-      menuItems={[]}
       scrollEnabled={mode === 'scroll'}
       bounces={false}
       overScrollMode="never"

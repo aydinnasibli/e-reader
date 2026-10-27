@@ -144,7 +144,7 @@ export type FromPage =
   | { t: 'reachEnd' }
   | { t: 'autoInterrupt' }
   | { t: 'autoEnd' }
-  /** Text selected (whole words not required: the browser's own selection). `end` is exclusive. */
+  /** Text selected (whole words not required: its handles move by characters). `end` is exclusive. */
   | { t: 'selection'; start: DrawnPoint; end: DrawnPoint; startCaret: PageCaret; endCaret: PageCaret }
   | { t: 'noSelection' }
   /** The highlight tool: a tap on text (null: off the text). */

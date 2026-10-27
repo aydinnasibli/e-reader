@@ -1,11 +1,14 @@
 // Touches on the page. Page mode: a swipe turns the page (following the
 // finger), a tap on an edge turns it too, a tap in the middle opens the menu.
 // Scroll mode: the WebView scrolls itself; a tap opens the menu. A long press
-// is the browser's own: it selects the word with real handles. With the
-// highlight tool, touches mark text instead.
+// selects the word under the finger (selection.ts): moving on without lifting
+// it takes in more words, and the selection's handles move its ends. With text
+// selected, a tap only ends the selection. With the highlight tool, touches
+// mark text instead.
 
 import { TAP_SLOP, swipeOutcome, tapZone } from '../../gestures';
 import { send } from './bridge';
+import { type Handle, clearSelection, dragTo, extendTo, grab, handleAt, letGo, selectWordAt, selected } from './selection';
 import { pointAtScreen } from './text';
 
 export interface TouchTarget {
@@ -19,34 +22,64 @@ export interface TouchTarget {
   touched(): void;
 }
 
-/** Held this long, it's the browser's long press (selecting), not a tap. */
+/** Held this long without moving, a touch is a long press: it selects. */
 const LONG_PRESS_MS = 450;
-
-const hasSelection = () => {
-  const s = document.getSelection();
-  return !!s && s.rangeCount > 0 && !s.isCollapsed;
-};
+/** Moving more than this (points) before then, the finger isn't pressing: it scrolls or swipes. */
+const PRESS_SLOP = 10;
+/** Scroll mode: the selection moved this close to the top or bottom of the screen scrolls the text on. */
+const EDGE = 56;
 
 export function handleTouches(target: () => TouchTarget, marking: () => boolean) {
   let start = { x: 0, y: 0, t: 0 };
   let last = { x: 0, t: 0, vx: 0 };
-  /** Which way the finger went: 'h' a swipe (ours), 'v' anything else (the browser's: scrolling, selecting). */
+  /** Which way the finger went: 'h' a swipe (ours), 'v' anything else (the browser's: scrolling). */
   let axis: 'h' | 'v' | null = null;
-  /** The touch began with text selected: it's for the selection (the browser's). */
+  /** The touch began with text selected: it's for the selection (a tap ends it). */
   let forSelection = false;
   /** Two fingers were down (a pinch, a resting thumb): neither a turn nor a tap. */
   let multi = false;
+  /** What the touch moves: a handle of the selection, or the words its long press selected. */
+  let grip: Handle | 'words' | null = null;
+  let press: ReturnType<typeof setTimeout> | null = null;
   let markFrom: ReturnType<typeof pointAtScreen> = null;
   let moved = false;
   let frame = 0;
+  let finger = { x: 0, y: 0 };
+  let edgeFrame = 0;
 
   const linkAt = (el: EventTarget | null) => (el instanceof Element ? (el.closest('[data-link]') as HTMLElement | null) : null);
+  const unpress = () => {
+    if (press) clearTimeout(press);
+    press = null;
+  };
+
+  /** The selection's end follows the finger; near the top or bottom in scroll mode, the text scrolls on under it. */
+  const follow = (x: number, y: number) => {
+    finger = { x, y };
+    if (grip === 'words') extendTo(x, y);
+    else if (grip) dragTo(x, y);
+    if (target().mode === 'scroll' && !edgeFrame && (y < EDGE || y > window.innerHeight - EDGE)) edgeFrame = requestAnimationFrame(edgeScroll);
+  };
+  const edgeScroll = () => {
+    edgeFrame = 0;
+    if (!grip) return;
+    const { x, y } = finger;
+    const step = y < EDGE ? -(EDGE - y) / 4 : y > window.innerHeight - EDGE ? (y - window.innerHeight + EDGE) / 4 : 0;
+    const was = window.scrollY;
+    if (step) window.scrollBy(0, Math.sign(step) * Math.ceil(Math.abs(step)));
+    if (window.scrollY !== was) follow(x, y);
+  };
 
   document.addEventListener(
     'touchstart',
     (e) => {
       if (e.touches.length > 1) {
         multi = true;
+        unpress();
+        if (grip) {
+          grip = null;
+          letGo();
+        }
         if (axis === 'h') target().springBack();
         return;
       }
@@ -56,9 +89,20 @@ export function handleTouches(target: () => TouchTarget, marking: () => boolean)
       axis = null;
       moved = false;
       multi = false;
-      forSelection = hasSelection();
+      unpress();
+      forSelection = selected();
+      grip = forSelection && !marking() ? handleAt(p.clientX, p.clientY) : null;
+      if (grip) grab(grip, p.clientX, p.clientY);
       target().touched();
       if (marking()) markFrom = pointAtScreen(p.clientX, p.clientY);
+      else if (!grip) {
+        press = setTimeout(() => {
+          press = null;
+          if (axis === 'h' || !selectWordAt(start.x, start.y)) return;
+          grip = 'words';
+          forSelection = false;
+        }, LONG_PRESS_MS);
+      }
     },
     { passive: true },
   );
@@ -82,15 +126,18 @@ export function handleTouches(target: () => TouchTarget, marking: () => boolean)
         frame = requestAnimationFrame(() => send({ t: 'markDrag', from: markFrom, to: pointAtScreen(x, y), done: false }));
         return;
       }
+      if (grip) {
+        // Moving the selection: the page neither scrolls nor turns.
+        e.preventDefault();
+        follow(p.clientX, p.clientY);
+        return;
+      }
+      if (press && Math.hypot(dx, dy) > PRESS_SLOP) unpress();
       const t = target();
       if (forSelection || multi || t.mode !== 'page') return;
-      if (!axis && Math.hypot(dx, dy) > 10) {
-        // A finger held still before it moved is the browser's long press: it's selecting, not turning.
-        const selecting = now - start.t >= LONG_PRESS_MS || hasSelection();
-        axis = !selecting && Math.abs(dx) > Math.abs(dy) * 1.5 ? 'h' : 'v';
-      }
+      if (!axis && Math.hypot(dx, dy) > 10) axis = Math.abs(dx) > Math.abs(dy) * 1.5 ? 'h' : 'v';
       if (axis === 'h') {
-        // Ours: no selecting while swiping.
+        // Ours: the page follows the finger.
         e.preventDefault();
         if (t.followsFinger) t.drag(dx);
       }
@@ -99,6 +146,12 @@ export function handleTouches(target: () => TouchTarget, marking: () => boolean)
   );
 
   const end = (e: TouchEvent, cancelled: boolean) => {
+    unpress();
+    if (grip) {
+      grip = null;
+      letGo();
+      return;
+    }
     if (multi) {
       // Once the last finger is up, the next touch is a fresh one.
       if (!e.touches.length) multi = false;
@@ -135,8 +188,14 @@ export function handleTouches(target: () => TouchTarget, marking: () => boolean)
       else t.springBack();
       return;
     }
-    // A tap: not a long press, not with text selected (the browser ends the selection).
-    if (forSelection || hasSelection() || held >= LONG_PRESS_MS || Math.hypot(dx, dy) >= TAP_SLOP) return;
+    // A tap: not a long press, not a scroll.
+    const tap = held < LONG_PRESS_MS && Math.hypot(dx, dy) < TAP_SLOP;
+    // With text selected, a tap ends the selection and does nothing else.
+    if (forSelection) {
+      if (tap) clearSelection();
+      return;
+    }
+    if (!tap) return;
     const link = linkAt(e.target);
     if (link) return send({ t: 'link', target: link.dataset.link! });
     if (t.mode === 'scroll') return send({ t: 'tap' });

@@ -42,4 +42,13 @@ html[data-mode='page'] #scroll { display: none; }
 html[data-mode='scroll'] #scroll { position: relative; }
 .flash { position: absolute; pointer-events: none; -webkit-user-select: none; user-select: none; background: var(--flash); border-radius: 3px; transition: opacity 0.6s ease-out; }
 .flash.out { opacity: 0; }
-html.marking, html.marking * { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
+/* The book's text can't be selected: the page selects it itself (selection.ts), so the phone puts no menu of its own over it. */
+html, html * { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
+/* Text selected (selection.ts): a tint over it and a handle at each end, its knob above the start and below the end. */
+#sel, #sel div { position: absolute; pointer-events: none; }
+#sel { left: 0; top: 0; }
+#sel .box { background: var(--sel); }
+#sel .knob { background: var(--knob); }
+#sel .knob::before { content: ''; position: absolute; left: -5px; width: 12px; height: 12px; border-radius: 6px; background: var(--knob); }
+#sel .a::before { top: -11px; }
+#sel .z::before { bottom: -11px; }

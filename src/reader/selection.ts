@@ -36,7 +36,7 @@ export function dragRanges(a: TextPoint, z: TextPoint, textOf: (b: number) => st
 /**
  * Text selected on the page: its first and last character (inclusive), in
  * reading order, possibly in different paragraphs; not necessarily whole
- * words (the browser's own selection).
+ * words (its handles on the page move by characters).
  */
 export interface TextSel {
   a: TextPoint;

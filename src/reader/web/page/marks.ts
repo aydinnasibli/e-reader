@@ -1,31 +1,13 @@
-// Highlights and search hits as backgrounds behind text. With the CSS Custom
-// Highlight API (Chrome 105+, Safari 17.2+) nothing in the page changes, so
-// a selection being made isn't disturbed; older WebViews get spans wrapped
-// around the text instead. So does the page while the highlight tool is out:
-// the text can't be selected then, and WebKit doesn't draw highlights over
-// text that can't be selected.
+// Highlights and search hits as backgrounds behind text: spans with a
+// background wrapped around it. (The CSS Custom Highlight API would leave the
+// page as it is, but WebKit draws no highlights over text that can't be
+// selected, and the book's text can't be: the page selects it itself,
+// selection.ts.)
 
 import type { PageMark } from '../protocol';
 import { rangeIn } from './text';
 
-type HighlightRegistry = Map<string, unknown> & { clear(): void };
-type HighlightCtor = new (...ranges: Range[]) => unknown;
-const registry = (globalThis as { CSS?: { highlights?: HighlightRegistry } }).CSS?.highlights;
-const HighlightClass = (globalThis as { Highlight?: HighlightCtor }).Highlight;
-export const nativeHighlights = !!registry && !!HighlightClass;
-
 let current: PageMark[] = [];
-let marking = false;
-
-function style(): HTMLStyleElement {
-  let el = document.getElementById('marks') as HTMLStyleElement | null;
-  if (!el) {
-    el = document.createElement('style');
-    el.id = 'marks';
-    document.head.appendChild(el);
-  }
-  return el;
-}
 
 function unwrap() {
   for (const span of [...document.querySelectorAll('span[data-mark]')]) {
@@ -62,30 +44,11 @@ export function setMarks(marks: PageMark[]) {
   draw();
 }
 
-/** The highlight tool is out (or put away). */
-export function setMarking(on: boolean) {
-  if (on === marking) return;
-  marking = on;
-  draw();
-}
-
 /** Draw the marks again (blocks were added to the page). */
 export function draw() {
-  const native = nativeHighlights && !marking;
-  const byColor = new Map<string, Range[]>();
   unwrap();
   for (const m of current) {
     const r = m.e > m.s ? rangeIn(document, m.b, m.s, m.e) : null;
-    if (!r) continue;
-    if (native) byColor.set(m.color, [...(byColor.get(m.color) ?? []), r]);
-    else wrap(r, m.color);
+    if (r) wrap(r, m.color);
   }
-  if (!nativeHighlights) return;
-  registry!.clear();
-  let css = '';
-  [...byColor].forEach(([color, ranges], k) => {
-    registry!.set(`m${k}`, new HighlightClass!(...ranges));
-    css += `::highlight(m${k}){background-color:${color}}`;
-  });
-  style().textContent = css;
 }

@@ -3,7 +3,7 @@
 // text, so a drawn offset is the number of UTF-16 code units of text before a
 // place inside it. The browser does the rest: it knows where every letter is.
 
-import type { DrawnPoint, PageCaret } from '../protocol';
+import type { DrawnPoint } from '../protocol';
 
 export function blockOf(n: Node | null): HTMLElement | null {
   const el = n instanceof Element ? n : (n?.parentElement ?? null);
@@ -29,29 +29,6 @@ export function pointOf(node: Node, offset: number): DrawnPoint | null {
     return { b, i: 0 };
   }
   return { b, i: r.toString().length };
-}
-
-/**
- * The drawn point at a DOM place that can be between blocks (a selection
- * reaching to a paragraph's edge, or between the parts of one): the start of
- * the block after it, or with `end`, the end of the block before it.
- */
-export function pointAround(node: Node, offset: number, end: boolean): DrawnPoint | null {
-  if (blockOf(node)) return pointOf(node, offset);
-  // The first block element at or after the place (blocks in document order).
-  const ref = node.childNodes[offset] ?? null;
-  const after = (el: Node) => (ref ? ref === el || !!(ref.compareDocumentPosition(el) & Node.DOCUMENT_POSITION_FOLLOWING) : !node.contains(el) && !!(node.compareDocumentPosition(el) & Node.DOCUMENT_POSITION_FOLLOWING));
-  const blocks = blocksIn(document);
-  let lo = 0;
-  let hi = blocks.length;
-  while (lo < hi) {
-    const mid = (lo + hi) >> 1;
-    if (after(blocks[mid])) hi = mid;
-    else lo = mid + 1;
-  }
-  const el = end ? blocks[lo - 1] : blocks[lo];
-  if (!el) return null;
-  return { b: Number(el.dataset.b), i: end ? lengthOf(el) : 0 };
 }
 
 /** The DOM place of drawn offset `i` in a block. */
@@ -94,15 +71,6 @@ function boxes(r: Range): DOMRect[] {
 /** Where drawn character `i` of a block is drawn; null if nowhere (an invisible soft hyphen). */
 export function charBox(block: HTMLElement, i: number): DOMRect | null {
   return boxes(rangeOf(block, i, i + 1))[0] ?? null;
-}
-
-/** Carets at both ends of a range, in WebView points. */
-export function carets(r: Range): { start: PageCaret; end: PageCaret } | null {
-  const bs = boxes(r);
-  if (!bs.length) return null;
-  const a = bs[0];
-  const z = bs[bs.length - 1];
-  return { start: { x: a.left, y: a.top, h: a.height }, end: { x: z.right, y: z.top, h: z.height } };
 }
 
 /** The drawn point under a point on screen: the nearest place in text. */
