@@ -85,16 +85,24 @@ describe('the highlight tool: a marker pen', () => {
     prompt.mockRestore();
   });
 
+  it('a tap on a highlight takes all of it away, not just the word tapped', async () => {
+    const { run } = await selecting('m6');
+    await run((s) => s.markDrag(at('quick'), at('jumps'), true));
+    await run((s) => s.markTap(at('fox')));
+    expect(highlights('m6')).toEqual([]);
+    expect(alert).not.toHaveBeenCalled();
+  });
+
   it('taking away part of a highlight keeps its note; taking away all of a highlight with a note asks first', async () => {
     addHighlight('m5', { b: 0, s: 0, e: TEXT.length, color: 'pink', text: TEXT, note: 'Aesop?' });
     const { run } = await selecting('m5');
-    await run((s) => s.markTap(at('lazy')));
+    await run((s) => s.markDrag(at('lazy'), at('lazy'), true));
     expect(alert).not.toHaveBeenCalled();
     expect(highlights('m5')).toEqual([
       ['The quick brown fox jumps over the', 'pink'],
       ['dog', 'pink'],
     ]);
-    await run((s) => s.markDrag(at('The'), at('the'), true));
+    await run((s) => s.markTap(at('quick')));
     expect(alert).toHaveBeenCalledWith('Delete highlight and its note?', undefined, expect.anything());
     expect(getAnnotations('m5').highlights).toHaveLength(2);
   });

@@ -84,5 +84,18 @@ export function pointAtScreen(x: number, y: number): DrawnPoint | null {
   return p ? pointOf(p.offsetNode, p.offset) : null;
 }
 
+/** The character under a point on screen, and its block: null off the text (a margin, between lines). */
+export function charAtScreen(x: number, y: number): { b: number; el: HTMLElement; c: number } | null {
+  const p = pointAtScreen(x, y);
+  const el = p ? document.querySelector<HTMLElement>(`[data-b="${p.b}"]`) : null;
+  if (!p || !el) return null;
+  // The place nearest the point is before or after the character under it.
+  for (const c of [p.i, p.i - 1]) {
+    const box = c >= 0 ? charBox(el, c) : null;
+    if (box && x >= box.left - 3 && x <= box.right + 3 && y >= box.top - 6 && y <= box.bottom + 6) return { b: p.b, el, c };
+  }
+  return null;
+}
+
 /** All block elements inside `root`, in reading order. */
 export const blocksIn = (root: ParentNode) => [...root.querySelectorAll<HTMLElement>('[data-b]')];

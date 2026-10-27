@@ -8,7 +8,7 @@
 
 import type { DrawnPoint, PageCaret } from '../protocol';
 import { send } from './bridge';
-import { charBox, placeAt, pointAtScreen } from './text';
+import { charAtScreen, charBox, placeAt, pointAtScreen } from './text';
 
 /** The selection held still this long (a handle dragged, the text scrolled): the screen is told where it is now. */
 const SETTLE_MS = 120;
@@ -63,19 +63,6 @@ function wordAt(text: string, c: number): { s: number; e: number } | null {
   while (s > 0 && WORD_CHAR.test(text[s - 1])) s--;
   while (e < text.length && WORD_CHAR.test(text[e])) e++;
   return { s, e };
-}
-
-/** The character under a point on screen: null off the text (a margin, between lines). */
-function charAtScreen(x: number, y: number): { b: number; el: HTMLElement; c: number } | null {
-  const p = pointAtScreen(x, y);
-  const el = p ? blockEl(p.b) : null;
-  if (!p || !el) return null;
-  // The place nearest the point is before or after the character under it.
-  for (const c of [p.i, p.i - 1]) {
-    const box = c >= 0 ? charBox(el, c) : null;
-    if (box && x >= box.left - 3 && x <= box.right + 3 && y >= box.top - 6 && y <= box.bottom + 6) return { b: p.b, el, c };
-  }
-  return null;
 }
 
 /**

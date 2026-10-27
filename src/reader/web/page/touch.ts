@@ -9,7 +9,7 @@
 import { TAP_SLOP, swipeOutcome, tapZone } from '../../gestures';
 import { send } from './bridge';
 import { type Handle, clearSelection, dragTo, extendTo, grab, handleAt, letGo, selectWordAt, selected } from './selection';
-import { pointAtScreen } from './text';
+import { charAtScreen, pointAtScreen } from './text';
 
 export interface TouchTarget {
   mode: 'page' | 'scroll';
@@ -171,10 +171,11 @@ export function handleTouches(target: () => TouchTarget, marking: () => boolean)
       cancelAnimationFrame(frame);
       if (cancelled) return send({ t: 'markDrag', from: null, to: null, done: true });
       if (moved) return send({ t: 'markDrag', from: markFrom, to: pointAtScreen(p.clientX, p.clientY), done: true });
-      // A tap: the outer edges still turn pages.
+      // A tap: the outer edges still turn pages, off the text (a word by the edge is marked).
       const w = window.innerWidth;
-      if (t.mode === 'page' && p.clientX < w * 0.12) return t.turn(t.tapForward ? 1 : -1);
-      if (t.mode === 'page' && p.clientX > w * 0.88) return t.turn(1);
+      const edge = t.mode === 'page' && !charAtScreen(p.clientX, p.clientY);
+      if (edge && p.clientX < w * 0.12) return t.turn(t.tapForward ? 1 : -1);
+      if (edge && p.clientX > w * 0.88) return t.turn(1);
       return send({ t: 'markTap', at: pointAtScreen(p.clientX, p.clientY) });
     }
     if (cancelled) {

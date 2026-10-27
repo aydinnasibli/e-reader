@@ -1248,6 +1248,69 @@ async function touchTest(screen) {
   await browser.close();
 }
 
+// A swipe that starts while the last turn still slides lands that turn and
+// takes the page from there (it used to stand still under the finger until
+// the slide ended). The highlight tool: a tap on a word by the screen's edge
+// marks it; a tap in the margin beside it turns the page.
+async function quickTurnsTest(screen) {
+  const settings = gen.sanitizeSettings({});
+  const f = frameOf('page', settings, screen);
+  console.log(`\npage mode, a swipe as a turn slides, and the highlight tool by the edges (${f.width}×${f.height})`);
+  const { browser, page, send, take } = await open({ width: f.width, height: f.height });
+  await send(setupMsg('page', settings, screen, { at: { b: 100, i: 0 } }, 'q', SYSTEM_FONT, { turn: 'slide' }));
+  await send({ t: 'bounds', count: 3, complete: true });
+  await send({ t: 'content', chunks: [0, 1, 2].map((c) => chunk(c, settings)), target: { at: { b: 100, i: 0 } }, key: 'q' });
+  const start = lastOf(await take(200), 'shown');
+  const stripX = () => page.evaluate(() => Number(/translate3d\((-?[\d.]+)px/.exec(document.getElementById('strip').style.transform)[1]));
+  const y = f.height / 2;
+  const before = await stripX();
+  await send({ t: 'turn', dir: 1 });
+  await finger(page, 'touchstart', 300, y);
+  await finger(page, 'touchmove', 270, y);
+  const x1 = await stripX();
+  await finger(page, 'touchmove', 240, y);
+  const x2 = await stripX();
+  let msgs = await take(0);
+  const landed = lastOf(msgs, 'shown');
+  const target = before - f.width;
+  ok(landed && landed.turned && same(landed.first, start.next), 'a swipe as the turn slides: that turn lands at once');
+  ok(x1 <= before + 1 && x1 > target + 1 && Math.abs(x2 - x1 + 30) < 1, `and the page stays where it was and follows the finger from there: ${before.toFixed(0)} -> ${x1.toFixed(0)} -> ${x2.toFixed(0)} (landed at ${target.toFixed(0)})`);
+  await finger(page, 'touchend', 240, y);
+  const again = lastOf(await take(400), 'shown');
+  ok(again && again.turned && same(again.first, landed?.next), `and the swipe turns the next page: ${JSON.stringify(again?.first)}`);
+
+  await send({ t: 'tool', marking: true });
+  const nearEdge = await page.evaluate((w) => {
+    for (const el of document.querySelectorAll('[data-b]')) {
+      const box = el.getBoundingClientRect();
+      if (box.right < 0 || box.left > w) continue;
+      const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+      let i = 0;
+      for (let n = walker.nextNode(); n; n = walker.nextNode()) {
+        for (let k = 0; k < n.data.length; k++, i++) {
+          if (!/[a-z]/.test(n.data[k])) continue;
+          const r = document.createRange();
+          r.setStart(n, k);
+          r.setEnd(n, k + 1);
+          const q = r.getBoundingClientRect();
+          if (q.width > 0 && q.left >= 0 && q.right < w * 0.12 && q.top > 100 && q.bottom < innerHeight - 100) return { x: q.left + q.width / 2, y: q.top + q.height / 2, left: q.left, b: Number(el.dataset.b), i };
+        }
+      }
+    }
+    return null;
+  }, f.width);
+  await finger(page, 'touchstart', nearEdge.x, nearEdge.y);
+  await finger(page, 'touchend', nearEdge.x, nearEdge.y);
+  msgs = await take(150);
+  const marked = lastOf(msgs, 'markTap');
+  ok(marked && marked.at?.b === nearEdge.b && !msgs.some((m) => m.t === 'shown' && m.turned), `the highlight tool: a word by the edge is marked, the page stays (${JSON.stringify(marked?.at)} at x ${nearEdge.x.toFixed(0)})`);
+  await finger(page, 'touchstart', nearEdge.left / 2, nearEdge.y);
+  await finger(page, 'touchend', nearEdge.left / 2, nearEdge.y);
+  msgs = await take(400);
+  ok(msgs.some((m) => m.t === 'shown' && m.turned) && !msgs.some((m) => m.t === 'markTap'), `and a tap in the margin beside it turns the page (x ${(nearEdge.left / 2).toFixed(0)})`);
+  await browser.close();
+}
+
 // Scroll mode: the place reported is the text at the top of the screen, also
 // when the top falls between two paragraphs (Chromium gave the one above).
 async function scrollPlaceTest(screen) {
@@ -1877,6 +1940,7 @@ await footnoteTest({ width: 393, height: 852 });
 await bookStylesTest({ width: 393, height: 852 });
 await selectionEdgesTest({ width: 393, height: 852 });
 await touchTest({ width: 393, height: 852 });
+await quickTurnsTest({ width: 393, height: 852 });
 await scrollPlaceTest({ width: 393, height: 852 });
 await spreadTest();
 await measureTest();

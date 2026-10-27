@@ -80,7 +80,7 @@ export function useSelection({ bookId, bookTitle, textOf, continues, chapterOf, 
   const [madeIds, setMadeIds] = useState<string[]>([]);
   const made = highlights.filter((h) => madeIds.includes(h.id));
 
-  const highlightedAt = (p: TextPoint) => highlights.some((h) => h.b === p.b && h.s <= p.o && p.o < h.e);
+  const highlightAt = (p: TextPoint) => highlights.find((h) => h.b === p.b && h.s <= p.o && p.o < h.e);
   const wordAt = (p: TextPoint): TextPoint => ({ b: p.b, o: nearestWord(textOf(p.b) ?? '', p.o) });
 
   /** Take highlighting off these ranges. A note goes when its whole highlight does: ask first. */
@@ -104,10 +104,13 @@ export function useSelection({ bookId, bookTitle, textOf, continues, chapterOf, 
     setMadeIds(rs.map((r) => addHighlight(bookId, { ...r, color, text: textOf(r.b)!.slice(r.s, r.e), chapter: chapterOf(r.b) }).id));
   };
 
-  /** A tap with the highlight tool: the word highlighted, or its highlighting taken away. */
+  /** A tap with the highlight tool: the word highlighted, or the highlight tapped taken away, all of it (a drag takes away part). */
   const markTap = (p: TextPoint) => {
     const w = wordAt(p);
-    mark(selectBetween(w, w, textOf), highlightedAt(w));
+    const on = highlightAt(w);
+    if (!on) return mark(selectBetween(w, w, textOf), false);
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {});
+    clearRanges([on], () => setMadeIds([]));
   };
 
   /** A drag with the highlight tool, from where it started to where the finger is; done when lifted. Nulls: cancelled. */
@@ -117,7 +120,7 @@ export function useSelection({ bookId, bookTitle, textOf, continues, chapterOf, 
       setStroke(null);
       return;
     }
-    if (strokeErases.current === null) strokeErases.current = highlightedAt(wordAt(from));
+    if (strokeErases.current === null) strokeErases.current = !!highlightAt(wordAt(from));
     const erase = strokeErases.current;
     const s = selectBetween(from, to, textOf);
     if (!done) return setStroke(s ? { ranges: selectionRanges(s, textOf), erase } : null);

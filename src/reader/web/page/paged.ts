@@ -462,16 +462,32 @@ export class Paged {
     this.strip.style.transform = `translate3d(${-this.screen * this.screenWidth}px,0,0)`;
   }
 
-  /** Follow a finger dragging the page (`dx` points; held back where there's no page to go to). */
+  /** A drag that took the page mid-slide: where it was then, from the screen shown, less the finger's way so far. */
+  private dragFrom = 0;
+
+  /**
+   * Follow a finger dragging the page (`dx` points; held back where there's no
+   * page to go to). A turn still sliding lands at once, but the page stays
+   * where it is and the finger takes it from there: a quick reader's next
+   * swipe never waits for the last one, and nothing jumps.
+   */
   drag(dx: number) {
-    if (this.animating) return;
+    let from: number | null = null;
+    if (this.finish) {
+      const now = getComputedStyle(this.strip).transform;
+      from = now && now !== 'none' ? new DOMMatrixReadOnly(now).m41 : null;
+      this.finish();
+    }
     clearFlash();
     const can = this.open(this.screen + (dx < 0 ? 1 : -1));
+    const way = can ? dx : dx * 0.25;
+    if (from !== null) this.dragFrom = from + this.screen * this.screenWidth - way;
     this.strip.style.transition = 'none';
-    this.strip.style.transform = `translate3d(${-this.screen * this.screenWidth + (can ? dx : dx * 0.25)}px,0,0)`;
+    this.strip.style.transform = `translate3d(${-this.screen * this.screenWidth + this.dragFrom + way}px,0,0)`;
   }
 
   springBack() {
+    this.dragFrom = 0;
     this.strip.style.transition = `transform 180ms ease-out`;
     this.strip.style.transform = `translate3d(${-this.screen * this.screenWidth}px,0,0)`;
   }
@@ -484,6 +500,7 @@ export class Paged {
   private finish: (() => void) | null = null;
 
   private animateTo(to: number) {
+    this.dragFrom = 0;
     let timer: ReturnType<typeof setTimeout> | undefined;
     const land = () => {
       clearTimeout(timer);
