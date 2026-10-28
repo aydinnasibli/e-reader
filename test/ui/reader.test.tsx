@@ -142,7 +142,7 @@ describe('highlight tool', () => {
 
   it('a drag highlights what it covers straight away, in the colour picked: no selection menu', async () => {
     await openTool();
-    expect(screen.getByText(/Tap or drag over text to highlight it/)).toBeTruthy();
+    expect(screen.getByText(/Tap or drag over text to highlight/)).toBeTruthy();
     await fireEvent.press(screen.getByLabelText('Highlight colour green'));
     // From the first word of P1 to the first word of P2, drawn as the finger moves.
     await emit({ t: 'markDrag', from: { b: 1, i: 1 }, to: { b: 2, i: 1 }, done: false });

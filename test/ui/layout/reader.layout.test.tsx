@@ -169,7 +169,7 @@ it.each(['phone', 'landscape'] as const)('scroll mode on %s', async (size) => {
   expect(a.report()).toBe('');
 }, 60000);
 
-it('Android, its window size leaving out the navigation bar: the page reaches the foot of the screen, and the auto page turn and highlighter bars sit above its page number', async () => {
+it('Android, its window size leaving out the navigation bar: the page reaches the foot of the screen, the auto page turn bar sits above its page number and the highlighter bar above the text', async () => {
   const device = DEVICES.android;
   setDevice(device);
   // Android's window size leaves out the navigation bar (hidden while reading), though the reader goes under where it was.
@@ -201,5 +201,9 @@ it('Android, its window size leaving out the navigation bar: the page reaches th
   await fireEvent.press(screen.getByLabelText('Highlight'));
   await settle();
   all = await laidOut();
-  expect(apart(rectOf(all, /"Done highlighting"/), rectOf(all, /"1 of \d+ · /))).toBe(true);
+  // Over the header: above where the text starts (the status bar's room and the header).
+  for (const label of [/"Highlight colour yellow"/, /"Done highlighting"/]) {
+    const r = rectOf(all, label);
+    expect(r.y + r.h).toBeLessThanOrEqual(device.insets.top + 30 + 0.5);
+  }
 }, 60000);

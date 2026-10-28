@@ -113,14 +113,14 @@ it('dragging the slider: the chapter and pages left are those of where it would 
   expect(screen.getAllByText('Chapter 5').length).toBeGreaterThan(0);
 }, 30000);
 
-it("the highlight tool's bar sits above the page number", async () => {
+it("the highlight tool's bar sits over the header, above the text: none of the page is under it", async () => {
   await open();
   await emit({ t: 'tap' });
   await fireEvent.press(screen.getByLabelText('Highlight'));
-  const bar = screen.getByLabelText('Done highlighting').parent!.parent!;
-  const style = Object.assign({}, ...[bar.props.style].flat(3));
-  // The safe area (none here), the footer (30) and a gap.
-  expect(style.bottom).toBeGreaterThanOrEqual(30);
+  const style = Object.assign({}, ...[screen.getByTestId('highlight-bar').props.style].flat(3));
+  // The safe area (none here) and the header (30): where the text starts.
+  expect(style.top).toBe(0);
+  expect(style.height).toBe(30);
 }, 30000);
 
 it('scroll mode: the text scrolling under a selection takes its menu away, until the page says where the selection is', async () => {

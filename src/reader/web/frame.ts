@@ -7,6 +7,20 @@ export const HEADER = 30;
 export const FOOTER = 30;
 /** The header and footer have a fixed height: their text grows with the phone's text size only this far. */
 export const META_SCALE = 1.4;
+/** A finger's reach: the highlight tool's buttons are touched this far up, where the screen has the room. */
+const REACH = 44;
+
+/**
+ * The highlight tool's bar, across the top of the screen down to `height`,
+ * its buttons drawn in a row `row` high at its foot. Page mode: over the
+ * header, the room above the text, so no text is under it; its buttons are
+ * touched from higher up, over the notch's strip, as far as REACH. Scroll
+ * mode: the text has no room above it, so it's moved down below the bar.
+ */
+export function toolBar(top: number, mode: 'page' | 'scroll'): { height: number; row: number; reach: number } {
+  if (mode === 'scroll') return { height: top + REACH, row: REACH, reach: REACH };
+  return { height: top + HEADER, row: HEADER, reach: Math.min(top + HEADER, REACH) };
+}
 
 type Insets = { top: number; bottom: number; left: number; right: number };
 

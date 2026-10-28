@@ -73,7 +73,7 @@ vi.mock('expo-file-system', () => {
 
 const { chunkHtml, chunkHtmlSliced, blockHtml, escapeHtml, joinsBefore } = await import('@/reader/web/html');
 const { bookCss } = await import('@/reader/web/css');
-const { webFrame, charWidth, MEASURE } = await import('@/reader/web/frame');
+const { webFrame, charWidth, toolBar, HEADER, MEASURE } = await import('@/reader/web/frame');
 const { sanitizeSettings, THEMES } = await import('@/lib/settings');
 const { drawn, lookOf, runTextStyle } = await import('@/reader/look');
 const { CHUNK_CHARS } = await import('@/engine/writer');
@@ -329,6 +329,14 @@ describe('where the text goes', () => {
   it('scroll mode: the whole screen, clear of the status bar and the badge', () => {
     const f = webFrame(phone, upright, 20, 'scroll');
     expect(f).toMatchObject({ width: 393, height: 852, top: 59, bottom: 74, column: 353 });
+  });
+
+  it("the highlight tool's bar: page mode over the header, its buttons touched up into the status bar's room; scroll mode a full row the text goes below", () => {
+    // Upright: the header's row, touched from 44 up.
+    expect(toolBar(59, 'page')).toEqual({ height: 59 + HEADER, row: HEADER, reach: 44 });
+    // Landscape, no room above: up to the screen's edge.
+    expect(toolBar(0, 'page')).toEqual({ height: HEADER, row: HEADER, reach: HEADER });
+    expect(toolBar(59, 'scroll')).toEqual({ height: 59 + 44, row: 44, reach: 44 });
   });
 });
 

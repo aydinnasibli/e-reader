@@ -26,7 +26,7 @@ import { breather } from '../breather';
 import { bookCss } from './css';
 import { chunkHtml, chunkHtmlSliced } from './html';
 import { PAGE_HTML, PAGE_SOURCE_HASH } from './page.generated';
-import { FOOTER, HEADER, META_SCALE, webFrame } from './frame';
+import { FOOTER, HEADER, META_SCALE, toolBar, webFrame } from './frame';
 import type { Chunk, DrawnPoint, FromPage, PageCaret, PageCounts, PageMark, Target, ToPage } from './protocol';
 import { webFont } from './webFonts';
 
@@ -987,8 +987,10 @@ export const WebReader = memo(function WebReader(props: Props) {
   const page = mode === 'page';
   // The clock and battery get room for the phone's larger text sizes.
   const side = Math.ceil(64 * Math.min(META_SCALE, Math.max(1, fontScale)));
+  // Scroll mode with the highlight tool out: the text below its bar, none of it under it.
+  const below = !page && props.marking ? toolBar(area.top, 'scroll').height : 0;
   return (
-    <View style={[styles.root, { backgroundColor: theme.bg }, page && { paddingTop: area.top, paddingBottom: area.bottom }]}>
+    <View style={[styles.root, { backgroundColor: theme.bg }, page ? { paddingTop: area.top, paddingBottom: area.bottom } : below > 0 && { paddingTop: below }]}>
       {page ? (
         // Clock, chapter, battery; the right edge is kept clear for the bookmark ribbon.
         <View style={[styles.header, { paddingLeft: frame.left + (settings.showClock ? 0 : 22), paddingRight: frame.right + 22 }]}>

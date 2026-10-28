@@ -12,6 +12,7 @@ import type { Block, Manifest } from '@/engine/types';
 import { getAnnotations } from '@/lib/annotations';
 import { THEMES, setSettings } from '@/lib/settings';
 import * as breathing from '@/reader/breather';
+import { toolBar } from '@/reader/web/frame';
 import type { FromPage } from '@/reader/web/protocol';
 import ReaderScreen from '@/app/reader/[id]';
 import type { FakePage } from './fakePage';
@@ -252,6 +253,10 @@ it("the menu: the line with what's left is never cut short, and its buttons and 
     expect(button.props.hitSlop).toBeUndefined();
   }
   await fireEvent.press(screen.getByLabelText('Highlight'));
-  const dot = flat(screen.getByLabelText('Highlight colour yellow'));
-  expect(Math.min(dot.width ?? 0, dot.height ?? 0)).toBeGreaterThanOrEqual(44);
+  // The highlighter's bar is over the header, above the text: its colours are
+  // a finger wide, and touched as far up as the room there goes, 44 where
+  // there's a status bar's room above (here none: up to the screen's edge).
+  const dot = screen.getByLabelText('Highlight colour yellow');
+  expect(flat(dot).width).toBeGreaterThanOrEqual(44);
+  expect((flat(dot).height ?? 0) + (dot.props.hitSlop?.top ?? 0)).toBe(toolBar(0, 'page').reach);
 }, 30000);

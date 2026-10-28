@@ -22,7 +22,7 @@ import type { Mark } from '@/reader/marks';
 import { LookupSheet } from '@/reader/LookupSheet';
 import { SelectionMenu } from '@/reader/SelectionMenu';
 import { type PageInfo, SCROLL_BADGE, WebReader, useReadingArea } from '@/reader/web/WebReader';
-import { FOOTER } from '@/reader/web/frame';
+import { FOOTER, toolBar } from '@/reader/web/frame';
 import { AutoBar } from '@/reader/AutoBar';
 import { stepWpm } from '@/reader/autoRead';
 import { BackChip } from '@/reader/BackChip';
@@ -254,6 +254,7 @@ export default function ReaderScreen() {
   const goToPlace = async (f: number, n?: number) => goTo(await book.positionAt(f), undefined, true, n);
   // Bars at the bottom stay clear of the page number (or scroll mode's strip).
   const overFooter = area.bottom + (settings.mode === 'page' ? FOOTER : SCROLL_BADGE) + 6;
+  const bar = toolBar(area.top, settings.mode);
 
   return (
     <View testID="reader-screen" style={{ flex: 1, backgroundColor: theme.bg }} onLayout={onBox}>
@@ -362,7 +363,11 @@ export default function ReaderScreen() {
       {highlighting ? (
         <HighlightBar
           theme={theme}
-          bottom={overFooter}
+          height={bar.height}
+          row={bar.row}
+          reach={bar.reach}
+          left={area.left}
+          right={area.right}
           color={settings.highlightColor}
           made={selection.made.length > 0}
           hasNote={!!selection.made[0]?.note}
